@@ -70,8 +70,10 @@ impl Chooser {
                 let active_window = window.id == status.active_window;
                 rows.push(Row {
                     indent: 1,
+                    // Labelled: an unadorned "1: 1" tells nobody that the
+                    // middle level is a window — a tab, in tmux's sense.
                     text: format!(
-                        "{}: {}{}",
+                        "window {}: {}{}",
                         window.id,
                         window.name,
                         if window.zoomed { " (zoomed)" } else { "" }
@@ -151,7 +153,7 @@ impl Chooser {
             return None;
         }
         let title = if self.filter.is_empty() {
-            " sessions  (enter to pick, esc to close, type to filter) ".to_string()
+            " session / window / pane  —  enter picks, esc closes, type filters ".to_string()
         } else {
             format!(" sessions  filter: {} ", self.filter)
         };

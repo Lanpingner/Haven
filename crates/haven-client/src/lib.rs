@@ -78,6 +78,9 @@ pub struct Client<F, T> {
     pub mode: status_bar::Mode,
     /// The session tree, while it is open.
     pub chooser: Option<chooser::Chooser>,
+    /// Why the session is ending, when it is ending badly. A frontend reports
+    /// this after it has given the terminal back.
+    fatal: Option<String>,
     /// Last session listing received, for `haven ls`.
     pub sessions: Vec<haven_proto::SessionInfo>,
     attached: bool,
@@ -109,6 +112,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             key_filter: None,
             mode: status_bar::Mode::Normal,
             chooser: None,
+            fatal: None,
             sessions: Vec::new(),
             attached: false,
         }
@@ -236,6 +240,19 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         }
     }
 
+    /// Why the session ended, if it ended badly.
+    pub fn fatal(&self) -> Option<&str> {
+        self.fatal.as_deref()
+    }
+
+    /// Record a transport failure so a frontend can report it rather than
+    /// vanishing. A disconnect is ordinary; anything else is not.
+    pub fn note_error(&mut self, e: &TransportError) {
+        if !matches!(e, TransportError::Disconnected) && self.fatal.is_none() {
+            self.fatal = Some(e.to_string());
+        }
+    }
+
     pub fn is_attached(&self) -> bool {
         self.attached
     }
@@ -266,6 +283,9 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
         }
 
+        if self.fatal.is_some() {
+            return Ok(Tick::Finished);
+        }
         if outcome == Tick::Redraw {
             self.rebuild_status();
             // A present failure is the frontend's problem to report; it must
@@ -340,7 +360,21 @@ impl<F: Frontend, T: Transport> Client<F, T> {
     /// Fold one server message into the frame. Returns whether to redraw.
     fn apply(&mut self, msg: ServerMsg) -> bool {
         match msg {
-            ServerMsg::Hello { .. } => false,
+            ServerMsg::Hello { protocol, .. } => {
+                // The version is checked here or nowhere. Leaving it unread
+                // meant a daemon left running from an older build was only
+                // noticed when some later message failed to decode — in
+                // whatever code path happened to ask for one first, which
+                // looked like that feature crashing rather than like skew.
+                if protocol != haven_proto::PROTOCOL_VERSION {
+                    self.fatal = Some(format!(
+                        "the daemon speaks protocol v{protocol}, this client speaks v{}. \
+                         It is running an older build: `haven server stop` will replace it.",
+                        haven_proto::PROTOCOL_VERSION
+                    ));
+                }
+                self.fatal.is_some()
+            }
             ServerMsg::Tables(tables) => {
                 self.frame.apply_tables(&tables);
                 false

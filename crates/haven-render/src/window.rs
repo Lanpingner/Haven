@@ -381,7 +381,12 @@ impl<T: Transport> App<T> {
         match self.client.tick() {
             Ok(Tick::Finished) => event_loop.exit(),
             Ok(_) => {}
-            Err(_) => event_loop.exit(),
+            // A window that closes without a word is the worst way to report
+            // anything. Protocol skew used to land here and look like a crash.
+            Err(e) => {
+                self.client.note_error(&e);
+                event_loop.exit();
+            }
         }
     }
 }
@@ -421,8 +426,13 @@ pub fn run<T: Transport + 'static>(
     let mut app =
         App { client, session, config, instance, modifiers: ModifiersState::empty(), error: None };
     event_loop.run_app(&mut app).map_err(|e| RenderError::Device(e.to_string()))?;
-    match app.error.take() {
-        Some(e) => Err(e),
+    if let Some(e) = app.error.take() {
+        return Err(e);
+    }
+    // Why the session ended, if it ended badly. Returned rather than printed
+    // so the CLI reports it the same way it reports everything else.
+    match app.client.fatal() {
+        Some(reason) => Err(RenderError::Session(reason.to_string())),
         None => Ok(()),
     }
 }

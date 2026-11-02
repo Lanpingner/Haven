@@ -255,3 +255,40 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
     let settled = Chooser::new(&sessions, Some(&status));
     assert_eq!(settled.choice(), Some(Choice::Pane(8)));
 }
+
+#[test]
+fn a_daemon_speaking_another_protocol_is_refused_with_a_reason() {
+    use haven_proto::{ServerMsg, SessionId};
+
+    // A version mismatch must be caught at the handshake. Left unread, it
+    // only surfaced when some later message failed to decode — whichever
+    // one a feature happened to ask for first — so it looked like that
+    // feature crashing, and the GPU window simply closed.
+    let transport = ScriptedTransport::new([ServerMsg::Hello {
+        protocol: haven_proto::PROTOCOL_VERSION + 1,
+        session: SessionId(1),
+        build: 0,
+    }]);
+    let frontend = ScriptedFrontend::new(size(80, 24), []);
+    let mut client = Client::new(frontend, transport);
+
+    assert_eq!(client.tick().unwrap(), Tick::Finished, "the session should end");
+    let reason = client.fatal().expect("no reason given");
+    assert!(reason.contains("protocol"), "unhelpful reason: {reason}");
+    assert!(reason.contains("haven server stop"), "no way out offered: {reason}");
+}
+
+#[test]
+fn the_matching_protocol_is_not_refused() {
+    use haven_proto::{ServerMsg, SessionId};
+
+    let transport = ScriptedTransport::new([ServerMsg::Hello {
+        protocol: haven_proto::PROTOCOL_VERSION,
+        session: SessionId(1),
+        build: 0,
+    }]);
+    let frontend = ScriptedFrontend::new(size(80, 24), []);
+    let mut client = Client::new(frontend, transport);
+    assert_ne!(client.tick().unwrap(), Tick::Finished);
+    assert!(client.fatal().is_none());
+}

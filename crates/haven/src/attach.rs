@@ -199,12 +199,27 @@ pub fn run(socket: &Path, session: Option<SessionId>, host: HostCaps) -> io::Res
                 Err(e) => return Err(e.into()),
             }
         }
-        match client.tick().map_err(to_io)? {
-            Tick::Finished => break,
-            Tick::Idle | Tick::Redraw => {}
+        match client.tick() {
+            Ok(Tick::Finished) => break,
+            Ok(Tick::Idle | Tick::Redraw) => {}
+            // Recorded rather than returned: the terminal has to be handed
+            // back before anything is printed, or the message lands in the
+            // middle of the alternate screen and is lost with it.
+            Err(e) => {
+                client.note_error(&e);
+                break;
+            }
         }
     }
-    Ok(())
+
+    // Dropping the client restores the terminal; only then is there anywhere
+    // sensible to print.
+    let reason = client.fatal().map(str::to_string);
+    drop(client);
+    match reason {
+        Some(reason) => Err(io::Error::other(reason)),
+        None => Ok(()),
+    }
 }
 
 /// Ask the daemon for its session list.

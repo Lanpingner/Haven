@@ -1109,6 +1109,13 @@ is a flat list of indented rows, not a real tree: expand/collapse state would
 buy nothing when the point is to see everything at once.
 
 **Bugs this work surfaced, worth remembering:**
+- `PROTOCOL_VERSION` was never read. The client ignored it in `Hello`, so
+  version skew was only noticed when some later message failed to decode — in
+  whichever code path first asked for one. Attaching to a daemon from an older
+  build worked, and then `Ctrl+A s` closed the window, which looks exactly
+  like the chooser crashing. It is checked at the handshake now, and both
+  frontends report why they stopped instead of vanishing: the TUI after it has
+  given the terminal back, the window through its own error.
 - The GPU window ran without a key filter at all. It built its own `Client`
   and never installed one, so `Ctrl+A` went straight to the shell and no
   binding in the window did anything. Both attach paths now take the filter as

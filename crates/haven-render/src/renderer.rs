@@ -85,6 +85,10 @@ pub enum RenderError {
     Device(String),
     Font(FontError),
     Readback(String),
+    /// The session ended badly — version skew, a protocol failure. Nothing to
+    /// do with the GPU, and reporting it as a device error sent me looking in
+    /// the wrong place once already.
+    Session(String),
 }
 
 impl std::fmt::Display for RenderError {
@@ -94,6 +98,7 @@ impl std::fmt::Display for RenderError {
             Self::Device(e) => write!(f, "device request failed: {e}"),
             Self::Font(e) => write!(f, "{e}"),
             Self::Readback(e) => write!(f, "pixel readback failed: {e}"),
+            Self::Session(e) => write!(f, "{e}"),
         }
     }
 }
