@@ -1117,3 +1117,19 @@ and theming (M7), sixel/kitty graphics.
 - Growing a pane can legitimately shrink it, two ways: hidden siblings become
   visible when the parent grows, and integer apportionment can withdraw a
   rounding bonus (the Alabama paradox).
+- A private parameter marker changes what a CSI final byte means, and the two
+  forms share that byte. `CSI > 4 ; 1 m` is XTMODKEYS (modifyOtherKeys), which
+  fish sends before *every* prompt; read as `SGR 4;1` it set underline and bold
+  on the pen and nothing ever reset them, so every cell erased afterwards was
+  drawn with a rule through it — a line across the blank end of each row.
+  Reported from a real window, not caught by any test. The same mistake made
+  `CSI > 1 u` (kitty keyboard push) restore the cursor and `CSI ? Pm r/s`
+  (XTRESTORE/XTSAVE) move the scroll region. Private sequences other than DA2
+  are now ignored rather than run as their public namesakes.
+- Presenting to an unmapped window is not merely wasted work. With
+  `PresentMode::Fifo` the acquire waits for a vblank the window will never get,
+  and that wait sits inside the event loop — so X requests go unanswered and a
+  single-threaded window manager (AwesomeWM) stalls with it. The window now
+  stops rendering entirely while occluded. A window manager may also report
+  `0x0` while unmapping, which would otherwise resize the session to one cell
+  and reflow every pane for a window nobody can see.

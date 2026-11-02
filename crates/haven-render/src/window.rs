@@ -35,6 +35,14 @@ pub struct GpuFrontend {
     window: Option<Arc<Window>>,
     queue: VecDeque<InputEvent>,
     size: CellSize,
+    /// The window manager has the window hidden — on another AwesomeWM tag,
+    /// another workspace, or fully covered. Presenting anyway is not merely
+    /// wasted work: with `PresentMode::Fifo` the acquire waits on a vblank
+    /// that an unmapped window never gets, and that wait is inside the event
+    /// loop, so the X server's own requests go unanswered too.
+    occluded: bool,
+    /// State moved on while we were hidden, so a redraw is owed on return.
+    needs_redraw: bool,
     pub palette: Palette,
     pub cursor_shape: CursorShape,
 }
@@ -46,6 +54,20 @@ impl GpuFrontend {
 
     pub fn push(&mut self, event: InputEvent) {
         self.queue.push_back(event);
+    }
+
+    /// Visibility, as the compositor sees it.
+    pub fn set_occluded(&mut self, occluded: bool) {
+        self.occluded = occluded;
+        if !occluded && self.needs_redraw {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+    }
+
+    pub fn is_occluded(&self) -> bool {
+        self.occluded
     }
 
     pub fn is_ready(&self) -> bool {
@@ -105,6 +127,11 @@ impl Frontend for GpuFrontend {
 
     fn present(&mut self, frame: &FrameModel) -> Result<(), PresentError> {
         let Some(renderer) = &mut self.renderer else { return Ok(()) };
+        if self.occluded {
+            self.needs_redraw = true;
+            return Ok(());
+        }
+        self.needs_redraw = false;
         let (screen, cursor) = composite(frame);
         renderer.render(&screen, cursor, &self.palette, self.cursor_shape);
         Ok(())
@@ -289,13 +316,21 @@ impl<T: Transport> ApplicationHandler<Wake> for App<T> {
                 }
             }
             WindowEvent::Resized(size) => {
-                let cells = self.client.frontend.resized(size.width, size.height);
-                self.client.frontend.push(InputEvent::Resize(cells));
+                // A window manager may report 0x0 while unmapping. Taking that
+                // literally would resize the session to a single cell and
+                // reflow every pane for a window nobody is looking at.
+                if size.width > 0 && size.height > 0 {
+                    let cells = self.client.frontend.resized(size.width, size.height);
+                    self.client.frontend.push(InputEvent::Resize(cells));
+                }
+            }
+            WindowEvent::Occluded(occluded) => {
+                self.client.frontend.set_occluded(occluded);
             }
             WindowEvent::Focused(focused) => {
                 self.client.frontend.push(InputEvent::Focus(focused));
             }
-            WindowEvent::RedrawRequested => {
+            WindowEvent::RedrawRequested if !self.client.frontend.is_occluded() => {
                 // Re-present what we already have: a redraw request is the
                 // compositor asking, not new state. Borrowing the two fields
                 // separately keeps this from needing a clone of the frame.

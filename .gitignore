@@ -3,5 +3,10 @@
 perf.data*
 flamegraph.svg
 
-# editor swap files
+# editor swap files; vim cycles the extension when one is taken, so .svh is
+# as much a swap file as .swp
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+.s[a-v][a-z]
+.sw[a-p]
 *.swp

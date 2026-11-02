@@ -639,6 +639,16 @@ impl Perform for Terminal {
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         let private = intermediates.first() == Some(&b'?');
+        // A private parameter marker changes what a final byte means, and the
+        // public and private forms share final bytes. `CSI > 4 ; 1 m` is
+        // XTMODKEYS — fish sends it before every prompt — and running it as
+        // `SGR 4;1` set underline on the pen and left it set, so every erased
+        // cell after it was drawn with a rule through it. Only DA2 (`CSI > c`)
+        // is implemented here, so anything else private is ignored rather than
+        // mistaken for its namesake.
+        if matches!(intermediates.first(), Some(b'<' | b'=' | b'>')) && action != 'c' {
+            return;
+        }
         match action {
             'A' => self.grid.move_by(-(arg(params, 0, 1) as isize), 0),
             'B' | 'e' => self.grid.move_by(arg(params, 0, 1) as isize, 0),
@@ -709,6 +719,9 @@ impl Perform for Terminal {
             'h' => self.set_mode(private, params, true),
             'l' => self.set_mode(private, params, false),
             'm' => self.sgr(params),
+            // `CSI ? Pm r` / `CSI ? Pm s` are XTRESTORE/XTSAVE, not DECSTBM
+            // and not a cursor save: same final byte, different sequence.
+            'r' | 's' | 'u' if private => {}
             'r' => {
                 let top = arg(params, 0, 1) - 1;
                 let bot = arg(params, 1, self.grid.num_rows() as u16) - 1;
@@ -859,6 +872,31 @@ mod tests {
         let e = emu(b"\x1b[38:2::1:2:3mx");
         let style = e.term.styles.get(e.term.grid.row(0).cells[0].style);
         assert_eq!(style.fg, Color::Rgb(Rgb::new(1, 2, 3)));
+    }
+
+    #[test]
+    fn xtmodkeys_is_not_sgr() {
+        // `CSI > 4 ; 1 m` is modifyOtherKeys, which fish sends before every
+        // prompt. Read as SGR it sets underline and bold on the pen, and
+        // because nothing resets it the attribute runs on through every cell
+        // erased afterwards — a rule drawn across the blank end of the row.
+        let e = emu(b"\x1b[>4;1mx");
+        let style = e.term.styles.get(e.term.grid.row(0).cells[0].style);
+        assert_eq!(style.underline, Underline::None, "XTMODKEYS set an underline");
+        assert!(!style.attrs.contains(Attrs::BOLD), "XTMODKEYS set bold");
+    }
+
+    #[test]
+    fn private_erase_still_erases_but_xtsave_does_not_move_the_margins() {
+        // `?` stays a DEC private mode marker; `>`/`=`/`<` do not reach the
+        // public handlers at all.
+        let mut e = emu(b"\x1b[?2;3r");
+        assert_eq!(e.term.grid.scroll_top, 0, "XTRESTORE moved the scroll region");
+        assert_eq!(e.term.grid.scroll_bot, e.term.grid.num_rows() - 1);
+        // The public form still works.
+        e = emu(b"\x1b[2;3r");
+        assert_eq!(e.term.grid.scroll_top, 1);
+        assert_eq!(e.term.grid.scroll_bot, 2);
     }
 
     #[test]
