@@ -48,6 +48,10 @@ options:
   --backend <b>         vulkan, gl, or all (default). On X11 a Vulkan
                         swapchain can block for seconds on a window the WM
                         has unmapped; GL goes through a different path.
+  --power <p>           high (default) or low. On a hybrid laptop this picks
+                        the discrete or the integrated GPU. Without it,
+                        changing backend also changes GPU, and a result
+                        cannot tell you which one mattered.
   --skip-occluded       stop drawing while the window is hidden, which is what
                         a fixed application should do.
   --continuous          redraw as fast as possible instead of only when asked,
@@ -102,6 +106,7 @@ struct Options {
     stall: Duration,
     seconds: Option<u64>,
     backends: wgpu::Backends,
+    power: wgpu::PowerPreference,
 }
 
 impl Default for Options {
@@ -115,6 +120,7 @@ impl Default for Options {
             stall: Duration::from_millis(100),
             seconds: None,
             backends: wgpu::Backends::all(),
+            power: wgpu::PowerPreference::HighPerformance,
         }
     }
 }
@@ -139,6 +145,14 @@ fn parse_args() -> Result<Options, String> {
                     "gl" => wgpu::Backends::GL,
                     "all" => wgpu::Backends::all(),
                     other => return Err(format!("unknown backend {other:?}")),
+                };
+            }
+            "--power" => {
+                let v = it.next().ok_or("--power needs a value")?;
+                o.power = match v.as_str() {
+                    "high" => wgpu::PowerPreference::HighPerformance,
+                    "low" => wgpu::PowerPreference::LowPower,
+                    other => return Err(format!("unknown power preference {other:?}")),
                 };
             }
             "--seconds" => {
@@ -304,7 +318,7 @@ impl App {
         };
         let adapter =
             match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: self.opts.power,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
             })) {
@@ -335,13 +349,24 @@ impl App {
         let caps = surface.get_capabilities(&adapter);
         let format = caps.formats.first().copied().unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
         let supported = caps.present_modes.clone();
-        let wanted = self.opts.present.to_wgpu();
-        if !supported.contains(&wanted) {
+        let asked = self.opts.present.to_wgpu();
+        // Configuring an unsupported present mode is a validation error, not
+        // a warning: NVIDIA on X11 offers only [Fifo, Immediate], so asking
+        // for Mailbox aborted the process instead of running the test.
+        let wanted = if supported.contains(&asked) {
+            asked
+        } else {
+            let fallback = if supported.contains(&wgpu::PresentMode::Immediate) {
+                wgpu::PresentMode::Immediate
+            } else {
+                wgpu::PresentMode::Fifo
+            };
             self.log(format!(
-                "present mode {:?} is not supported here; supported: {supported:?}",
-                self.opts.present
+                "present mode {asked:?} is NOT supported here (supported: {supported:?}) \
+                 — falling back to {fallback:?}"
             ));
-        }
+            fallback
+        };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -353,7 +378,7 @@ impl App {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
-        self.log(format!("surface: {format:?}, present {:?}", self.opts.present));
+        self.log(format!("surface: {format:?}, present {wanted:?}"));
         self.gpu = Some(Gpu { surface, device, queue, config });
     }
 
