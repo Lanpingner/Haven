@@ -56,6 +56,10 @@ options:
                         a fixed application should do.
   --continuous          redraw as fast as possible instead of only when asked,
                         which is the worst case for a hidden window.
+  --render-thread       own the surface on a second thread, so present()
+                        cannot block the event loop. The GPU still stalls;
+                        the point is that X keeps being answered while it
+                        does, which is what the window manager waits on.
   --poll                use ControlFlow::Poll instead of Wait.
   --stall-ms <n>        report a stall longer than this (default 100).
   --seconds <n>         quit after n seconds, so it can be run unattended.
@@ -107,6 +111,7 @@ struct Options {
     seconds: Option<u64>,
     backends: wgpu::Backends,
     power: wgpu::PowerPreference,
+    render_thread: bool,
 }
 
 impl Default for Options {
@@ -121,6 +126,7 @@ impl Default for Options {
             seconds: None,
             backends: wgpu::Backends::all(),
             power: wgpu::PowerPreference::HighPerformance,
+            render_thread: false,
         }
     }
 }
@@ -134,6 +140,7 @@ fn parse_args() -> Result<Options, String> {
             "--skip-occluded" => o.skip_occluded = true,
             "--continuous" => o.continuous = true,
             "--poll" => o.poll = true,
+            "--render-thread" => o.render_thread = true,
             "--present-mode" => {
                 let v = it.next().ok_or("--present-mode needs a value")?;
                 o.present = PresentArg::parse(&v).ok_or(format!("unknown present mode {v:?}"))?;
@@ -234,9 +241,79 @@ struct App {
     beat: Arc<Beat>,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
+    render: Option<RenderThread>,
     occluded: bool,
     frames: u64,
     worst: (u64, &'static str),
+}
+
+/// What the main thread asks the render thread for. Draw requests coalesce:
+/// only the newest state matters, so a backlog is dropped rather than played
+/// out after a stall.
+#[derive(Clone, Copy, Debug)]
+enum RenderMsg {
+    Draw,
+    Resize(u32, u32),
+    Quit,
+}
+
+/// The render thread's end. Sending never blocks, which is the whole point.
+#[derive(Debug)]
+struct RenderThread {
+    tx: std::sync::mpsc::Sender<RenderMsg>,
+    join: Option<std::thread::JoinHandle<()>>,
+    /// One frame in flight at a time. Without this the event loop queues
+    /// work far faster than the GPU drains it, and a stalled present leaves
+    /// a backlog of frames nobody will ever see.
+    in_flight: Arc<AtomicBool>,
+}
+
+impl RenderThread {
+    fn send(&self, msg: RenderMsg) {
+        let _ = self.tx.send(msg);
+    }
+}
+
+impl Drop for RenderThread {
+    fn drop(&mut self) {
+        self.send(RenderMsg::Quit);
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
+}
+
+/// Draw one frame. Shared by the inline path and the threaded one, so the
+/// only difference between them is which thread blocks.
+fn render_frame(gpu: &mut Gpu, frames: u64) -> Result<(u64, u64), wgpu::SurfaceError> {
+    let tint = (frames % 120) as f64 / 120.0;
+    let t = Instant::now();
+    let frame = gpu.surface.get_current_texture()?;
+    let acquire = t.elapsed().as_millis() as u64;
+
+    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder =
+        gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("probe") });
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("clear"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color { r: tint, g: 0.1, b: 1.0 - tint, a: 1.0 }),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    });
+    gpu.queue.submit(Some(encoder.finish()));
+
+    let t = Instant::now();
+    frame.present();
+    Ok((acquire, t.elapsed().as_millis() as u64))
 }
 
 #[derive(Debug)]
@@ -261,6 +338,7 @@ impl App {
             beat,
             window: None,
             gpu: None,
+            render: None,
             occluded: false,
             frames: 0,
             worst: (0, "nothing"),
@@ -379,16 +457,91 @@ impl App {
         };
         surface.configure(&device, &config);
         self.log(format!("surface: {format:?}, present {wanted:?}"));
-        self.gpu = Some(Gpu { surface, device, queue, config });
+        let gpu = Gpu { surface, device, queue, config };
+
+        if !self.opts.render_thread {
+            self.gpu = Some(gpu);
+            return;
+        }
+
+        self.log("surface moved to a render thread: the event loop will not present");
+        let (tx, rx) = std::sync::mpsc::channel::<RenderMsg>();
+        let in_flight = Arc::new(AtomicBool::new(false));
+        let thread_flag = Arc::clone(&in_flight);
+        let beat = Arc::clone(&self.beat);
+        let start = self.start;
+        let stall = self.opts.stall.as_millis() as u64;
+        let join = std::thread::spawn(move || {
+            let mut gpu = gpu;
+            let mut frames = 0u64;
+            while let Ok(msg) = rx.recv() {
+                // Coalesce: after a multi-second stall the backlog is stale,
+                // and replaying it would draw frames nobody will ever see.
+                let mut draw = false;
+                let mut msg = Some(msg);
+                while let Some(m) = msg {
+                    match m {
+                        RenderMsg::Quit => return,
+                        RenderMsg::Draw => draw = true,
+                        RenderMsg::Resize(w, h) => {
+                            if w > 0 && h > 0 {
+                                gpu.config.width = w;
+                                gpu.config.height = h;
+                                gpu.surface.configure(&gpu.device, &gpu.config);
+                            }
+                        }
+                    }
+                    msg = rx.try_recv().ok();
+                }
+                if !draw {
+                    continue;
+                }
+                frames += 1;
+                beat.frames.store(frames, Ordering::Relaxed);
+                match render_frame(&mut gpu, frames) {
+                    Ok((acquire, present)) => {
+                        let worst = acquire.max(present);
+                        if worst >= stall {
+                            eprintln!(
+                                "[{:>7}ms] render thread: acquire {acquire}ms, present \
+                                 {present}ms — the event loop was NOT blocked",
+                                millis(start)
+                            );
+                        }
+                        if worst > beat.worst_ms.load(Ordering::Relaxed) {
+                            beat.worst_ms.store(worst, Ordering::Relaxed);
+                            *beat.worst_what.lock().unwrap() = "the render thread";
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[{:>7}ms] render thread: acquire failed: {e:?}", millis(start));
+                        gpu.surface.configure(&gpu.device, &gpu.config);
+                    }
+                }
+                thread_flag.store(false, Ordering::Release);
+            }
+        });
+        self.render = Some(RenderThread { tx, join: Some(join), in_flight });
     }
 
     /// One frame: clear to a colour that changes, so a frozen window is
     /// visibly frozen rather than merely suspected of it.
     fn draw(&mut self) {
-        if self.gpu.is_none() {
+        if self.opts.skip_occluded && self.occluded {
             return;
         }
-        if self.opts.skip_occluded && self.occluded {
+        // Handing the frame to another thread is the fix under test: the send
+        // cannot block, so however long the GPU takes, X keeps being served.
+        if let Some(render) = &self.render {
+            // Skip rather than queue: a frame already in flight will show the
+            // newest state anyway by the time it lands.
+            if !render.in_flight.swap(true, Ordering::AcqRel) {
+                render.send(RenderMsg::Draw);
+                self.frames += 1;
+            }
+            return;
+        }
+        if self.gpu.is_none() {
             return;
         }
         self.frames += 1;
@@ -449,7 +602,17 @@ impl App {
         eprintln!();
         eprintln!("--- summary ---------------------------------------------");
         eprintln!("frames drawn:   {}", self.frames);
-        eprintln!("worst blocking call: {}ms in {}", self.worst.0, self.worst.1);
+        eprintln!("worst call on the EVENT LOOP: {}ms in {}", self.worst.0, self.worst.1);
+        if self.render.is_some() {
+            eprintln!(
+                "worst call on the RENDER THREAD: {}ms",
+                self.beat.worst_ms.load(Ordering::Relaxed)
+            );
+            eprintln!();
+            eprintln!("If the render-thread number is large and the event-loop one");
+            eprintln!("is small, the GPU still stalls but the window manager is");
+            eprintln!("no longer waiting on it — which is the whole fix.");
+        }
         if !self.opts.gpu {
             eprintln!();
             eprintln!("This run had no wgpu at all. If the window manager still");
@@ -521,7 +684,9 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(size) => {
                 self.log(format!("Resized({}x{})", size.width, size.height));
-                if let Some(gpu) = &mut self.gpu {
+                if let Some(render) = &self.render {
+                    render.send(RenderMsg::Resize(size.width, size.height));
+                } else if let Some(gpu) = &mut self.gpu {
                     if size.width > 0 && size.height > 0 {
                         gpu.config.width = size.width;
                         gpu.config.height = size.height;
