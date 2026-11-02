@@ -49,7 +49,7 @@ cargo run -p haven -- shell-info
 | `H` `J` `K` `L` | resize |
 | `z` | zoom the active pane |
 | `x` | close the pane |
-| `c` / `n` / `p` / `1`-`9` | new window / next / previous / select |
+| `c` / `n` / `p` / `1`-`9` | new tab / next / previous / select |
 | `e` / `E` / `t` | even-horizontal / even-vertical / tiled layout |
 | `d` | detach |
 | `:` | open the command line |
@@ -64,8 +64,8 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | Command | Does |
 | --- | --- |
 | `split-h` / `split-v` | split into rows / columns |
-| `new-window`, `next`, `prev` | window management |
-| `select-window <n>` | go to window *n* (numbered from 1) |
+| `new-window` (`new-tab`), `next`, `prev` | tabs |
+| `select-window <n>` (`select-tab`) | go to tab *n* (numbered from 1) |
 | `kill-pane`, `zoom`, `detach` | as the keys do |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |
 
@@ -73,10 +73,25 @@ same actions the keys do, so nothing is reachable one way and not the other.
 matches as you type, with the first entry — what `Tab` would take — marked.
 `Esc` cancels, `Backspace` on an empty line leaves the mode.
 
+### What the levels are
+
+The word *window* means two things in a GPU terminal, which is worth stating
+once because tmux never had to:
+
+| | |
+| --- | --- |
+| **desktop window** | a `haven gpu` process. A *viewer*, not part of a session — several can watch one session, and closing one leaves it running. |
+| **session** | lives in the daemon and outlives every viewer. |
+| **tab** | owns a tree of panes. tmux calls this a *window*, and so do the protocol and the commands (`new-window`); the interface says *tab*, because the other meaning is taken. |
+| **pane** | one shell, one pty. |
+
+So the session tree has three levels, not four: the desktop window is the
+thing looking at it. `new-tab` is accepted everywhere `new-window` is.
+
 ### Session tree
 
 `Ctrl+A` `s` opens a chooser over the panes, listing every session and, for
-the one you are attached to, its windows and the panes inside them. It opens
+the one you are attached to, its tabs and the panes inside them. It opens
 on the pane you are in.
 
 | Key | Does |
@@ -87,7 +102,7 @@ on the pane you are in.
 | `Enter` | go there — attaching to another session if that is what is selected |
 | `Esc` | close |
 
-Only the attached session can show its windows and panes; for the others the
+Only the attached session can show its tabs and panes; for the others the
 daemon reports counts alone, so that is what is listed.
 
 ### Status bar

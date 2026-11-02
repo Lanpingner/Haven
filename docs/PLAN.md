@@ -1108,6 +1108,16 @@ a filter owning it would be a second place that knows what a session is. It
 is a flat list of indented rows, not a real tree: expand/collapse state would
 buy nothing when the point is to see everything at once.
 
+A naming decision worth recording, because it caused a real misunderstanding:
+*window* means two things here. `haven-mux/src/window.rs` is a tab — it owns a
+pane tree — and `haven-render/src/window.rs` is the thing on the desktop,
+which is a client and not part of a session at all. tmux never had the second
+sense and so could call the first one a window without ambiguity; this program
+cannot. The interface now says *tab*, while the protocol, the mux types and the
+command names keep tmux's `window` (with `new-tab` and friends accepted as
+aliases). The session tree therefore has three levels, not four: the desktop
+window is what is looking at it.
+
 **Bugs this work surfaced, worth remembering:**
 - `PROTOCOL_VERSION` was never read. The client ignored it in `Hello`, so
   version skew was only noticed when some later message failed to decode — in

@@ -288,7 +288,7 @@ fn list(args: Args) -> ExitCode {
         Ok((sessions, daemon_build)) => {
             for s in sessions {
                 println!(
-                    "{}: {} ({} windows, {} panes, {} clients, {}x{})",
+                    "{}: {} ({} tabs, {} panes, {} clients, {}x{})",
                     s.id.0, s.name, s.windows, s.panes, s.clients, s.size.cols, s.size.rows
                 );
             }

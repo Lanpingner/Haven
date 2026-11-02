@@ -89,6 +89,7 @@ pub fn prefix_table(event: &KeyEvent) -> Option<Action> {
 /// see it offered rather than be told it does not exist after the fact.
 pub const COMMANDS: &[&str] = &[
     "choose",
+    "new-tab",
     "detach",
     "even-horizontal",
     "even-vertical",
@@ -147,9 +148,10 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
     Ok(match verb {
         "split-h" | "splitw" | "sp" => Action::SplitRows,
         "split-v" | "vsplit" | "vs" => Action::SplitColumns,
-        "new-window" | "neww" => Action::NewWindow,
-        "next" | "next-window" => Action::NextWindow,
-        "prev" | "previous-window" => Action::PreviousWindow,
+        // tmux's names, plus the ones someone who calls them tabs will try.
+        "new-window" | "neww" | "new-tab" => Action::NewWindow,
+        "next" | "next-window" | "next-tab" => Action::NextWindow,
+        "prev" | "previous-window" | "prev-tab" => Action::PreviousWindow,
         "kill-pane" | "killp" => Action::ClosePane,
         "zoom" => Action::ToggleZoom,
         "choose" | "choose-tree" => Action::Choose,
@@ -157,7 +159,7 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         "even-horizontal" => Action::ApplyLayout(NamedLayout::EvenHorizontal),
         "even-vertical" => Action::ApplyLayout(NamedLayout::EvenVertical),
         "tiled" => Action::ApplyLayout(NamedLayout::Tiled),
-        "select-window" | "selectw" => {
+        "select-window" | "selectw" | "select-tab" => {
             let n: usize = arg
                 .ok_or_else(|| "select-window needs a number".to_string())?
                 .parse()

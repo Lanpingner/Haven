@@ -53,7 +53,7 @@ impl Chooser {
             rows.push(Row {
                 indent: 0,
                 text: format!(
-                    "{} ({} windows, {} panes{})",
+                    "{} ({} tabs, {} panes{})",
                     info.name,
                     info.windows,
                     info.panes,
@@ -70,10 +70,13 @@ impl Chooser {
                 let active_window = window.id == status.active_window;
                 rows.push(Row {
                     indent: 1,
-                    // Labelled: an unadorned "1: 1" tells nobody that the
-                    // middle level is a window — a tab, in tmux's sense.
+                    // Called a tab in the interface, though the protocol and
+                    // the commands keep tmux's name for it. "Window" is
+                    // already taken here by the thing on the desktop — this
+                    // program has one of those, which tmux never did — and
+                    // one word for two levels of the same tree is a trap.
                     text: format!(
-                        "window {}: {}{}",
+                        "tab {}: {}{}",
                         window.id,
                         window.name,
                         if window.zoomed { " (zoomed)" } else { "" }
@@ -153,7 +156,7 @@ impl Chooser {
             return None;
         }
         let title = if self.filter.is_empty() {
-            " session / window / pane  —  enter picks, esc closes, type filters ".to_string()
+            "  session / tab / pane  —  enter picks, esc closes, type filters  ".to_string()
         } else {
             format!(" sessions  filter: {} ", self.filter)
         };
