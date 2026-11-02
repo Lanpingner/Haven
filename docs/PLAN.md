@@ -1138,6 +1138,16 @@ prompt, so `PS0` plus `history 1` is used instead. It is expanded exactly
 once per interactive command line, which is the gate wanted.
 
 **Bugs this work surfaced, worth remembering:**
+- Requesting `Limits::downlevel_defaults()` caps textures at 2048 *whatever
+  the hardware can do*, so a window 2088 pixels tall could not be given a
+  surface and wgpu aborted the process — a validation error cannot be caught.
+  It never showed while the GPU default was the discrete card, because that
+  window happened to be smaller; switching to the integrated one and
+  maximising found it. The resolution limits now come from the adapter
+  (`using_resolution`), and sizes are clamped besides, because a window is
+  whatever size the user dragged it to. Measured, not assumed: the limit goes
+  from 2048 to 16384 on this machine, which `cargo run -p haven-render
+  --example limits` prints.
 - Box drawing vanished wherever a panel gave it a background. Procedural box
   drawing and background rectangles shared one quad buffer, and a background
   run is flushed when it *ends* — after the cells it covers have been drawn —

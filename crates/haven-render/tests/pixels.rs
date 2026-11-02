@@ -284,3 +284,25 @@ fn a_full_screen_of_text_renders_in_one_frame_per_pass() {
     );
     assert_eq!(r.frames, 1);
 }
+
+#[test]
+fn a_grid_larger_than_the_device_allows_is_cropped_not_fatal() {
+    // Asking for a surface or texture bigger than `max_texture_dimension_2d`
+    // is a validation error, and a validation error aborts the process — it
+    // cannot be caught. A window is whatever size the user dragged it to, so
+    // the size has to be clamped rather than hoped about.
+    //
+    // This bit on a real window: requesting `downlevel_defaults` limits caps
+    // textures at 2048 whatever the hardware can do, and a 2088-pixel-tall
+    // window could not be given a surface at all.
+    let Some(mut r) = renderer(4000, 4000) else { return };
+    let (w, h) = r.size();
+    let max = r.max_dimension();
+    assert!(w >= 1 && h >= 1, "clamped to nothing: {w}x{h}");
+    assert!(w <= max && h <= max, "{w}x{h} exceeds the device limit of {max}");
+
+    // It must still draw, not merely survive being constructed.
+    let screen = text_screen(4, 1, &["ok"]);
+    r.render(&screen, (0, 0), &haven_core::Palette::default(), CursorShape::Block);
+    assert!(r.read_pixels().is_ok(), "a clamped renderer could not read back");
+}

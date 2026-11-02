@@ -62,6 +62,10 @@ pub struct Renderer {
     pub atlas: Atlas,
     pub fonts: FontStack,
     cell: CellMetrics,
+    /// The largest texture this device will make. A surface cannot exceed
+    /// it, and asking is a validation error that aborts the process rather
+    /// than something that can be caught.
+    max_dim: u32,
     solid: Vec<Quad>,
     /// Background rectangles, kept apart so they can be drawn underneath the
     /// box drawing rather than on top of it.
@@ -188,13 +192,21 @@ impl Renderer {
             // Deliberately conservative: no bindless, no push descriptors, so
             // the GL backend and older drivers stay viable (§18).
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults(),
+            // Conservative everywhere except resolution, which must follow
+            // the adapter: `downlevel_defaults` caps a texture at 2048, and a
+            // window taller than that cannot be given a surface at all.
+            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             memory_hints: wgpu::MemoryHints::default(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             trace: wgpu::Trace::Off,
         }))
         .map_err(|e| RenderError::Device(e.to_string()))?;
 
+        // Same ceilings offscreen. A screenshot of a very large grid would
+        // otherwise abort rather than be cropped — and the readback buffer
+        // has its own, smaller limit than the texture does.
+        let limits = device.limits();
+        let (width, height) = clamp_offscreen(width, height, &limits);
         Self::build(device, queue, fonts, cell, width, height, TARGET_FORMAT)
     }
 
@@ -224,12 +236,22 @@ impl Renderer {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("haven"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults(),
+            // Conservative everywhere except resolution, which must follow
+            // the adapter: `downlevel_defaults` caps a texture at 2048, and a
+            // window taller than that cannot be given a surface at all.
+            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             memory_hints: wgpu::MemoryHints::default(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             trace: wgpu::Trace::Off,
         }))
         .map_err(|e| RenderError::Device(e.to_string()))?;
+
+        // A surface larger than the device's biggest texture is a validation
+        // error, and a validation error aborts the process — it cannot be
+        // caught. A window simply is whatever size the user made it, so the
+        // size is clamped here rather than hoped about.
+        let max_dim = device.limits().max_texture_dimension_2d;
+        let (width, height) = (width.clamp(1, max_dim), height.clamp(1, max_dim));
 
         let caps = surface.get_capabilities(&adapter);
         // Match the offscreen path's colour space, so what a screenshot shows
@@ -244,8 +266,8 @@ impl Renderer {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: width.max(1),
-            height: height.max(1),
+            width,
+            height,
             // Vsync: a terminal has no reason to draw faster than the display,
             // and tearing in text is miserable to read.
             present_mode: wgpu::PresentMode::Fifo,
@@ -260,8 +282,7 @@ impl Renderer {
         // mismatch is a validation error at the first draw rather than
         // anything visible. Caught by running under a software rasterizer,
         // which picks a different format than the discrete GPU does.
-        let mut renderer =
-            Self::build(device, queue, fonts, cell, width.max(1), height.max(1), format)?;
+        let mut renderer = Self::build(device, queue, fonts, cell, width, height, format)?;
         renderer.target = Target::Surface { surface, config };
         Ok(renderer)
     }
@@ -442,6 +463,7 @@ impl Renderer {
         });
 
         let target = Self::make_offscreen(&device, width, height);
+        let max_dim = device.limits().max_texture_dimension_2d;
 
         Ok(Self {
             device,
@@ -460,6 +482,7 @@ impl Renderer {
             atlas: Atlas::new(ATLAS_SIZE),
             fonts,
             cell,
+            max_dim,
             solid: Vec::new(),
             backdrop: Vec::new(),
             glyphs: Vec::new(),
@@ -495,6 +518,18 @@ impl Renderer {
         self.cell
     }
 
+    /// The largest texture dimension this device allows.
+    pub fn max_dimension(&self) -> u32 {
+        self.max_dim
+    }
+
+    /// Keep a size inside what the device can actually allocate. A window
+    /// larger than the limit renders cropped, which is survivable; asking
+    /// for it anyway is a validation error, which is not.
+    fn clamp(&self, width: u32, height: u32) -> (u32, u32) {
+        (width.clamp(1, self.max_dim), height.clamp(1, self.max_dim))
+    }
+
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
@@ -510,7 +545,7 @@ impl Renderer {
 
     /// Resize to an exact pixel size, which is what a window gives us.
     pub fn resize_pixels(&mut self, width: u32, height: u32) {
-        let (width, height) = (width.max(1), height.max(1));
+        let (width, height) = self.clamp(width, height);
         if (width, height) == (self.width, self.height) {
             return;
         }
@@ -960,6 +995,22 @@ fn resolve(
 /// sRGB bytes to linear floats. The target is an sRGB texture, so the shader's
 /// output is treated as linear and converted on write; skipping this is what
 /// makes text look too heavy.
+/// Shrink an offscreen size until both the texture and the buffer it is read
+/// back through are within the device's limits. The aspect ratio is kept, so
+/// a huge grid comes out scaled down rather than cropped to a corner.
+fn clamp_offscreen(width: u32, height: u32, limits: &wgpu::Limits) -> (u32, u32) {
+    let max_dim = limits.max_texture_dimension_2d;
+    let (mut w, mut h) = (width.clamp(1, max_dim), height.clamp(1, max_dim));
+    // Readback rows are padded to 256 bytes, so the buffer is bigger than
+    // the obvious width * height * 4.
+    let bytes = |w: u32, h: u32| ((w * 4).div_ceil(256) * 256) as u64 * h as u64;
+    while bytes(w, h) > limits.max_buffer_size && (w > 1 || h > 1) {
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+    }
+    (w, h)
+}
+
 fn linear(rgb: Rgb, alpha: f32) -> [f32; 4] {
     let f = |v: u8| {
         let v = v as f32 / 255.0;
