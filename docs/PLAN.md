@@ -1136,6 +1136,13 @@ and theming (M7), sixel/kitty graphics.
   anything can compare versions. The decode error now names the likely cause
   instead of reporting "Hit the end of buffer". Proper negotiation ahead of the
   first typed message is still owed.
+- The fallback font scan set its "already scanned" flag only when it *found*
+  a face. A character no font covers — an emoji, on a machine with no colour
+  emoji font — therefore rescanned every font on the system every time one
+  appeared: 3829 faces, 8.6GB, read in full to look at their character maps.
+  A prompt with three emoji took 5.69s to render, of which 5.56s was syscall
+  time. The faces are now mapped once and kept; the same render takes 0.249s.
+  Reported as "takes forever to render", and nothing to do with the GPU.
 - The AwesomeWM freeze was none of the three things it looked like. Measured
   with `crates/winit-probe`: not winit (`--no-gpu` never stalled), not vsync
   (`Immediate` still blocked 2052ms), and not our event loop (moving present

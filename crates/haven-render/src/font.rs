@@ -15,8 +15,48 @@ use swash::zeno::{Format, Vector};
 use swash::{Attributes, CacheKey, Charmap, FontRef, GlyphId};
 
 /// A loaded face, kept alive because `FontRef` borrows its data.
+/// Font bytes, either read into memory or mapped.
+///
+/// Mapping matters: there is 8.6GB of fonts in 3829 faces on this machine,
+/// and the fallback scan only ever looks at each one's character map. Reading
+/// whole files to find a cmap cost seconds of pure syscall time; a mapping
+/// faults in the few pages actually touched.
+enum FontData {
+    Owned(Vec<u8>),
+    Mapped(memmap2::Mmap),
+}
+
+impl std::ops::Deref for FontData {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Owned(v) => v,
+            Self::Mapped(m) => m,
+        }
+    }
+}
+
+impl std::fmt::Debug for FontData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FontData({} bytes)", self.len())
+    }
+}
+
+/// Map a font file, falling back to reading it.
+fn load_font_file(path: &std::path::Path) -> Option<FontData> {
+    let file = std::fs::File::open(path).ok()?;
+    // SAFETY: a font file changing underneath a live mapping would be
+    // observed as changed bytes, not as unsoundness in our own memory; the
+    // alternative is reading gigabytes to look at a few kilobytes of cmap.
+    match unsafe { memmap2::Mmap::map(&file) } {
+        Ok(map) => Some(FontData::Mapped(map)),
+        Err(_) => std::fs::read(path).ok().map(FontData::Owned),
+    }
+}
+
+#[derive(Debug)]
 struct Face {
-    data: Arc<Vec<u8>>,
+    data: Arc<FontData>,
     index: u32,
     key: CacheKey,
 }
@@ -61,6 +101,12 @@ pub struct FontStack {
     /// script, and a terminal that renders nothing for CJK is broken even if
     /// the font list looks reasonable.
     db: fontdb::Database,
+    /// Every system face, mapped, built once on the first miss. Keeping them
+    /// is what makes the *second* unknown character free: the old code set
+    /// its "already scanned" flag only when a font was found, so a character
+    /// no font covers — an emoji, here — rescanned every font file on the
+    /// system, every time one appeared.
+    system: Vec<Face>,
     scanned: bool,
     /// Which face can draw a given character, once resolved.
     coverage: HashMap<char, Option<FaceId>>,
@@ -158,13 +204,17 @@ impl FontStack {
         let mut faces = Vec::new();
         for id in ids {
             let Some((source, index)) = db.face_source(id) else { continue };
-            let data: Arc<Vec<u8>> = match source {
-                fontdb::Source::Binary(data) => Arc::new(data.as_ref().as_ref().to_vec()),
-                fontdb::Source::File(path) => match std::fs::read(&path) {
-                    Ok(bytes) => Arc::new(bytes),
-                    Err(_) => continue,
+            let data: Arc<FontData> = match source {
+                fontdb::Source::Binary(data) => {
+                    Arc::new(FontData::Owned(data.as_ref().as_ref().to_vec()))
+                }
+                fontdb::Source::File(path) => match load_font_file(&path) {
+                    Some(data) => Arc::new(data),
+                    None => continue,
                 },
-                fontdb::Source::SharedFile(_, data) => Arc::new(data.as_ref().as_ref().to_vec()),
+                fontdb::Source::SharedFile(_, data) => {
+                    Arc::new(FontData::Owned(data.as_ref().as_ref().to_vec()))
+                }
             };
             let Some(font) = FontRef::from_index(&data, index as usize) else { continue };
             let key = font.key;
@@ -178,6 +228,7 @@ impl FontStack {
         Ok(Self {
             faces,
             db,
+            system: Vec::new(),
             scanned: false,
             coverage: HashMap::new(),
             scaler: ScaleContext::new(),
@@ -229,30 +280,49 @@ impl FontStack {
     }
 
     /// Search every installed face for one that can draw `c`, adding it to the
-    /// chain. Bounded by the `scanned` flag plus the per-character cache.
+    /// chain. The system faces are mapped once; the per-character cache and
+    /// the `scanned` flag keep it to a single pass however many characters
+    /// turn out to be missing.
     fn scan_for(&mut self, c: char) -> Option<FaceId> {
-        let candidates: Vec<(fontdb::ID, fontdb::Source, u32)> =
-            self.db.faces().map(|face| (face.id, face.source.clone(), face.index)).collect();
+        self.load_system_faces();
+        let found = self.system.iter().position(|face| face.as_ref().charmap().map(c) != 0)?;
+        // Promote it into the active chain so later characters in the same
+        // script resolve without searching again.
+        let face = Face {
+            data: Arc::clone(&self.system[found].data),
+            index: self.system[found].index,
+            key: self.system[found].key,
+        };
+        self.faces.push(face);
+        Some(FaceId((self.faces.len() - 1) as u16))
+    }
 
-        for (_, source, index) in candidates {
-            let data: Arc<Vec<u8>> = match &source {
-                fontdb::Source::Binary(data) => Arc::new(data.as_ref().as_ref().to_vec()),
-                fontdb::Source::File(path) => match std::fs::read(path) {
-                    Ok(bytes) => Arc::new(bytes),
-                    Err(_) => continue,
+    /// Map every system face once. Mapping is cheap — address space, not
+    /// resident memory — and only the character maps are ever touched.
+    fn load_system_faces(&mut self) {
+        if self.scanned {
+            return;
+        }
+        self.scanned = true;
+        let candidates: Vec<(fontdb::Source, u32)> =
+            self.db.faces().map(|face| (face.source.clone(), face.index)).collect();
+        for (source, index) in candidates {
+            let data: Arc<FontData> = match &source {
+                fontdb::Source::Binary(data) => {
+                    Arc::new(FontData::Owned(data.as_ref().as_ref().to_vec()))
+                }
+                fontdb::Source::File(path) => match load_font_file(path) {
+                    Some(data) => Arc::new(data),
+                    None => continue,
                 },
-                fontdb::Source::SharedFile(_, data) => Arc::new(data.as_ref().as_ref().to_vec()),
+                fontdb::Source::SharedFile(_, data) => {
+                    Arc::new(FontData::Owned(data.as_ref().as_ref().to_vec()))
+                }
             };
             let Some(font) = FontRef::from_index(&data, index as usize) else { continue };
-            if font.charmap().map(c) == 0 {
-                continue;
-            }
             let key = font.key;
-            self.faces.push(Face { data, index, key });
-            self.scanned = true;
-            return Some(FaceId((self.faces.len() - 1) as u16));
+            self.system.push(Face { data, index, key });
         }
-        None
     }
 
     /// Characters that take no space of their own and belong *on* the
@@ -355,6 +425,38 @@ mod tests {
 
     fn stack() -> Option<FontStack> {
         FontStack::new(None, 16.0).ok()
+    }
+
+    #[test]
+    fn a_character_no_font_has_does_not_rescan_the_system() {
+        // The scan used to mark itself done only when it *found* something,
+        // so a character nothing covers — an emoji on a machine with no
+        // colour emoji font — re-read every font file on disk every time one
+        // appeared. With 3829 faces that cost seconds per character, on the
+        // render path.
+        let Some(mut stack) = stack() else { return };
+
+        // Two private-use characters: nothing can possibly cover them.
+        let _ = stack.face_for('\u{F8FF}');
+        assert!(stack.scanned, "the scan did not mark itself done");
+        let after_first = stack.system.len();
+
+        let _ = stack.face_for('\u{F8FE}');
+        assert_eq!(
+            stack.system.len(),
+            after_first,
+            "a second unknown character loaded the system fonts again"
+        );
+    }
+
+    #[test]
+    fn the_fallback_still_finds_a_face_for_an_uncovered_script() {
+        let Some(mut stack) = stack() else { return };
+        // Whatever the curated chain misses, the scan should still resolve —
+        // speeding it up must not turn it off.
+        if let Some((id, glyph)) = stack.face_for('漢') {
+            assert_ne!(glyph, 0, "resolved to face {id:?} with no glyph");
+        }
     }
 
     #[test]

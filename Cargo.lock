@@ -875,6 +875,7 @@ dependencies = [
  "haven-core",
  "haven-proto",
  "libc",
+ "memmap2",
  "pollster",
  "raw-window-handle",
  "swash",
