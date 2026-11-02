@@ -15,6 +15,7 @@ const USAGE: &str = "\
 haven — terminal emulator (work in progress)
 
 usage:
+  haven gpu [options]               attach in a GPU window
   haven attach [options]            attach to the daemon (starts it if needed)
   haven ls                          list sessions
   haven kill-session -t <id>        end one session
@@ -193,6 +194,7 @@ fn main() -> ExitCode {
     };
 
     match cmd.as_str() {
+        "gpu" => gpu(args),
         "attach" => attach(args),
         "ls" => list(args),
         "kill-session" => kill_session(args),
@@ -214,6 +216,26 @@ fn main() -> ExitCode {
 
 fn socket_of(args: &Args) -> PathBuf {
     args.socket.clone().unwrap_or_else(|| haven_daemon::socket_path("default"))
+}
+
+/// Attach with a GPU window.
+fn gpu(args: Args) -> ExitCode {
+    let socket = socket_of(&args);
+    let session = args.target.map(haven_proto::SessionId);
+    let config = haven_render::WindowConfig {
+        title: "Haven".into(),
+        cols: args.cols,
+        rows: args.rows,
+        font: args.font.clone(),
+        font_size: args.font_size,
+    };
+    match haven::attach::run_gpu(&socket, session, config) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Attach to the daemon, starting one if it is not running.

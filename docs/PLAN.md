@@ -1052,7 +1052,7 @@ rewrite.
 ## 20. Implementation status
 
 Updated as milestones land, so the plan above does not drift from the tree.
-**251 tests, zero clippy warnings, `cargo test --workspace` green.**
+**295 tests, zero clippy warnings, `cargo test --workspace` green.**
 
 | Milestone | State |
 |---|---|
@@ -1065,6 +1065,7 @@ Updated as milestones land, so the plan above does not drift from the tree.
 | **M3** mux core | Done. N-ary pane trees with fractional weights, the layout solver (+8 proptest properties), windows, zoom-as-override, named layouts, geometric focus movement, and a runtime that gives every pane its own pty and geometry. |
 | **M3.7** shells | Done. `Shell` trait with fish/zsh/bash/generic impls, native-capability detection, `ZDOTDIR` shim, `--rcfile` chaining. |
 | **M5** daemon + attach/detach | Done bar live upgrade. `havend` as `haven server run`, framed postcard over a unix socket, per-client row-revision sync, style/cluster table shipping, `Smallest`/`Latest` resize policies, autostart, `haven attach \| ls \| kill-session \| server stop`. Verified end to end: a session outlives its client and reattach restores the screen. |
+| **M1** GPU frontend | Done bar polish. wgpu pipelines, shelf-packed glyph atlas, font fallback with a last-resort system scan, sRGB-correct colour, procedural box drawing, a winit window with vsync, and `haven screenshot` so the renderer stays reviewable without a display. No italic faces, no ligatures, no colour emoji yet. |
 | **M4** keyboard | Partial. A prefix key table resolving to a declarative `Action`, shared by the standalone and attached paths. The modal stack, configurable bindings, palette and copy mode are still to come. |
 
 **Crates:** `haven-core`, `haven-pty`, `haven-shell`, `haven-vtwrite`,
@@ -1079,9 +1080,9 @@ Updated as milestones land, so the plan above does not drift from the tree.
   plugins are specified to *run in the daemon* — building the host first would
   have meant building it in the wrong place and moving it.
 
-**Not started:** GPU frontend, plugins (M3.5), live daemon upgrade (M5.9),
-fidelity tiers end-to-end (M6.5), config and theming (M7), sixel/kitty
-graphics.
+**Not started:** plugins (M3.5), copy mode and the modal key table (the rest
+of M4), live daemon upgrade (M5.9), fidelity tiers end-to-end (M6.5), config
+and theming (M7), sixel/kitty graphics.
 
 **Known gaps:**
 - Host capability detection is environment-based guessing; the interactive
@@ -1110,3 +1111,9 @@ graphics.
 - A dropped `Pty` left its child running, so a dead client stayed attached from
   the daemon's point of view. Dropping the master now hangs up the group — and
   reaps it, since `kill(pid, 0)` succeeds for a zombie.
+- Render pipelines built for a hardcoded texture format fail validation on a
+  window whose surface prefers BGRA. Found by running the window under a
+  software rasterizer, which chooses differently than the discrete GPU.
+- Growing a pane can legitimately shrink it, two ways: hidden siblings become
+  visible when the parent grows, and integer apportionment can withdraw a
+  rounding bonus (the Alabama paradox).

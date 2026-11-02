@@ -5,7 +5,9 @@ pub mod atlas;
 pub mod boxdraw;
 pub mod font;
 pub mod renderer;
+pub mod window;
 
 pub use atlas::{Atlas, GlyphEntry, GlyphKey, Upload};
 pub use font::{CellMetrics, FaceId, FontError, FontStack, Raster};
 pub use renderer::{Quad, RenderError, Renderer};
+pub use window::{GpuFrontend, WindowConfig};

@@ -74,6 +74,24 @@ fn key_filter() -> impl FnMut(&KeyEvent) -> Intercepted {
     }
 }
 
+/// Attach with the GPU frontend: a window instead of the host terminal.
+///
+/// Same client loop, same key table, same daemon — only the `Frontend` impl
+/// differs, which is the whole point of the seam (`docs/PLAN.md` §3).
+pub fn run_gpu(
+    socket: &Path,
+    session: Option<SessionId>,
+    config: haven_render::WindowConfig,
+) -> io::Result<()> {
+    let transport = connect_or_start(socket)?;
+    // The event loop blocks until something happens; without a descriptor to
+    // watch, it would never notice the daemon. Duplicating it lets the
+    // watcher thread wait on the same socket without owning the transport.
+    let wake = rustix::io::dup(transport.as_fd()).ok();
+    haven_render::window::run(transport, session, config, wake)
+        .map_err(|e| io::Error::other(e.to_string()))
+}
+
 pub fn run(socket: &Path, session: Option<SessionId>, host: HostCaps) -> io::Result<()> {
     let transport = connect_or_start(socket)?;
     let frontend = TuiFrontend::enter(host)?;

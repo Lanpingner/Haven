@@ -39,6 +39,8 @@ enum Target {
         readback: wgpu::Buffer,
         padded_bytes_per_row: u32,
     },
+    /// A window's swapchain.
+    Surface { surface: wgpu::Surface<'static>, config: wgpu::SurfaceConfiguration },
 }
 
 const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -143,9 +145,77 @@ impl Renderer {
         }))
         .map_err(|e| RenderError::Device(e.to_string()))?;
 
-        Self::build(device, queue, fonts, cell, width, height)
+        Self::build(device, queue, fonts, cell, width, height, TARGET_FORMAT)
     }
 
+    /// A renderer drawing into a window's surface.
+    ///
+    /// Takes an already-created surface so this crate does not have to know
+    /// what kind of window it is — the frontend owns that.
+    pub fn for_surface(
+        instance: &wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+        font_size: f32,
+        font: Option<&str>,
+    ) -> Result<Self, RenderError> {
+        let fonts = FontStack::new(font, font_size)?;
+        let cell = fonts.metrics();
+
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: Some(&surface),
+        }))
+        .map_err(|_| RenderError::NoAdapter)?;
+
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("haven"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            memory_hints: wgpu::MemoryHints::default(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            trace: wgpu::Trace::Off,
+        }))
+        .map_err(|e| RenderError::Device(e.to_string()))?;
+
+        let caps = surface.get_capabilities(&adapter);
+        // Match the offscreen path's colour space, so what a screenshot shows
+        // is what the window shows.
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| *f == TARGET_FORMAT)
+            .or_else(|| caps.formats.first().copied())
+            .ok_or(RenderError::NoAdapter)?;
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: width.max(1),
+            height: height.max(1),
+            // Vsync: a terminal has no reason to draw faster than the display,
+            // and tearing in text is miserable to read.
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: caps.alpha_modes.first().copied().unwrap_or(wgpu::CompositeAlphaMode::Auto),
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
+
+        // The pipelines must be built for the surface's *actual* format: a
+        // window may hand us BGRA where an offscreen texture is RGBA, and the
+        // mismatch is a validation error at the first draw rather than
+        // anything visible. Caught by running under a software rasterizer,
+        // which picks a different format than the discrete GPU does.
+        let mut renderer =
+            Self::build(device, queue, fonts, cell, width.max(1), height.max(1), format)?;
+        renderer.target = Target::Surface { surface, config };
+        Ok(renderer)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn build(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -153,6 +223,7 @@ impl Renderer {
         cell: CellMetrics,
         width: u32,
         height: u32,
+        format: wgpu::TextureFormat,
     ) -> Result<Self, RenderError> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("haven shader"),
@@ -293,7 +364,7 @@ impl Renderer {
                     module: &shader,
                     entry_point: Some(entry),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: TARGET_FORMAT,
+                        format,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -382,14 +453,27 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, cols: u32, rows: u32) {
-        let width = (cols * self.cell.width).max(1);
-        let height = (rows * self.cell.height).max(1);
+        self.resize_pixels((cols * self.cell.width).max(1), (rows * self.cell.height).max(1));
+    }
+
+    /// Resize to an exact pixel size, which is what a window gives us.
+    pub fn resize_pixels(&mut self, width: u32, height: u32) {
+        let (width, height) = (width.max(1), height.max(1));
         if (width, height) == (self.width, self.height) {
             return;
         }
         self.width = width;
         self.height = height;
-        self.target = Self::make_offscreen(&self.device, width, height);
+        match &mut self.target {
+            Target::Surface { surface, config } => {
+                config.width = width;
+                config.height = height;
+                surface.configure(&self.device, config);
+            }
+            Target::Offscreen { .. } => {
+                self.target = Self::make_offscreen(&self.device, width, height);
+            }
+        }
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -657,7 +741,26 @@ impl Renderer {
             );
         }
 
-        let Target::Offscreen { texture, view, readback, padded_bytes_per_row } = &self.target;
+        // A surface frame must outlive the submit, so it is acquired here and
+        // presented at the end.
+        let surface_frame = match &self.target {
+            Target::Surface { surface, .. } => match surface.get_current_texture() {
+                Ok(frame) => Some(frame),
+                // A lost or outdated surface is routine — a resize caught
+                // mid-frame — and skipping one frame is the right response.
+                Err(_) => return,
+            },
+            Target::Offscreen { .. } => None,
+        };
+        let surface_view = surface_frame
+            .as_ref()
+            .map(|f| f.texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let view: &wgpu::TextureView = match (&self.target, &surface_view) {
+            (Target::Offscreen { view, .. }, _) => view,
+            (Target::Surface { .. }, Some(view)) => view,
+            _ => return,
+        };
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("haven frame") });
@@ -700,29 +803,36 @@ impl Renderer {
             }
         }
 
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(*padded_bytes_per_row),
-                    rows_per_image: Some(self.height),
+        if let Target::Offscreen { texture, readback, padded_bytes_per_row, .. } = &self.target {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
-            },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
-        );
+                wgpu::TexelCopyBufferInfo {
+                    buffer: readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(*padded_bytes_per_row),
+                        rows_per_image: Some(self.height),
+                    },
+                },
+                wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            );
+        }
         self.queue.submit([encoder.finish()]);
+        if let Some(frame) = surface_frame {
+            frame.present();
+        }
     }
 
     /// Read the last frame back as `RGBA8`, row-major, unpadded.
     pub fn read_pixels(&self) -> Result<Vec<u8>, RenderError> {
-        let Target::Offscreen { readback, padded_bytes_per_row, .. } = &self.target;
+        let Target::Offscreen { readback, padded_bytes_per_row, .. } = &self.target else {
+            return Err(RenderError::Readback("this renderer draws to a window".into()));
+        };
         let slice = readback.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {

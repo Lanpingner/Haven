@@ -8,28 +8,33 @@ It runs three ways from one codebase: as a **server** you attach to and detach
 from, as a **standalone** terminal with no daemon, and as a **TUI client** that
 draws into any existing terminal over plain escape sequences.
 
-**Status: the multiplexer works; the GPU frontend does not exist yet.** You can
-run real sessions today through the TUI frontend — splits, window tabs, zoom,
-attach/detach, shell integration, and `mc`/`vim`/`htop` all render correctly.
-See [docs/PLAN.md](docs/PLAN.md) for the design and
+**Status: usable, with plenty still ahead.** Sessions, splits, window tabs,
+zoom, attach/detach, shell integration and a GPU window all work; `mc`, `vim`
+and `htop` render correctly. Plugins, copy mode, configuration and the
+interactive capability probe are not written yet. See
+[docs/PLAN.md](docs/PLAN.md) for the design and
 [its status section](docs/PLAN.md#20-implementation-status) for exactly what
 exists.
 
 ## Try it
 
 ```sh
-cargo test --workspace     # 251 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 295 tests, incl. mc/vim/less driven on real ptys
+
+# A GPU window, attached to the daemon (which it starts if needed).
+cargo run --release -p haven -- gpu
+
+# The same session in your current terminal.
+cargo run -p haven -- attach
+cargo run -p haven -- ls
+cargo run -p haven -- server stop
 
 # Standalone: the whole mux, no daemon. Ctrl+A is the prefix.
 cargo run -p haven -- tui
 
-# Server mode, like tmux:
-cargo run -p haven -- attach          # starts a daemon if none is running
-cargo run -p haven -- ls
-cargo run -p haven -- server stop
-
-# Headless: render a program and print its final screen.
+# Headless: print or render a program's final screen.
 cargo run -p haven -- dump --cols 80 --rows 20 -- mc -u
+cargo run -p haven -- screenshot --out mc.ppm -- mc -u
 cargo run -p haven -- shell-info
 ```
 
@@ -61,6 +66,7 @@ cargo run -p haven -- shell-info
 | `haven-proto` | Wire types, framing and transports. |
 | `haven-client` | Frontend-agnostic client: frame model, input encoding, event loop. |
 | `haven-tui` | The TUI frontend: ANSI output, raw mode, input decoding. |
+| `haven-render` | The GPU frontend: wgpu pipelines, glyph atlas, procedural box drawing, the window. |
 | `haven-daemon` | The mux server. |
 | `haven` | Composition root: the CLI and the standalone mux. |
 
