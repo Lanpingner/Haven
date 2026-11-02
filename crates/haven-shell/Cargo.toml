@@ -1,0 +1,17 @@
+[package]
+name = "haven-shell"
+description = "Shell detection, launch environment and per-shell integration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+haven-pty.workspace = true
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

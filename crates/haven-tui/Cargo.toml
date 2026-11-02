@@ -1,0 +1,18 @@
+[package]
+name = "haven-tui"
+description = "TUI frontend: ANSI output, host capability probing, raw-mode input."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+haven-core.workspace = true
+haven-client.workspace = true
+haven-proto.workspace = true
+haven-vtwrite.workspace = true
+libc = "0.2"
+rustix = { version = "1", features = ["termios", "stdio", "event"] }
+
+[lints]
+workspace = true

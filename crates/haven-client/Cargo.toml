@@ -1,0 +1,15 @@
+[package]
+name = "haven-client"
+description = "Frontend-agnostic client: frame model, input events, event loop."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bitflags = "2.13.2"
+haven-core.workspace = true
+haven-proto.workspace = true
+
+[lints]
+workspace = true

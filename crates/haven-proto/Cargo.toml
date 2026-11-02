@@ -1,0 +1,15 @@
+[package]
+name = "haven-proto"
+description = "Wire types, framing and transports between client and daemon."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+haven-core.workspace = true
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }
+
+[lints]
+workspace = true

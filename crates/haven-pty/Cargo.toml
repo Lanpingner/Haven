@@ -1,0 +1,14 @@
+[package]
+name = "haven-pty"
+description = "PTY allocation, child launch, job control and window sizing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2"
+rustix = { version = "1", features = ["pty", "termios", "process", "fs", "stdio"] }
+
+[lints]
+workspace = true

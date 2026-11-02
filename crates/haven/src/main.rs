@@ -1,0 +1,376 @@
+//! Haven CLI. For now: `dump` (headless screen capture) and `shell-info`.
+//! The GPU client lands with M1 (`docs/PLAN.md` §16).
+
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::time::Duration;
+
+use haven_pty::PtySize;
+use haven_shell::{launch_config, IntegrationCtx};
+
+use haven::pump::{run_to_screen, PumpLimits};
+
+const USAGE: &str = "\
+haven — terminal emulator (work in progress)
+
+usage:
+  haven attach [options]            attach to the daemon (starts it if needed)
+  haven ls                          list sessions
+  haven kill-session -t <id>        end one session
+  haven server run|stop             run or stop the daemon
+  haven tui [options]               standalone: the mux with no daemon
+  haven dump [options]              headless: print a program's final screen
+  haven shell-info [--login]        what a pane would launch
+
+options:
+  --cols <n>       columns (default 80)
+  --rows <n>       rows (default 24)
+  --idle-ms <n>    stop after this long without output (default 250)
+  --login          launch as a login shell
+  --no-integrate   skip shell integration
+  --send <text>    type this at the child; \\n \\r \\t \\e \\xNN are decoded
+  --socket <path>  daemon socket (default: $XDG_RUNTIME_DIR/haven/<uid>-default.sock)
+  -t <id>          session id, for attach and kill-session
+  --raw            also print the raw byte stream, escaped
+  -h, --help       this message
+";
+
+struct Args {
+    cols: u16,
+    rows: u16,
+    idle_ms: u64,
+    login: bool,
+    integrate: bool,
+    raw: bool,
+    send: Vec<u8>,
+    socket: Option<PathBuf>,
+    target: Option<u32>,
+    subcommand: Option<String>,
+    program: Option<PathBuf>,
+    rest: Vec<OsString>,
+}
+
+impl Default for Args {
+    fn default() -> Self {
+        Self {
+            cols: 80,
+            rows: 24,
+            idle_ms: 250,
+            login: false,
+            integrate: true,
+            raw: false,
+            send: Vec::new(),
+            socket: None,
+            target: None,
+            subcommand: None,
+            program: None,
+            rest: Vec::new(),
+        }
+    }
+}
+
+fn parse(mut it: impl Iterator<Item = String>) -> Result<(String, Args), String> {
+    let cmd = it.next().unwrap_or_else(|| "help".into());
+    let mut args = Args::default();
+    while let Some(a) = it.next() {
+        let mut value = |name: &str| -> Result<String, String> {
+            it.next().ok_or_else(|| format!("{name} needs a value"))
+        };
+        match a.as_str() {
+            "--cols" => args.cols = value("--cols")?.parse().map_err(|_| "bad --cols")?,
+            "--rows" => args.rows = value("--rows")?.parse().map_err(|_| "bad --rows")?,
+            "--idle-ms" => {
+                args.idle_ms = value("--idle-ms")?.parse().map_err(|_| "bad --idle-ms")?
+            }
+            "--login" => args.login = true,
+            "--no-integrate" => args.integrate = false,
+            "--raw" => args.raw = true,
+            "--send" => args.send = decode_escapes(&value("--send")?),
+            "--socket" => args.socket = Some(PathBuf::from(value("--socket")?)),
+            "-t" | "--target" => {
+                args.target = Some(value("-t")?.parse().map_err(|_| "bad -t: expected a number")?)
+            }
+            "-h" | "--help" => return Ok(("help".into(), args)),
+            "--" => {
+                let mut rest: Vec<OsString> = it.map(OsString::from).collect();
+                if !rest.is_empty() {
+                    args.program = Some(PathBuf::from(rest.remove(0)));
+                    args.rest = rest;
+                }
+                break;
+            }
+            // A bare word is a subcommand, as in `haven server run`.
+            other if !other.starts_with('-') && args.subcommand.is_none() => {
+                args.subcommand = Some(other.to_string())
+            }
+            other => return Err(format!("unknown option: {other}")),
+        }
+    }
+    Ok((cmd, args))
+}
+
+/// Decode the small escape vocabulary a test script needs.
+fn decode_escapes(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push(b'\n'),
+            Some('r') => out.push(b'\r'),
+            Some('t') => out.push(b'\t'),
+            Some('e') => out.push(0x1b),
+            Some('0') => out.push(0),
+            // \xNN: the only way to type a raw control byte such as mc's
+            // Ctrl+O (0x0f) from a shell script.
+            Some('x') => {
+                let hex: String = chars.clone().take(2).collect();
+                match u8::from_str_radix(&hex, 16) {
+                    Ok(byte) if hex.len() == 2 => {
+                        out.push(byte);
+                        chars.next();
+                        chars.next();
+                    }
+                    _ => out.push(b'x'),
+                }
+            }
+            Some('\\') => out.push(b'\\'),
+            Some(other) => {
+                out.push(b'\\');
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+            }
+            None => out.push(b'\\'),
+        }
+    }
+    out
+}
+
+fn runtime_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("haven")
+}
+
+fn ctx(login: bool) -> IntegrationCtx {
+    IntegrationCtx {
+        // Overwritten by `launch_config` once the shell is resolved.
+        program: PathBuf::new(),
+        dir: runtime_dir(),
+        login,
+        home: std::env::var_os("HOME").map(PathBuf::from),
+    }
+}
+
+fn main() -> ExitCode {
+    let (cmd, args) = match parse(std::env::args().skip(1)) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("haven: {e}\n\n{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match cmd.as_str() {
+        "attach" => attach(args),
+        "ls" => list(args),
+        "kill-session" => kill_session(args),
+        "server" => server(args),
+        "tui" => tui(args),
+        "dump" => dump(args),
+        "shell-info" => shell_info(args),
+        "help" | "--help" | "-h" => {
+            print!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        other => {
+            eprintln!("haven: unknown command {other:?}\n\n{USAGE}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn socket_of(args: &Args) -> PathBuf {
+    args.socket.clone().unwrap_or_else(|| haven_daemon::socket_path("default"))
+}
+
+/// Attach to the daemon, starting one if it is not running.
+fn attach(args: Args) -> ExitCode {
+    let socket = socket_of(&args);
+    let session = args.target.map(haven_proto::SessionId);
+    match haven::attach::run(&socket, session, haven_tui::HostCaps::from_env()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn list(args: Args) -> ExitCode {
+    match haven::attach::list(&socket_of(&args)) {
+        Ok(sessions) if sessions.is_empty() => {
+            println!("no sessions");
+            ExitCode::SUCCESS
+        }
+        Ok(sessions) => {
+            for s in sessions {
+                println!(
+                    "{}: {} ({} windows, {} panes, {} clients, {}x{})",
+                    s.id.0, s.name, s.windows, s.panes, s.clients, s.size.cols, s.size.rows
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn kill_session(args: Args) -> ExitCode {
+    let Some(id) = args.target else {
+        eprintln!("haven: kill-session needs -t <id>");
+        return ExitCode::FAILURE;
+    };
+    match haven::attach::kill_session(&socket_of(&args), haven_proto::SessionId(id)) {
+        Ok(remaining) => {
+            println!("{} session(s) left", remaining.len());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn server(args: Args) -> ExitCode {
+    let socket = socket_of(&args);
+    match args.subcommand.as_deref() {
+        Some("run") | None => {
+            // Each pane gets its own freshly-configured shell, integration
+            // and all — the daemon is where that decision belongs.
+            let login = args.login;
+            let integrate = args.integrate;
+            let program = args.program.clone();
+            let make_spawner = move || {
+                let program = program.clone();
+                let spawner: Box<dyn FnMut(haven_pty::PtySize) -> std::io::Result<haven_pty::Pty>> =
+                    Box::new(move |size| {
+                        let (mut cfg, _, _) =
+                            launch_config(program.as_deref(), login, integrate, &ctx(login));
+                        cfg.size = size;
+                        haven_pty::Pty::spawn(&cfg)
+                    });
+                spawner
+            };
+            match haven_daemon::Daemon::bind(&socket, make_spawner) {
+                Ok(mut daemon) => match daemon.run() {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(e) => {
+                        eprintln!("haven: {e}");
+                        ExitCode::FAILURE
+                    }
+                },
+                Err(e) => {
+                    eprintln!("haven: cannot bind {}: {e}", socket.display());
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Some("stop") => match haven::attach::shutdown(&socket) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("haven: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some(other) => {
+            eprintln!("haven: unknown server command {other:?} (try run or stop)");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Standalone TUI: a working terminal inside the terminal.
+fn tui(args: Args) -> ExitCode {
+    let (mut cfg, _, _) =
+        launch_config(args.program.as_deref(), args.login, args.integrate, &ctx(args.login));
+    cfg.args.extend(args.rest);
+
+    match haven::solo::run(cfg, haven_tui::HostCaps::from_env()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn dump(args: Args) -> ExitCode {
+    let (mut cfg, shell, injection) =
+        launch_config(args.program.as_deref(), args.login, args.integrate, &ctx(args.login));
+    cfg.args.extend(args.rest);
+    cfg.size = PtySize { cols: args.cols, rows: args.rows, ..Default::default() };
+
+    let limits = PumpLimits { idle: Duration::from_millis(args.idle_ms), ..Default::default() };
+    match run_to_screen(&cfg, limits, &args.send) {
+        Ok((emu, raw, stats)) => {
+            print!("{}", emu.dump());
+            eprintln!(
+                "--- {shell} | integration: {injection:?} | {} bytes in, {} replied, eof={}",
+                stats.bytes_read,
+                stats.reply_bytes,
+                stats.eof,
+                shell = shell.name(),
+            );
+            if let Some(title) = &emu.term.title {
+                eprintln!("--- title: {title}");
+            }
+            if args.raw {
+                eprintln!("--- raw: {}", String::from_utf8_lossy(&raw).escape_debug());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn shell_info(args: Args) -> ExitCode {
+    let resolved = haven_shell::resolve(args.program.as_deref());
+    let (cfg, shell, injection) =
+        launch_config(Some(&resolved), args.login, true, &ctx(args.login));
+    println!("shell:       {}", resolved.display());
+    println!("impl:        {}", shell.name());
+    println!("login:       {}", args.login);
+    println!("integration: {injection:?}");
+    println!("env:");
+    for (k, v) in &cfg.env {
+        println!("  {}={}", k.to_string_lossy(), v.to_string_lossy());
+    }
+    if !cfg.args.is_empty() {
+        let shown: Vec<_> = cfg.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        println!("argv extra:  {}", shown.join(" "));
+    }
+    println!(
+        "scrubbed:    {}",
+        cfg.env_remove
+            .iter()
+            .map(|k| k.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let _ = Path::new("");
+    ExitCode::SUCCESS
+}

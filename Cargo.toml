@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/haven-core",
+    "crates/haven-pty",
+    "crates/haven-shell",
+    "crates/haven-vtwrite",
+    "crates/haven-proto",
+    "crates/haven-mux",
+    "crates/haven-daemon",
+    "crates/haven-client",
+    "crates/haven-tui",
+    "crates/haven",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/berromaa/HavenTerminal"
+
+[workspace.dependencies]
+haven-core = { path = "crates/haven-core" }
+haven-pty = { path = "crates/haven-pty" }
+haven-shell = { path = "crates/haven-shell" }
+haven-vtwrite = { path = "crates/haven-vtwrite" }
+haven-proto = { path = "crates/haven-proto" }
+haven-mux = { path = "crates/haven-mux" }
+haven-daemon = { path = "crates/haven-daemon" }
+haven-client = { path = "crates/haven-client" }
+haven-tui = { path = "crates/haven-tui" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+debug = 1

@@ -1,0 +1,7 @@
+/target
+*.profraw
+perf.data*
+flamegraph.svg
+
+# editor swap files
+*.swp

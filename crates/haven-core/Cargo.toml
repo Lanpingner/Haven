@@ -1,0 +1,16 @@
+[package]
+name = "haven-core"
+description = "Terminal state machine: cells, styles, grid, VT interpretation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+vte = "0.15"
+bitflags = { version = "2", features = ["serde"] }
+unicode-width = "0.2"
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

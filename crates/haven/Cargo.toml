@@ -1,0 +1,23 @@
+[package]
+name = "haven"
+description = "Haven terminal: client, CLI and (for now) a headless grid dump."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+haven-core.workspace = true
+haven-pty.workspace = true
+haven-shell.workspace = true
+haven-client.workspace = true
+haven-mux.workspace = true
+haven-daemon.workspace = true
+haven-proto.workspace = true
+haven-tui.workspace = true
+haven-vtwrite.workspace = true
+rustix = { version = "1", features = ["event", "stdio", "termios"] }
+libc = "0.2"
+
+[lints]
+workspace = true
