@@ -1101,6 +1101,21 @@ sent on change rather than on layout change: titles arrive later than layouts
 and move while the layout does not.
 
 **Bugs this work surfaced, worth remembering:**
+- The GPU window ran without a key filter at all. It built its own `Client`
+  and never installed one, so `Ctrl+A` went straight to the shell and no
+  binding in the window did anything. Both attach paths now take the filter as
+  a required argument. Reading the key-mapping code would never have found it:
+  the mapping was correct.
+- Then the prefix still did nothing, because a window delivers key *releases*
+  and a terminal does not. The release of `Ctrl+A` matched the prefix table
+  and disarmed the prefix a moment after the press armed it; in command mode
+  it would have typed every character twice. The encoder already dropped
+  releases, so only the mode machine ever saw them. Every test had used
+  presses alone, which is why both frontends looked identical in test and
+  behaved differently in life.
+- Neither was findable without synthetic input, so `xsend` (XTEST) exists:
+  with no window manager nothing holds the input focus, so it sets the focus
+  itself before typing.
 - `ED`/`EL` treated parameter `0` as "absent", shifting every erase mode by one
   and breaking `[1K`/`[2K`. Caught by a tab-stop test, not by the erase tests.
 - A deferred wrap changes the cursor's *logical* offset by one; without that,

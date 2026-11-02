@@ -9,7 +9,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use haven_client::input::{Key, KeyEvent, Modifiers, NamedKey};
+use haven_client::input::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use haven_client::status_bar::Mode;
 use haven_client::{Client, Intercepted, Tick};
 use haven_proto::transport::SocketTransport;
@@ -57,6 +57,16 @@ pub fn connect_or_start(socket: &Path) -> io::Result<SocketTransport> {
 /// command and a bound key cannot drift apart.
 fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
     move |event: &KeyEvent, mode: &mut Mode| {
+        // Only presses drive the mode machine. A terminal transmits nothing
+        // on key-up — the encoder drops releases outright — but the GPU
+        // window delivers them, and letting them through meant the release
+        // of Ctrl+A matched the prefix table and disarmed the prefix a
+        // millisecond after the press armed it. In command mode it would
+        // also have typed every character twice. The TUI frontend has no
+        // key-up at all, which is why this only broke in the window.
+        if event.state == KeyState::Release {
+            return Intercepted::Consumed;
+        }
         match mode {
             Mode::Command(buffer) => {
                 return match &event.key {
@@ -142,7 +152,10 @@ pub fn run_gpu(
     // watch, it would never notice the daemon. Duplicating it lets the
     // watcher thread wait on the same socket without owning the transport.
     let wake = rustix::io::dup(transport.as_fd()).ok();
-    haven_render::window::run(transport, session, config, wake)
+    // The same table the TUI client uses: a binding that works in one and
+    // not the other would be a trap, and this one was.
+    let filter: haven_client::KeyFilter = Box::new(key_filter());
+    haven_render::window::run(transport, session, config, wake, Some(filter))
         .map_err(|e| io::Error::other(e.to_string()))
 }
 
@@ -234,4 +247,127 @@ fn wait_for_sessions(
 
 fn to_io(e: haven_proto::TransportError) -> io::Error {
     io::Error::other(e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use haven_proto::Action as Wire;
+
+    fn key(k: Key, mods: Modifiers) -> KeyEvent {
+        KeyEvent { key: k, mods, state: KeyState::Press }
+    }
+
+    fn release(k: Key, mods: Modifiers) -> KeyEvent {
+        KeyEvent { key: k, mods, state: KeyState::Release }
+    }
+
+    fn ctrl_a() -> KeyEvent {
+        key(Key::Char('a'), Modifiers::CTRL)
+    }
+
+    #[test]
+    fn the_prefix_arms_and_a_bound_key_acts() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+
+        assert_eq!(filter(&ctrl_a(), &mut mode), Intercepted::Consumed);
+        assert_eq!(mode, Mode::Prefix, "the status line would show nothing");
+
+        let act = filter(&key(Key::Char('%'), Modifiers::empty()), &mut mode);
+        assert_eq!(act, Intercepted::Act(Wire::SplitColumns));
+        assert_eq!(mode, Mode::Normal, "the prefix stayed armed");
+    }
+
+    #[test]
+    fn a_key_release_does_not_disarm_the_prefix() {
+        // The GPU window delivers key-up; the TUI cannot. Without this the
+        // release of Ctrl+A matched the prefix table and cancelled the
+        // prefix immediately, so no binding in the window did anything.
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode);
+        assert_eq!(
+            filter(&release(Key::Char('a'), Modifiers::CTRL), &mut mode),
+            Intercepted::Consumed
+        );
+        assert_eq!(mode, Mode::Prefix, "the release disarmed the prefix");
+
+        assert_eq!(
+            filter(&key(Key::Char('%'), Modifiers::SHIFT), &mut mode),
+            Intercepted::Act(Wire::SplitColumns)
+        );
+    }
+
+    #[test]
+    fn a_release_does_not_type_into_a_command() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Command(String::new());
+        filter(&key(Key::Char('z'), Modifiers::empty()), &mut mode);
+        filter(&release(Key::Char('z'), Modifiers::empty()), &mut mode);
+        assert_eq!(mode, Mode::Command("z".into()), "the release typed a second character");
+    }
+
+    #[test]
+    fn an_ordinary_key_reaches_the_pane() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        assert_eq!(filter(&key(Key::Char('x'), Modifiers::empty()), &mut mode), Intercepted::Pass);
+        assert_eq!(mode, Mode::Normal);
+    }
+
+    #[test]
+    fn the_prefix_twice_sends_a_literal_one() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode);
+        assert_eq!(filter(&ctrl_a(), &mut mode), Intercepted::Pass);
+    }
+
+    #[test]
+    fn a_typed_command_runs_and_matches_its_binding() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode);
+        assert_eq!(
+            filter(&key(Key::Char(':'), Modifiers::empty()), &mut mode),
+            Intercepted::Consumed
+        );
+        assert_eq!(mode, Mode::Command(String::new()));
+
+        for c in "split-v".chars() {
+            filter(&key(Key::Char(c), Modifiers::empty()), &mut mode);
+        }
+        assert_eq!(mode, Mode::Command("split-v".into()), "the line was not collected");
+
+        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
+        // The same action the `%` binding produces: one vocabulary, two ways in.
+        assert_eq!(out, Intercepted::Act(Wire::SplitColumns));
+        assert_eq!(mode, Mode::Normal);
+    }
+
+    #[test]
+    fn escape_abandons_a_command_and_backspace_backs_out_of_an_empty_one() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Command("zoo".into());
+        filter(&key(Key::Named(NamedKey::Backspace), Modifiers::empty()), &mut mode);
+        assert_eq!(mode, Mode::Command("zo".into()));
+
+        mode = Mode::Command("x".into());
+        filter(&key(Key::Named(NamedKey::Escape), Modifiers::empty()), &mut mode);
+        assert_eq!(mode, Mode::Normal);
+
+        mode = Mode::Command(String::new());
+        filter(&key(Key::Named(NamedKey::Backspace), Modifiers::empty()), &mut mode);
+        assert_eq!(mode, Mode::Normal, "backspace on an empty line should leave the mode");
+    }
+
+    #[test]
+    fn an_unknown_command_is_swallowed_rather_than_typed_into_the_pane() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Command("nonsense".into());
+        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
+        assert_eq!(out, Intercepted::Consumed);
+        assert_eq!(mode, Mode::Normal);
+    }
 }

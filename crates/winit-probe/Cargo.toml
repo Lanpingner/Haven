@@ -11,7 +11,7 @@ publish = false
 wgpu = "27"
 winit = "0.30"
 pollster = "0.4"
-x11rb = { version = "0.14.0", default-features = false }
+x11rb = { version = "0.14.0", default-features = false, features = ["xtest"] }
 
 [lints]
 workspace = true

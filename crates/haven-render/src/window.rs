@@ -317,7 +317,20 @@ impl<T: Transport> ApplicationHandler<Wake> for App<T> {
                 self.client.frontend.push(InputEvent::Quit);
             }
             WindowEvent::ModifiersChanged(mods) => self.modifiers = mods.state(),
-            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
+            WindowEvent::KeyboardInput { event, is_synthetic, .. } => {
+                // A deliberate hook: the window's key path cannot be checked
+                // by reading it — the mapping was correct while the window
+                // was still ignoring every binding — and this is how that was
+                // finally seen.
+                if std::env::var_os("HAVEN_DEBUG_KEYS").is_some() {
+                    eprintln!(
+                        "key: logical={:?} state={:?} synthetic={} mods={:?}",
+                        event.logical_key, event.state, is_synthetic, self.modifiers
+                    );
+                }
+                if is_synthetic {
+                    return;
+                }
                 if let Some(input) =
                     translate_key(&event.logical_key, event.state, event.repeat, self.modifiers)
                 {
@@ -378,11 +391,17 @@ impl<T: Transport> App<T> {
 /// `wake` is a file descriptor to watch for readability — the transport's
 /// socket. Without it an attached client would sit in `ControlFlow::Wait` and
 /// never notice the daemon; with it, idle costs nothing at all.
+/// `key_filter` is what makes the prefix key mean anything. It is passed in
+/// rather than built here because the key table lives in the composition
+/// root, above this crate — and omitting it was a real bug: the window ran
+/// without one for its whole first life, so `Ctrl+A` went straight to the
+/// shell and no binding in the window did anything at all.
 pub fn run<T: Transport + 'static>(
     transport: T,
     session: Option<SessionId>,
     config: WindowConfig,
     wake: Option<std::os::fd::OwnedFd>,
+    key_filter: Option<haven_client::KeyFilter>,
 ) -> Result<(), RenderError> {
     let event_loop = EventLoop::<Wake>::with_user_event()
         .build()
@@ -397,14 +416,10 @@ pub fn run<T: Transport + 'static>(
         backends: config.gpu.backends,
         ..Default::default()
     });
-    let mut app = App {
-        client: Client::new(GpuFrontend::new(), transport),
-        session,
-        config,
-        instance,
-        modifiers: ModifiersState::empty(),
-        error: None,
-    };
+    let mut client = Client::new(GpuFrontend::new(), transport);
+    client.key_filter = key_filter;
+    let mut app =
+        App { client, session, config, instance, modifiers: ModifiersState::empty(), error: None };
     event_loop.run_app(&mut app).map_err(|e| RenderError::Device(e.to_string()))?;
     match app.error.take() {
         Some(e) => Err(e),
