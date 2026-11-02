@@ -60,6 +60,14 @@ options:
                         cannot block the event loop. The GPU still stalls;
                         the point is that X keeps being answered while it
                         does, which is what the window manager waits on.
+  --skip-unmapped       ask X directly whether the window is mapped, and do
+                        not draw when it is not. winit's Occluded never fires
+                        under a tag-switching WM and is_visible() stays true,
+                        so this asks the server rather than the toolkit.
+                        If this stops the freeze, it is the fix.
+  --self-unmap          unmap and remap our own window on a timer, with no
+                        window manager involved. Only for checking that the
+                        map watcher and the stall both reproduce.
   --no-xping            do not measure X server round-trip latency.
   --poll                use ControlFlow::Poll instead of Wait.
   --stall-ms <n>        report a stall longer than this (default 100).
@@ -114,6 +122,8 @@ struct Options {
     power: wgpu::PowerPreference,
     render_thread: bool,
     xping: bool,
+    skip_unmapped: bool,
+    self_unmap: bool,
 }
 
 impl Default for Options {
@@ -130,6 +140,8 @@ impl Default for Options {
             power: wgpu::PowerPreference::HighPerformance,
             render_thread: false,
             xping: true,
+            skip_unmapped: false,
+            self_unmap: false,
         }
     }
 }
@@ -145,6 +157,8 @@ fn parse_args() -> Result<Options, String> {
             "--poll" => o.poll = true,
             "--render-thread" => o.render_thread = true,
             "--no-xping" => o.xping = false,
+            "--skip-unmapped" => o.skip_unmapped = true,
+            "--self-unmap" => o.self_unmap = true,
             "--present-mode" => {
                 let v = it.next().ok_or("--present-mode needs a value")?;
                 o.present = PresentArg::parse(&v).ok_or(format!("unknown present mode {v:?}"))?;
@@ -201,6 +215,16 @@ struct Beat {
     worst_what: std::sync::Mutex<&'static str>,
 }
 
+/// The X11 window id behind a winit window, if there is one.
+fn x_window_id(window: &Window) -> Option<u32> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Xlib(h) => Some(h.window as u32),
+        RawWindowHandle::Xcb(h) => Some(h.window.get()),
+        _ => None,
+    }
+}
+
 fn millis(start: Instant) -> u64 {
     start.elapsed().as_millis() as u64
 }
@@ -246,6 +270,8 @@ struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     render: Option<RenderThread>,
+    mapped: Arc<AtomicBool>,
+    map_watch: Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
     occluded: bool,
     frames: u64,
     worst: (u64, &'static str),
@@ -343,6 +369,8 @@ impl App {
             window: None,
             gpu: None,
             render: None,
+            mapped: Arc::new(AtomicBool::new(true)),
+            map_watch: None,
             occluded: false,
             frames: 0,
             worst: (0, "nothing"),
@@ -534,6 +562,9 @@ impl App {
         if self.opts.skip_occluded && self.occluded {
             return;
         }
+        if self.opts.skip_unmapped && !self.mapped.load(Ordering::Relaxed) {
+            return;
+        }
         // Handing the frame to another thread is the fix under test: the send
         // cannot block, so however long the GPU takes, X keeps being served.
         if let Some(render) = &self.render {
@@ -652,6 +683,29 @@ impl ApplicationHandler for App {
             self.init_gpu(window.clone());
         } else {
             self.log("running with no wgpu: winit only");
+        }
+        if self.opts.self_unmap {
+            if let Some(id) = x_window_id(&window) {
+                let running = Arc::new(AtomicBool::new(true));
+                let flag = Arc::clone(&running);
+                let start = self.start;
+                std::thread::spawn(move || self_unmap(id, flag, start));
+                std::mem::forget(running); // lives as long as the process
+            }
+        }
+        if self.opts.skip_unmapped {
+            match x_window_id(&window) {
+                Some(id) => {
+                    self.log(format!("watching X map state of window 0x{id:x}"));
+                    let running = Arc::new(AtomicBool::new(true));
+                    let flag = Arc::clone(&running);
+                    let mapped = Arc::clone(&self.mapped);
+                    let start = self.start;
+                    let handle = std::thread::spawn(move || map_watcher(id, mapped, flag, start));
+                    self.map_watch = Some((running, handle));
+                }
+                None => self.log("--skip-unmapped: not an X11 window; ignoring"),
+            }
         }
         window.request_redraw();
         self.window = Some(window);
@@ -776,6 +830,70 @@ fn xping(start: Instant, running: Arc<AtomicBool>, limit: Duration) {
         worst = worst.max(took);
     }
     eprintln!("xping: worst X server round-trip: {worst}ms");
+}
+
+/// Watch the window's *actual* map state, as the X server reports it.
+///
+/// This is the signal winit does not give us: `Occluded` comes from
+/// `VisibilityNotify`, which an unmapped window never sends, and
+/// `Window::is_visible()` kept saying `true` throughout a stall. The server
+/// knows, so ask it.
+fn map_watcher(window: u32, mapped: Arc<AtomicBool>, running: Arc<AtomicBool>, start: Instant) {
+    let conn = match x11rb::connect(None) {
+        Ok((c, _)) => c,
+        Err(e) => {
+            eprintln!("map-watcher: cannot open an X connection ({e}); skipping");
+            return;
+        }
+    };
+    let mut last = true;
+    while running.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(25));
+        let viewable = x11rb::protocol::xproto::get_window_attributes(&conn, window)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|a| a.map_state == x11rb::protocol::xproto::MapState::VIEWABLE);
+        let Some(viewable) = viewable else { continue };
+        if viewable != last {
+            eprintln!(
+                "[{:>7}ms] X says the window is now {} (winit never said so)",
+                millis(start),
+                if viewable { "MAPPED" } else { "UNMAPPED" }
+            );
+            last = viewable;
+        }
+        mapped.store(viewable, Ordering::Relaxed);
+    }
+}
+
+/// Unmap and remap our own window, so the map watcher can be checked without
+/// a window manager — and so the stall itself can be reproduced on demand.
+fn self_unmap(window: u32, running: Arc<AtomicBool>, start: Instant) {
+    use x11rb::connection::Connection;
+    let conn = match x11rb::connect(None) {
+        Ok((c, _)) => c,
+        Err(e) => {
+            eprintln!("self-unmap: cannot open an X connection ({e})");
+            return;
+        }
+    };
+    let mut mapped = true;
+    while running.load(Ordering::Relaxed) {
+        for _ in 0..120 {
+            if !running.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        mapped = !mapped;
+        eprintln!("[{:>7}ms] self-unmap: {}", millis(start), if mapped { "map" } else { "unmap" });
+        let _ = if mapped {
+            x11rb::protocol::xproto::map_window(&conn, window).map(|c| c.check())
+        } else {
+            x11rb::protocol::xproto::unmap_window(&conn, window).map(|c| c.check())
+        };
+        let _ = conn.flush();
+    }
 }
 
 fn main() {
