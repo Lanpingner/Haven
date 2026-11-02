@@ -35,6 +35,11 @@ options:
   --socket <path>  daemon socket (default: $XDG_RUNTIME_DIR/haven/<uid>-default.sock)
   -t <id>          session id, for attach and kill-session
   --out <path>     screenshot output (PPM; default haven.ppm)
+  --gpu <backend>  auto (default), gl or vulkan
+  --gpu-power <p>  low (default, the integrated GPU) or high (discrete).
+                   On a hybrid laptop the discrete GPU reaches the display
+                   over PRIME, and presenting there while the window manager
+                   unmaps the window freezes the whole X server for seconds.
   --font <name>    font family
   --font-size <n>  pixel size (default 16)
   --raw            also print the raw byte stream, escaped
@@ -53,6 +58,7 @@ struct Args {
     out: Option<PathBuf>,
     font: Option<String>,
     font_size: f32,
+    gpu: haven_render::GpuPreference,
     target: Option<u32>,
     subcommand: Option<String>,
     program: Option<PathBuf>,
@@ -73,6 +79,7 @@ impl Default for Args {
             out: None,
             font: None,
             font_size: 16.0,
+            gpu: haven_render::GpuPreference::default(),
             target: None,
             subcommand: None,
             program: None,
@@ -101,6 +108,8 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<(String, Args), String>
             "--socket" => args.socket = Some(PathBuf::from(value("--socket")?)),
             "--out" => args.out = Some(PathBuf::from(value("--out")?)),
             "--font" => args.font = Some(value("--font")?),
+            "--gpu" => args.gpu = args.gpu.with_backend(&value("--gpu")?)?,
+            "--gpu-power" => args.gpu = args.gpu.with_power(&value("--gpu-power")?)?,
             "--font-size" => {
                 args.font_size = value("--font-size")?.parse().map_err(|_| "bad --font-size")?
             }
@@ -228,6 +237,7 @@ fn gpu(args: Args) -> ExitCode {
         rows: args.rows,
         font: args.font.clone(),
         font_size: args.font_size,
+        gpu: args.gpu,
     };
     match haven::attach::run_gpu(&socket, session, config) {
         Ok(()) => ExitCode::SUCCESS,

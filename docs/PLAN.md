@@ -1136,6 +1136,24 @@ and theming (M7), sixel/kitty graphics.
   anything can compare versions. The decode error now names the likely cause
   instead of reporting "Hit the end of buffer". Proper negotiation ahead of the
   first typed message is still owed.
+- The AwesomeWM freeze was none of the three things it looked like. Measured
+  with `crates/winit-probe`: not winit (`--no-gpu` never stalled), not vsync
+  (`Immediate` still blocked 2052ms), and not our event loop (moving present
+  to its own thread freed the loop and the freeze continued). What it is: on
+  this hybrid laptop Vulkan can only run on the discrete NVIDIA GPU, which
+  reaches an Intel-driven display over PRIME, and presenting across that while
+  the window manager unmaps the window **blocks the X server itself** — a bare
+  `GetInputFocus` on an unrelated connection took 2050ms, so every client on
+  the display froze, not just ours. `--backend gl` was unaffected because GL
+  resolves to the Intel GPU here; there is no Intel Vulkan ICD installed, so
+  "GL vs Vulkan" and "integrated vs discrete" could not be separated.
+  A terminal has no use for a discrete GPU, so `GpuPreference` now defaults to
+  the integrated one, with `--gpu` and `--gpu-power` to override.
+- winit offers no signal for this. `Occluded` comes from `VisibilityNotify`,
+  which an unmapped window never sends, and `is_visible()` stayed `true`
+  through the whole stall. Asking the X server directly (`GetWindowAttributes`
+  → `map_state`) does work, and the probe proves it, but it cannot win the
+  race: the unmap and the in-flight present land in the same instant.
 - Presenting to an unmapped window is not merely wasted work. With
   `PresentMode::Fifo` the acquire waits for a vblank the window will never get,
   and that wait sits inside the event loop — so X requests go unanswered and a

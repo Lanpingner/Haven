@@ -21,7 +21,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamed};
 use winit::window::{Window, WindowId};
 
-use crate::renderer::{RenderError, Renderer};
+use crate::renderer::{GpuPreference, RenderError, Renderer};
 
 /// A nudge from the transport-watching thread: there is something to read.
 #[derive(Clone, Copy, Debug)]
@@ -219,11 +219,19 @@ pub struct WindowConfig {
     pub rows: u16,
     pub font: Option<String>,
     pub font_size: f32,
+    pub gpu: GpuPreference,
 }
 
 impl Default for WindowConfig {
     fn default() -> Self {
-        Self { title: "Haven".into(), cols: 100, rows: 30, font: None, font_size: 16.0 }
+        Self {
+            title: "Haven".into(),
+            cols: 100,
+            rows: 30,
+            font: None,
+            font_size: 16.0,
+            gpu: GpuPreference::default(),
+        }
     }
 }
 
@@ -283,6 +291,7 @@ impl<T: Transport> ApplicationHandler<Wake> for App<T> {
             size.height,
             self.config.font_size,
             self.config.font.as_deref(),
+            self.config.gpu,
         ) {
             Ok(renderer) => {
                 self.client.frontend.adopt(window, renderer);
@@ -384,11 +393,15 @@ pub fn run<T: Transport + 'static>(
         std::thread::spawn(move || watch(fd, proxy));
     }
 
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: config.gpu.backends,
+        ..Default::default()
+    });
     let mut app = App {
         client: Client::new(GpuFrontend::new(), transport),
         session,
         config,
-        instance: wgpu::Instance::new(&wgpu::InstanceDescriptor::default()),
+        instance,
         modifiers: ModifiersState::empty(),
         error: None,
     };

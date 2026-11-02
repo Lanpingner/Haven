@@ -108,6 +108,48 @@ impl From<FontError> for RenderError {
 
 const ATLAS_SIZE: u32 = 1024;
 
+/// Which GPU and which graphics API to draw a window with.
+///
+/// This matters more than it should. On a hybrid laptop the discrete GPU
+/// reaches an integrated-driven display through PRIME, and presenting over
+/// that path while the window manager unmaps the window was measured blocking
+/// the whole X server for two seconds — every client on the display, not just
+/// ours. A terminal has no use for a discrete GPU anyway, so the integrated
+/// one is both the fast default and the safe one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GpuPreference {
+    pub backends: wgpu::Backends,
+    pub power: wgpu::PowerPreference,
+}
+
+impl Default for GpuPreference {
+    fn default() -> Self {
+        Self { backends: wgpu::Backends::all(), power: wgpu::PowerPreference::LowPower }
+    }
+}
+
+impl GpuPreference {
+    /// `auto`, `gl` or `vulkan`, as the CLI spells them.
+    pub fn with_backend(mut self, name: &str) -> Result<Self, String> {
+        self.backends = match name {
+            "auto" => wgpu::Backends::all(),
+            "gl" => wgpu::Backends::GL,
+            "vulkan" => wgpu::Backends::VULKAN,
+            other => return Err(format!("unknown backend {other:?}; try auto, gl or vulkan")),
+        };
+        Ok(self)
+    }
+
+    pub fn with_power(mut self, name: &str) -> Result<Self, String> {
+        self.power = match name {
+            "low" => wgpu::PowerPreference::LowPower,
+            "high" => wgpu::PowerPreference::HighPerformance,
+            other => return Err(format!("unknown gpu power {other:?}; try low or high")),
+        };
+        Ok(self)
+    }
+}
+
 impl Renderer {
     /// An offscreen renderer sized to a cell grid.
     ///
@@ -159,12 +201,13 @@ impl Renderer {
         height: u32,
         font_size: f32,
         font: Option<&str>,
+        pref: GpuPreference,
     ) -> Result<Self, RenderError> {
         let fonts = FontStack::new(font, font_size)?;
         let cell = fonts.metrics();
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+            power_preference: pref.power,
             force_fallback_adapter: false,
             compatible_surface: Some(&surface),
         }))
