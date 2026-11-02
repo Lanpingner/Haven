@@ -12,6 +12,7 @@ members = [
     "crates/haven-tui",
     "crates/haven-render",
     "crates/haven",
+    "crates/winit-probe",
 ]
 
 [workspace.package]

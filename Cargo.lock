@@ -2851,6 +2851,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "winit-probe"
+version = "0.0.1"
+dependencies = [
+ "pollster",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "winnow"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
