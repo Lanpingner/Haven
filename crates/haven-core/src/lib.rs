@@ -7,11 +7,13 @@
 pub mod charset;
 pub mod color;
 pub mod grid;
+pub mod screen;
 pub mod style;
 pub mod term;
 
 pub use charset::{Charset, Charsets};
 pub use color::{Color, Palette, Rgb, Role};
 pub use grid::{Cell, CellFlags, Cursor, EraseMode, Grid, Row};
+pub use screen::{blank_screen, Screen, ScreenCell};
 pub use style::{Attrs, Style, StyleId, StyleTable, Underline};
 pub use term::{Emulator, Modes, MouseReport, Terminal};

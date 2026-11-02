@@ -38,32 +38,9 @@ impl Default for Caps {
     }
 }
 
-/// One cell as the serializer sees it: resolved text and style, independent of
-/// the grid's interning tables so diffing compares *content*.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct RenderCell {
-    pub text: String,
-    pub style: Style,
-    pub wide: bool,
-    pub spacer: bool,
-}
-
-impl RenderCell {
-    pub fn new(text: impl Into<String>, style: Style) -> Self {
-        Self { text: text.into(), style, wide: false, spacer: false }
-    }
-
-    pub fn blank() -> Self {
-        Self { text: " ".into(), style: Style::default(), wide: false, spacer: false }
-    }
-
-    pub fn is_blank(&self) -> bool {
-        self.text == " " && self.style == Style::default()
-    }
-}
-
-/// A frame's worth of rendered cells.
-pub type Snapshot = Vec<Vec<RenderCell>>;
+// The serializer works on the shared composited-screen type, so what the TUI
+// frontend draws and what the GPU frontend draws are the same data.
+pub use haven_core::{Screen as Snapshot, ScreenCell as RenderCell};
 
 /// Flatten a grid into content-only cells.
 pub fn snapshot(grid: &Grid, styles: &StyleTable) -> Snapshot {

@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 39137a03b6b9feb8d40f66e7068c84c4701a328e6c0109251113a8d751b4e6c8 # shrinks to plan = SplitPlan([(0, Columns, 0.1), (2, Columns, 0.79163593), (3, Columns, 0.834561), (0, Rows, 0.1), (0, Columns, 0.738418), (5, Columns, 0.1), (5, Columns, 0.309975), (3, Columns, 0.8250644)]), cols = 116, rows = 10

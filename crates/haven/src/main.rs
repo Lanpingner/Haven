@@ -21,6 +21,7 @@ usage:
   haven server run|stop             run or stop the daemon
   haven tui [options]               standalone: the mux with no daemon
   haven dump [options]              headless: print a program's final screen
+  haven screenshot [options]        headless: render a program on the GPU to a file
   haven shell-info [--login]        what a pane would launch
 
 options:
@@ -32,6 +33,9 @@ options:
   --send <text>    type this at the child; \\n \\r \\t \\e \\xNN are decoded
   --socket <path>  daemon socket (default: $XDG_RUNTIME_DIR/haven/<uid>-default.sock)
   -t <id>          session id, for attach and kill-session
+  --out <path>     screenshot output (PPM; default haven.ppm)
+  --font <name>    font family
+  --font-size <n>  pixel size (default 16)
   --raw            also print the raw byte stream, escaped
   -h, --help       this message
 ";
@@ -45,6 +49,9 @@ struct Args {
     raw: bool,
     send: Vec<u8>,
     socket: Option<PathBuf>,
+    out: Option<PathBuf>,
+    font: Option<String>,
+    font_size: f32,
     target: Option<u32>,
     subcommand: Option<String>,
     program: Option<PathBuf>,
@@ -62,6 +69,9 @@ impl Default for Args {
             raw: false,
             send: Vec::new(),
             socket: None,
+            out: None,
+            font: None,
+            font_size: 16.0,
             target: None,
             subcommand: None,
             program: None,
@@ -88,6 +98,11 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<(String, Args), String>
             "--raw" => args.raw = true,
             "--send" => args.send = decode_escapes(&value("--send")?),
             "--socket" => args.socket = Some(PathBuf::from(value("--socket")?)),
+            "--out" => args.out = Some(PathBuf::from(value("--out")?)),
+            "--font" => args.font = Some(value("--font")?),
+            "--font-size" => {
+                args.font_size = value("--font-size")?.parse().map_err(|_| "bad --font-size")?
+            }
             "-t" | "--target" => {
                 args.target = Some(value("-t")?.parse().map_err(|_| "bad -t: expected a number")?)
             }
@@ -184,6 +199,7 @@ fn main() -> ExitCode {
         "server" => server(args),
         "tui" => tui(args),
         "dump" => dump(args),
+        "screenshot" => screenshot(args),
         "shell-info" => shell_info(args),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -338,6 +354,33 @@ fn dump(args: Args) -> ExitCode {
             if args.raw {
                 eprintln!("--- raw: {}", String::from_utf8_lossy(&raw).escape_debug());
             }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Render a program's screen on the GPU and write it to a file.
+fn screenshot(args: Args) -> ExitCode {
+    let (mut cfg, _, _) =
+        launch_config(args.program.as_deref(), args.login, args.integrate, &ctx(args.login));
+    cfg.args.extend(args.rest);
+    cfg.size = PtySize { cols: args.cols, rows: args.rows, ..Default::default() };
+
+    let out = args.out.clone().unwrap_or_else(|| PathBuf::from("haven.ppm"));
+    match haven::shot::capture(
+        &cfg,
+        &args.send,
+        Duration::from_millis(args.idle_ms),
+        args.font_size,
+        args.font.as_deref(),
+        &out,
+    ) {
+        Ok((w, h)) => {
+            println!("wrote {} ({w}x{h})", out.display());
             ExitCode::SUCCESS
         }
         Err(e) => {

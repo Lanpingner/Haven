@@ -10,6 +10,7 @@ members = [
     "crates/haven-daemon",
     "crates/haven-client",
     "crates/haven-tui",
+    "crates/haven-render",
     "crates/haven",
 ]
 
@@ -30,6 +31,7 @@ haven-mux = { path = "crates/haven-mux" }
 haven-daemon = { path = "crates/haven-daemon" }
 haven-client = { path = "crates/haven-client" }
 haven-tui = { path = "crates/haven-tui" }
+haven-render = { path = "crates/haven-render" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

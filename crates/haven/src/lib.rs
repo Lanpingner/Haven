@@ -7,6 +7,7 @@
 pub mod attach;
 pub mod keys;
 pub mod pump;
+pub mod shot;
 pub mod solo;
 
 // Re-exported so the integration tests — and later the frontends — have one
@@ -14,3 +15,4 @@ pub mod solo;
 pub use haven_core;
 pub use haven_pty;
 pub use haven_shell;
+pub use haven_vtwrite;

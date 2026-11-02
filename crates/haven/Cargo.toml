@@ -15,6 +15,7 @@ haven-mux.workspace = true
 haven-daemon.workspace = true
 haven-proto.workspace = true
 haven-tui.workspace = true
+haven-render.workspace = true
 haven-vtwrite.workspace = true
 rustix = { version = "1", features = ["event", "stdio", "termios"] }
 libc = "0.2"

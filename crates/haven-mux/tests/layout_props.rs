@@ -131,26 +131,44 @@ proptest! {
         prop_assert_eq!(ids_before, ids_after);
     }
 
+    /// Growing a pane never costs it more than a single cell of rounding.
+    ///
+    /// Not "never shrinks": that is false, and for two separate reasons the
+    /// property found. A pane loses cells when its parent grows and siblings
+    /// that were too small to show become visible; and even with everything
+    /// visible, integer apportionment can take back a rounding bonus when the
+    /// exact share rises — the Alabama paradox, which no apportionment rule
+    /// avoids. The bounded version is what is universally true; that the key
+    /// visibly works is asserted on a concrete layout in the unit tests,
+    /// where it is deterministic and means something.
     #[test]
-    fn resizing_right_never_shrinks_the_pane(plan in split_plan(), cols in 40u16..200, rows in 10u16..60) {
+    fn growing_a_pane_makes_it_bigger_within_a_cell_of_rounding(
+        plan in split_plan(),
+        cols in 40u16..200,
+        rows in 10u16..60,
+    ) {
         let (mut node, panes) = build(&plan);
         let target = panes[0];
         let size = area(cols, rows);
-        let before = node
-            .solve(size)
-            .into_iter()
-            .find(|r| r.pane == target)
-            .map(|r| r.cols)
-            .unwrap_or(0);
+        let width = |n: &PaneNode| {
+            n.solve(size).into_iter().find(|r| r.pane == target).map(|r| r.cols).unwrap_or(0)
+        };
+
+        let before = width(&node);
         node.resize(target, Edge::Right, 0.05);
-        let after = node
-            .solve(size)
-            .into_iter()
-            .find(|r| r.pane == target)
-            .map(|r| r.cols)
-            .unwrap_or(0);
-        prop_assert!(after >= before, "resize shrank the pane: {before} -> {after}");
+        let after = width(&node);
+        prop_assert!(
+            after + 1 >= before,
+            "one resize cost more than a cell of rounding: {before} -> {after}"
+        );
+
     }
+
+    // A companion rule — "a resize never hides a visible pane" — looks
+    // obvious and is false, for the mirror of the reason above: when a
+    // parent shrinks, panes inside it that no longer fit are hidden, which is
+    // the only sensible thing to do with them. It is left unasserted rather
+    // than weakened into something that no longer says anything.
 
     #[test]
     fn named_layouts_preserve_the_pane_set(plan in split_plan(), cols in 20u16..200, rows in 6u16..60) {

@@ -12,12 +12,12 @@ pub mod raw;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use haven_client::frame::composite;
 use haven_client::frame::FrameModel;
 use haven_client::frontend::{Frontend, PresentError};
 use haven_client::input::InputEvent;
-use haven_core::Style;
 use haven_proto::{CellSize, ClientCaps, FrontendKind, KeyTier};
-use haven_vtwrite::{Caps, RenderCell, Serializer, Snapshot};
+use haven_vtwrite::{Caps, Serializer};
 
 pub use decode::Decoder;
 pub use probe::HostCaps;
@@ -192,63 +192,6 @@ pub fn install_sigwinch() {
             libc::signal(libc::SIGWINCH, handle_sigwinch as *const () as libc::sighandler_t);
         }
     });
-}
-
-/// Flatten panes and widgets onto one screen-sized grid of cells.
-///
-/// This is the TUI frontend's half of what the GPU frontend does with a
-/// rasterizer: the daemon ships pane rectangles and rows, and placing them is
-/// presentation, not mux state.
-pub fn composite(frame: &FrameModel) -> (Snapshot, (usize, usize)) {
-    let cols = frame.size.cols as usize;
-    let rows = frame.size.rows as usize;
-    let mut screen: Snapshot = vec![vec![RenderCell::blank(); cols]; rows];
-    let mut cursor = (0usize, 0usize);
-
-    let place = |screen: &mut Snapshot,
-                 rect: &haven_proto::PaneRect,
-                 pane_rows: &[haven_client::frame::FrameRow]| {
-        for (r, row) in pane_rows.iter().enumerate() {
-            let screen_row = rect.row as usize + r;
-            if screen_row >= screen.len() {
-                break;
-            }
-            let right_edge = (rect.col as usize + rect.cols as usize).min(cols);
-            for span in &row.spans {
-                let start = rect.col as usize + span.col as usize;
-                for (col, ch) in (start..right_edge).zip(span.text.chars()) {
-                    screen[screen_row][col] = RenderCell::new(ch.to_string(), span.style);
-                }
-            }
-        }
-    };
-
-    for pane in frame.panes.values() {
-        place(&mut screen, &pane.rect, &pane.rows);
-        // Separators: a vertical rule to the right of every pane that does not
-        // reach the screen edge.
-        let right = pane.rect.col as usize + pane.rect.cols as usize;
-        if right < cols {
-            for r in 0..pane.rect.rows as usize {
-                let screen_row = pane.rect.row as usize + r;
-                if screen_row < rows {
-                    screen[screen_row][right] = RenderCell::new("│", Style::default());
-                }
-            }
-        }
-        if Some(pane.id) == frame.focus {
-            cursor = (
-                (pane.rect.row as usize + pane.cursor.row).min(rows.saturating_sub(1)),
-                (pane.rect.col as usize + pane.cursor.col).min(cols.saturating_sub(1)),
-            );
-        }
-    }
-
-    for widget in &frame.widgets {
-        place(&mut screen, &widget.rect, &widget.rows);
-    }
-
-    (screen, cursor)
 }
 
 /// The key tier a host reporting these capabilities gives us.

@@ -242,32 +242,46 @@ fn divide(area: PaneRect, dir: Direction, children: &[Child]) -> Vec<PaneRect> {
     let total_weight: f32 = shown.iter().map(|c| c.weight.max(0.0)).sum();
     let total_weight = if total_weight <= 0.0 { visible as f32 } else { total_weight };
 
+    // Largest-remainder apportionment: floor every share, then give the spare
+    // cells to whoever was rounded down hardest.
+    //
+    // Handing the remainder out from the first child onwards would also be
+    // deterministic, but it biases the leftmost panes regardless of how close
+    // they were to deserving the cell. Largest-remainder is the standard
+    // answer and keeps sizes in the order the weights imply.
     let mut sizes: Vec<u16> = Vec::with_capacity(count);
-    for child in shown {
-        let share = (available as f32 * child.weight.max(0.0) / total_weight).floor() as u16;
-        sizes.push(share.max(1));
+    let mut remainders: Vec<(usize, f32)> = Vec::with_capacity(visible);
+    for (index, child) in shown.iter().enumerate() {
+        let exact = available as f32 * child.weight.max(0.0) / total_weight;
+        let floor = exact.floor().max(0.0);
+        sizes.push(floor as u16);
+        remainders.push((index, exact - floor));
     }
     sizes.resize(count, 0);
 
-    // The min-1 floor can over-assign; take the excess back from the largest.
     let mut assigned: u16 = sizes.iter().sum();
-    while assigned > available {
-        let Some((index, _)) =
-            sizes.iter().enumerate().filter(|(_, s)| **s > 1).max_by_key(|(_, s)| **s)
+    // Largest remainder first; ties go to the earlier child, so the same tree
+    // and size always produce the same rectangles.
+    remainders.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut next = 0;
+    while assigned < available && !remainders.is_empty() {
+        sizes[remainders[next % remainders.len()].0] += 1;
+        assigned += 1;
+        next += 1;
+    }
+
+    // Every visible pane needs at least one cell; take from the largest.
+    for index in 0..visible {
+        if sizes[index] != 0 {
+            continue;
+        }
+        let Some((donor, _)) =
+            sizes[..visible].iter().enumerate().filter(|(_, s)| **s > 1).max_by_key(|(_, s)| **s)
         else {
             break;
         };
-        sizes[index] -= 1;
-        assigned -= 1;
-    }
-    // Hand the rounding remainder out from the first child onwards, so the
-    // same tree and size always produce the same rectangles.
-    let mut remainder = available.saturating_sub(assigned);
-    let mut index = 0;
-    while remainder > 0 && visible > 0 {
-        sizes[index % visible] += 1;
-        remainder -= 1;
-        index += 1;
+        sizes[donor] -= 1;
+        sizes[index] += 1;
     }
 
     let mut out = Vec::with_capacity(count);
@@ -426,6 +440,26 @@ mod tests {
         let mut node = PaneNode::even(&[PaneId(1), PaneId(2)], Direction::Columns).unwrap();
         assert!(!node.resize(PaneId(1), Edge::Left, 0.1), "nothing to the left to take from");
         assert!(!node.resize(PaneId(1), Edge::Up, 0.1), "wrong axis entirely");
+    }
+
+    #[test]
+    fn pressing_grow_repeatedly_visibly_grows_the_pane() {
+        // The behaviour a user judges the resize key by, on a layout simple
+        // enough for the answer to be unambiguous.
+        let mut node = PaneNode::even(&[PaneId(1), PaneId(2)], Direction::Columns).unwrap();
+        let width = |n: &PaneNode| rect_of(&n.solve(area(80, 24)), 1).cols;
+
+        let start = width(&node);
+        let mut last = start;
+        for press in 1..=5 {
+            node.resize(PaneId(1), Edge::Right, 0.05);
+            let now = width(&node);
+            assert!(now >= last, "press {press} shrank the pane: {last} -> {now}");
+            last = now;
+        }
+        // Each press moves a share of what is left, so the steps get smaller;
+        // what matters is that five of them are plainly visible.
+        assert!(last >= start + 8, "five presses barely moved it: {start} -> {last}");
     }
 
     #[test]

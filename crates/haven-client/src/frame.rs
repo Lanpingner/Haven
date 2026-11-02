@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use haven_core::{Cell, CellFlags, Cursor, Palette, Style};
+use haven_core::{blank_screen, Cell, CellFlags, Cursor, Palette, Screen, ScreenCell, Style};
 use haven_proto::{CellSize, Layout, PaneId, PaneRect, RowRle, Tables};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -254,6 +254,64 @@ impl FrameModel {
             out.push('\n');
         }
         out
+    }
+}
+
+/// Flatten panes, separators and widgets onto one screen-sized grid of cells.
+///
+/// Compositing is presentation-neutral — it turns pane rectangles and rows
+/// into a screen — so it lives here rather than in either frontend. The TUI
+/// frontend serializes the result to escape sequences; the GPU frontend
+/// rasterizes it. Neither has its own copy of this logic.
+pub fn composite(frame: &FrameModel) -> (Screen, (usize, usize)) {
+    let cols = frame.size.cols as usize;
+    let rows = frame.size.rows as usize;
+    let mut screen = blank_screen(cols, rows);
+    let mut cursor = (0usize, 0usize);
+
+    for pane in frame.panes.values() {
+        place(&mut screen, &pane.rect, &pane.rows, cols);
+        separator(&mut screen, &pane.rect, cols, rows);
+        if Some(pane.id) == frame.focus {
+            cursor = (
+                (pane.rect.row as usize + pane.cursor.row).min(rows.saturating_sub(1)),
+                (pane.rect.col as usize + pane.cursor.col).min(cols.saturating_sub(1)),
+            );
+        }
+    }
+    for widget in &frame.widgets {
+        place(&mut screen, &widget.rect, &widget.rows, cols);
+    }
+    (screen, cursor)
+}
+
+fn place(screen: &mut Screen, rect: &PaneRect, rows: &[FrameRow], cols: usize) {
+    let right_edge = (rect.col as usize + rect.cols as usize).min(cols);
+    for (r, row) in rows.iter().enumerate() {
+        let screen_row = rect.row as usize + r;
+        if screen_row >= screen.len() {
+            break;
+        }
+        for span in &row.spans {
+            let start = rect.col as usize + span.col as usize;
+            for (col, ch) in (start..right_edge).zip(span.text.chars()) {
+                screen[screen_row][col] = ScreenCell::new(ch.to_string(), span.style);
+            }
+        }
+    }
+}
+
+/// A vertical rule to the right of every pane that does not reach the edge.
+fn separator(screen: &mut Screen, rect: &PaneRect, cols: usize, rows: usize) {
+    let right = rect.col as usize + rect.cols as usize;
+    if right >= cols {
+        return;
+    }
+    for r in 0..rect.rows as usize {
+        let row = rect.row as usize + r;
+        if row < rows {
+            screen[row][right] = ScreenCell::new("│", Style::default());
+        }
     }
 }
 
