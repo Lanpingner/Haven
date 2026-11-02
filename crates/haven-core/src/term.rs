@@ -75,6 +75,16 @@ pub struct Terminal {
     pub modes: Modes,
     pub palette: Palette,
     pub title: Option<String>,
+    /// What the shell last told us it was running, via `OSC 133;C`.
+    ///
+    /// This is the only honest source for it. A title is whatever the shell
+    /// decided to write and is often a path; the mark is the command line
+    /// itself, reported by the shell at the moment it runs it.
+    pub command: Option<String>,
+    /// Whether that command is still going: `C` seen and no `D` yet.
+    pub command_running: bool,
+    /// Its exit status, once `OSC 133;D` reports one.
+    pub command_exit: Option<i32>,
     pub bell_count: u32,
     pub cursor_shape: CursorShape,
     pub cursor_blink: bool,
@@ -108,6 +118,9 @@ impl Terminal {
             modes: Modes::default(),
             palette: Palette::default(),
             title: None,
+            command: None,
+            command_running: false,
+            command_exit: None,
             bell_count: 0,
             cursor_shape: CursorShape::default(),
             cursor_blink: true,
@@ -440,6 +453,36 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 /// xterm's reply format for a colour query. Apps string-match this, so the
 /// 16-bit-per-channel form is not optional.
+/// `cmdline=<text>` or fish's `cmdline_url=<percent-encoded>`.
+fn command_field(field: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(field).ok()?;
+    if let Some(raw) = text.strip_prefix("cmdline_url=") {
+        return Some(percent_decode(raw));
+    }
+    text.strip_prefix("cmdline=").map(|s| s.to_string())
+}
+
+/// Just enough of percent-decoding for a command line. An invalid escape is
+/// left as written rather than dropped: showing `%zz` beats showing nothing.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn xterm_rgb(rgb: Rgb) -> String {
     let scale = |v: u8| (v as u16) * 0x101;
     format!("rgb:{:04x}/{:04x}/{:04x}", scale(rgb.r), scale(rgb.g), scale(rgb.b))
@@ -557,6 +600,34 @@ impl Perform for Terminal {
             b"0" | b"2" => {
                 if let Some(t) = params.get(1) {
                     self.title = Some(String::from_utf8_lossy(t).into_owned());
+                }
+            }
+            // OSC 133: shell integration marks. `C` carries the command
+            // line the shell is about to run, which is the only reliable
+            // name for what a tab is doing — a title is whatever the shell
+            // felt like writing, and is usually a path.
+            b"133" => {
+                match params.get(1).copied() {
+                    // Prompt drawn: whatever ran before has finished, and
+                    // nothing new has started.
+                    Some(b"A") => self.command_running = false,
+                    Some(b"C") => {
+                        self.command_running = true;
+                        self.command_exit = None;
+                        for field in &params[2..] {
+                            if let Some(cmd) = command_field(field) {
+                                self.command = Some(cmd);
+                            }
+                        }
+                    }
+                    Some(b"D") => {
+                        self.command_running = false;
+                        self.command_exit = params
+                            .get(2)
+                            .and_then(|v| std::str::from_utf8(v).ok())
+                            .and_then(|v| v.trim().parse().ok());
+                    }
+                    _ => {}
                 }
             }
             // OSC 4: set or query an indexed colour. Queries must reply in
@@ -872,6 +943,51 @@ mod tests {
         let e = emu(b"\x1b[38:2::1:2:3mx");
         let style = e.term.styles.get(e.term.grid.row(0).cells[0].style);
         assert_eq!(style.fg, Color::Rgb(Rgb::new(1, 2, 3)));
+    }
+
+    #[test]
+    fn the_shell_reports_what_it_is_running() {
+        // fish's form: percent-encoded, because a command line can contain
+        // the `;` that separates OSC parameters.
+        let e = emu(b"\x1b]133;C;cmdline_url=git%20status\x1b\\");
+        assert_eq!(e.term.command.as_deref(), Some("git status"));
+        assert!(e.term.command_running, "a command that started is running");
+        assert_eq!(e.term.command_exit, None);
+    }
+
+    #[test]
+    fn a_finished_command_keeps_its_name_and_gains_a_status() {
+        // The name must survive: a tab showing nothing between commands
+        // would be worse than one showing the last thing that ran.
+        let mut e = emu(b"\x1b]133;C;cmdline=make\x1b\\");
+        e.feed(b"\x1b]133;D;2\x1b\\");
+        assert_eq!(e.term.command.as_deref(), Some("make"));
+        assert!(!e.term.command_running);
+        assert_eq!(e.term.command_exit, Some(2));
+    }
+
+    #[test]
+    fn a_new_prompt_means_nothing_is_running() {
+        let mut e = emu(b"\x1b]133;C;cmdline=sleep\x1b\\");
+        assert!(e.term.command_running);
+        e.feed(b"\x1b]133;A\x1b\\");
+        assert!(!e.term.command_running, "a prompt means the command ended");
+        assert_eq!(e.term.command.as_deref(), Some("sleep"), "the name should remain");
+    }
+
+    #[test]
+    fn a_mangled_escape_is_shown_rather_than_dropped() {
+        // `%zz` is not an escape. Showing it beats silently losing the rest
+        // of the command.
+        assert_eq!(percent_decode("a%zzb"), "a%zzb");
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("trailing%"), "trailing%");
+    }
+
+    #[test]
+    fn marks_without_a_command_line_do_not_invent_one() {
+        let e = emu(b"\x1b]133;A;click_events=1\x1b\\\x1b]133;B\x1b\\");
+        assert_eq!(e.term.command, None);
     }
 
     #[test]

@@ -102,10 +102,16 @@ impl Chooser {
                     let active = active_window && pane.id == window.active_pane;
                     rows.push(Row {
                         indent: 2,
-                        text: if pane.title.is_empty() {
-                            format!("pane {}", pane.id)
-                        } else {
-                            format!("pane {} — {}", pane.id, pane.title)
+                        // What it is doing, if the shell says so; what it
+                        // calls itself otherwise. A bare id names nothing.
+                        text: match (pane.command.as_str(), pane.title.as_str()) {
+                            ("", "") => format!("pane {}", pane.id),
+                            ("", title) => format!("pane {}  {title}", pane.id),
+                            (command, _) => format!(
+                                "pane {}  {command}{}",
+                                pane.id,
+                                if pane.running { " …" } else { "" }
+                            ),
                         },
                         choice: Choice::Pane(pane.id),
                         current: active,
@@ -317,8 +323,18 @@ mod tests {
                 id: 1,
                 name: "shell".into(),
                 panes: vec![
-                    PaneInfo { id: 10, title: "fish".into() },
-                    PaneInfo { id: 11, title: "vim".into() },
+                    PaneInfo {
+                        id: 10,
+                        title: "fish".into(),
+                        command: "cargo test".into(),
+                        running: true,
+                    },
+                    PaneInfo {
+                        id: 11,
+                        title: "vim".into(),
+                        command: String::new(),
+                        running: false,
+                    },
                 ],
                 active_pane: 11,
                 zoomed: false,

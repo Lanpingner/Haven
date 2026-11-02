@@ -301,7 +301,7 @@ mod tests {
     use haven_proto::{PaneInfo, SessionId, WindowInfo};
 
     fn pane(id: u32) -> PaneInfo {
-        PaneInfo { id, title: format!("pane{id}") }
+        PaneInfo { id, title: format!("pane{id}"), command: String::new(), running: false }
     }
 
     fn size(cols: u16, rows: u16) -> CellSize {

@@ -73,6 +73,18 @@ same actions the keys do, so nothing is reachable one way and not the other.
 matches as you type, with the first entry — what `Tab` would take — marked.
 `Esc` cancels, `Backspace` on an empty line leaves the mode.
 
+### Tab names
+
+A tab is named after the command its active pane is running, which needs the
+shell to say what that command is — the `OSC 133;C` mark. fish reports it
+natively; bash and zsh do once Haven's integration is installed, which is
+automatic unless `--no-integrate` is passed. Without integration there is
+nothing to report and the tab falls back to the window title, then to its
+number.
+
+The chooser shows the same thing per pane, with `…` while the command is
+still running.
+
 ### Configuration and themes
 
 The daemon owns the configuration, so one session looks the same through a
@@ -118,7 +130,7 @@ once because tmux never had to:
 | --- | --- |
 | **desktop window** | a `haven gpu` process. A *viewer*, not part of a session — several can watch one session, and closing one leaves it running. |
 | **session** | lives in the daemon and outlives every viewer. |
-| **tab** | owns a tree of panes. tmux calls this a *window*, and so do the protocol and the commands (`new-window`); the interface says *tab*, because the other meaning is taken. |
+| **tab** | owns a tree of panes, and is named after the command running in its active pane. tmux calls this a *window*, and so do the protocol and the commands (`new-window`); the interface says *tab*, because the other meaning is taken. |
 | **pane** | one shell, one pty. |
 
 So the session tree has three levels, not four: the desktop window is the

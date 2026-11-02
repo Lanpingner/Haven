@@ -29,6 +29,25 @@ fn spawner() -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
     })
 }
 
+/// Panes whose shell reports what it runs, the way a shell with integration
+/// does. Typing the escape directly cannot work: the tty echoes control
+/// characters in caret notation, so no real `ESC` ever reaches the emulator.
+fn marking_spawner() -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
+    Box::new(|size| {
+        Pty::spawn(&PtyConfig {
+            program: Some("/bin/sh".into()),
+            args: vec![
+                "-c".into(),
+                // Doubled: Rust must pass the shell a literal backslash,
+                // and `\033` in a Rust string is a NUL followed by "33".
+                "while read l; do printf '\\033]133;C;cmdline_url=%s\\007' \"$l\"; done".into(),
+            ],
+            size,
+            ..Default::default()
+        })
+    })
+}
+
 fn daemon() -> Daemon {
     Daemon::detached(spawner)
 }
@@ -264,4 +283,34 @@ fn the_status_reaches_the_client_and_follows_the_layout() {
         "the status did not follow the split: {:?}",
         client.frame.status
     );
+}
+
+#[test]
+fn a_tab_is_named_after_the_command_the_shell_reports() {
+    // The shell integration mark is the only reliable source: a title is
+    // whatever the shell decided to write, and is usually a path.
+    let mut daemon = Daemon::detached(marking_spawner);
+    let mut client = attach(&mut daemon, 50, 8);
+    assert!(settle(&mut daemon, &mut [&mut client], |c| c[0].frame.status.is_some()));
+
+    let pane = client.focus.expect("focus");
+    send_input(&mut client, pane, b"make%20-j8\n");
+
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| c[0]
+            .frame
+            .status
+            .as_ref()
+            .is_some_and(|s| s.windows[0].name.contains("make -j8"))),
+        "the tab was not named after the command: {:?}\npane text:\n{}",
+        client.frame.status.as_ref().map(|s| (
+            s.windows[0].name.clone(),
+            s.windows[0].panes.iter().map(|p| p.command.clone()).collect::<Vec<_>>()
+        )),
+        client.frame.pane_text(pane)
+    );
+
+    // And the pane carries it too, for the chooser.
+    let status = client.frame.status.clone().expect("status");
+    assert_eq!(status.windows[0].panes[0].command, "make -j8");
 }

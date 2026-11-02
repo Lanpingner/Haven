@@ -1127,6 +1127,16 @@ the wire `Theme` is a fixed struct of plain `Color`s, and the daemon's
 type, which does not work — postcard is not self-describing and cannot
 deserialize the untagged colour that makes a config file pleasant to write.
 
+Tabs are named after what they are running. `OSC 133` was being *installed*
+by the shell integration and then ignored by the emulator; it is parsed now,
+and the `C` mark's command line is what names a tab, falling back to the
+title and then the number. Getting the command out of each shell differs:
+fish sends it natively, zsh's `preexec` receives it, and bash exposes it only
+in a `DEBUG` trap or in history — the trap is the wrong place, because it
+also fires for every `PROMPT_COMMAND` function and names the tab after the
+prompt, so `PS0` plus `history 1` is used instead. It is expanded exactly
+once per interactive command line, which is the gate wanted.
+
 **Bugs this work surfaced, worth remembering:**
 - Box drawing vanished wherever a panel gave it a background. Procedural box
   drawing and background rectangles shared one quad buffer, and a background

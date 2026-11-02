@@ -567,6 +567,13 @@ impl Drop for Daemon {
     }
 }
 
+/// A command line, capped. Unlike a title it must *not* be split on `/`:
+/// doing that turns `ls -la /tmp` into `tmp`, which names the wrong thing
+/// entirely.
+fn short_command(command: &str) -> String {
+    command.trim().chars().take(24).collect()
+}
+
 /// A window name has to share one row with everything else, so take the last
 /// path component and cap it.
 fn short_title(title: &str) -> String {
@@ -611,28 +618,38 @@ impl SessionHost {
             .iter()
             .map(|w| haven_proto::WindowInfo {
                 id: w.id.0,
-                // An explicit name wins; otherwise the active pane's title,
-                // which is what the shell sets and what the user recognises.
-                // The id alone tells nobody which window is which.
+                // What the tab is *doing* names it best. An explicit name
+                // wins, then the command the shell reported through OSC 133,
+                // then the title — which is usually a path — and only then
+                // the number, which tells nobody anything.
                 name: w.title.clone().unwrap_or_else(|| {
-                    self.runtime
-                        .pane(w.active)
-                        .and_then(|p| p.title())
-                        .map(short_title)
+                    let pane = self.runtime.pane(w.active);
+                    pane.and_then(|p| p.command())
+                        .map(|(c, _)| short_command(c))
+                        .filter(|c| !c.is_empty())
+                        .or_else(|| pane.and_then(|p| p.title()).map(short_title))
+                        .filter(|c| !c.is_empty())
                         .unwrap_or_else(|| format!("{}", w.id.0))
                 }),
                 panes: w
                     .root
                     .panes()
                     .into_iter()
-                    .map(|p| haven_proto::PaneInfo {
-                        id: p.0,
-                        title: self
-                            .runtime
-                            .pane(p)
-                            .and_then(|r| r.title())
-                            .map(short_title)
-                            .unwrap_or_default(),
+                    .map(|p| {
+                        let pane = self.runtime.pane(p);
+                        let (command, running) = pane
+                            .and_then(|r| r.command())
+                            .map(|(c, running)| (short_command(c), running))
+                            .unwrap_or_default();
+                        haven_proto::PaneInfo {
+                            id: p.0,
+                            title: pane
+                                .and_then(|r| r.title())
+                                .map(short_title)
+                                .unwrap_or_default(),
+                            command,
+                            running,
+                        }
                     })
                     .collect(),
                 active_pane: w.active.0,

@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -322,6 +322,11 @@ pub struct PaneInfo {
     pub id: u32,
     /// Whatever the program running in it last called itself.
     pub title: String,
+    /// What the shell last reported running, from `OSC 133`. Empty when the
+    /// shell has no integration to report it with.
+    pub command: String,
+    /// Whether that command is still going.
+    pub running: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]

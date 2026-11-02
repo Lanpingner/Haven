@@ -46,6 +46,14 @@ impl PaneRuntime {
     pub fn title(&self) -> Option<&str> {
         self.emulator.term.title.as_deref()
     }
+
+    /// What the shell last said it was running, and whether it still is.
+    /// Needs shell integration (`OSC 133`); without it there is nothing to
+    /// report and the caller falls back to the title.
+    pub fn command(&self) -> Option<(&str, bool)> {
+        let term = &self.emulator.term;
+        term.command.as_deref().map(|c| (c, term.command_running))
+    }
 }
 
 /// What the caller should do about something that happened.

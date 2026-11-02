@@ -16,9 +16,21 @@ __haven_precmd() {
     printf '\e]133;A\e\\'
 }
 
+# Percent-encode what would otherwise break the mark: `;` separates OSC
+# parameters, and ESC would end the sequence outright.
+__haven_encode() {
+    local s=${1//'%'/%25}
+    s=${s//';'/%3B}
+    s=${s//$'\n'/%0A}
+    s=${s//$'\e'/%1B}
+    print -rn -- "$s"
+}
+
 __haven_preexec() {
     typeset -g __haven_executing=1
-    printf '\e]133;C\e\\'
+    # The command line goes with the mark: it is what names a tab, and the
+    # title a shell writes is usually a path instead.
+    printf '\e]133;C;cmdline_url=%s\e\\' "$(__haven_encode "$1")"
 }
 
 autoload -Uz add-zsh-hook

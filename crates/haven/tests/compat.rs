@@ -230,6 +230,35 @@ fn bash_integration_emits_semantic_prompt_marks() {
 }
 
 #[test]
+fn a_real_shell_reports_which_command_it_ran() {
+    // Naming a tab after the title shows a path. Naming it after the command
+    // needs the shell to say what the command *was*, which only the OSC 133
+    // `C` mark carries.
+    for name in ["bash", "zsh", "fish"] {
+        let Some(shell) = find(name) else { continue };
+        let (run, _) = integration_run(&shell, "echo marker\n", true);
+        assert_eq!(
+            run.emu.term.command.as_deref(),
+            Some("echo marker"),
+            "{name} did not report the command it ran; raw:\n{}",
+            run.raw
+        );
+        // And it must know the command finished, or a tab would show a
+        // spinner forever.
+        assert!(!run.emu.term.command_running, "{name} never reported the command ending");
+    }
+}
+
+#[test]
+fn a_command_line_with_a_semicolon_survives_the_mark() {
+    // `;` separates OSC parameters. Unencoded it truncates the command, so
+    // `echo a; echo b` would name a tab `echo a`.
+    let Some(bash) = find("bash") else { return };
+    let (run, _) = integration_run(&bash, "echo a; echo b\n", true);
+    assert_eq!(run.emu.term.command.as_deref(), Some("echo a; echo b"), "raw:\n{}", run.raw);
+}
+
+#[test]
 fn fish_marks_are_not_duplicated_by_our_integration() {
     // Regression guard: fish >= 3.7 emits OSC 133 itself, so installing our
     // script produced *two* command-end marks per command — a consumer cannot

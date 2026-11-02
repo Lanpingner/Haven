@@ -227,8 +227,8 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
             id: 1,
             name: "shell".into(),
             panes: vec![
-                PaneInfo { id: 7, title: String::new() },
-                PaneInfo { id: 8, title: String::new() },
+                PaneInfo { id: 7, title: String::new(), command: String::new(), running: false },
+                PaneInfo { id: 8, title: String::new(), command: String::new(), running: false },
             ],
             active_pane: 8,
             zoomed: false,
