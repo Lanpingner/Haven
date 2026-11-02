@@ -60,6 +60,7 @@ options:
                         cannot block the event loop. The GPU still stalls;
                         the point is that X keeps being answered while it
                         does, which is what the window manager waits on.
+  --no-xping            do not measure X server round-trip latency.
   --poll                use ControlFlow::Poll instead of Wait.
   --stall-ms <n>        report a stall longer than this (default 100).
   --seconds <n>         quit after n seconds, so it can be run unattended.
@@ -112,6 +113,7 @@ struct Options {
     backends: wgpu::Backends,
     power: wgpu::PowerPreference,
     render_thread: bool,
+    xping: bool,
 }
 
 impl Default for Options {
@@ -127,6 +129,7 @@ impl Default for Options {
             backends: wgpu::Backends::all(),
             power: wgpu::PowerPreference::HighPerformance,
             render_thread: false,
+            xping: true,
         }
     }
 }
@@ -141,6 +144,7 @@ fn parse_args() -> Result<Options, String> {
             "--continuous" => o.continuous = true,
             "--poll" => o.poll = true,
             "--render-thread" => o.render_thread = true,
+            "--no-xping" => o.xping = false,
             "--present-mode" => {
                 let v = it.next().ok_or("--present-mode needs a value")?;
                 o.present = PresentArg::parse(&v).ok_or(format!("unknown present mode {v:?}"))?;
@@ -729,6 +733,51 @@ impl ApplicationHandler for App {
     }
 }
 
+/// Measure how long the X server takes to answer *anything*, on a connection
+/// of our own.
+///
+/// This is the question the render thread could not answer. If the event loop
+/// is free and the window manager still freezes, then whatever is blocking is
+/// below us — and if a bare round-trip on an unrelated connection also stalls,
+/// the X server is stalled for every client, which is a driver problem and not
+/// an application one.
+fn xping(start: Instant, running: Arc<AtomicBool>, limit: Duration) {
+    let (conn, _screen) = match x11rb::connect(None) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("xping: cannot open an X connection ({e}); skipping");
+            return;
+        }
+    };
+    eprintln!("xping: measuring X server round-trip on a separate connection");
+    let limit_ms = limit.as_millis() as u64;
+    let mut worst = 0u64;
+    while running.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(25));
+        let t = Instant::now();
+        // GetInputFocus is the canonical cheap round-trip: it touches no
+        // window of ours, so a slow reply is the server, not our drawing.
+        let ok = x11rb::protocol::xproto::get_input_focus(&conn)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some();
+        let took = t.elapsed().as_millis() as u64;
+        if !ok {
+            eprintln!("[{:>7}ms] xping: connection lost", millis(start));
+            return;
+        }
+        if took >= limit_ms {
+            eprintln!(
+                "[{:>7}ms] XPING: the X server took {took}ms to answer a trivial request \
+                 — every client was frozen, not just this one",
+                millis(start)
+            );
+        }
+        worst = worst.max(took);
+    }
+    eprintln!("xping: worst X server round-trip: {worst}ms");
+}
+
 fn main() {
     let opts = match parse_args() {
         Ok(o) => o,
@@ -756,6 +805,11 @@ fn main() {
         let beat = Arc::clone(&beat);
         std::thread::spawn(move || watchdog(beat, start, opts.stall))
     };
+    let pinger = opts.xping.then(|| {
+        let running = Arc::new(AtomicBool::new(true));
+        let flag = Arc::clone(&running);
+        (running, std::thread::spawn(move || xping(start, flag, opts.stall)))
+    });
 
     let event_loop = match EventLoop::new() {
         Ok(e) => e,
@@ -770,6 +824,10 @@ fn main() {
     }
 
     beat.running.store(false, Ordering::Relaxed);
+    if let Some((running, handle)) = pinger {
+        running.store(false, Ordering::Relaxed);
+        let _ = handle.join();
+    }
     let _ = dog.join();
     app.report();
 }
