@@ -28,6 +28,8 @@ pub enum Action {
     SendPrefix,
     /// Open the command line.
     EnterCommand,
+    /// Open the session tree.
+    Choose,
 }
 
 /// Ctrl+A, like screen and like most tmux configurations in the wild.
@@ -42,6 +44,8 @@ pub fn prefix_table(event: &KeyEvent) -> Option<Action> {
     let shift = event.mods.contains(Modifiers::SHIFT);
     Some(match event.key {
         Key::Char(':') => Action::EnterCommand,
+        // Ctrl+S after the prefix, as tmux spells its chooser.
+        Key::Char('s') => Action::Choose,
         Key::Char('%') => Action::SplitColumns,
         Key::Char('"') => Action::SplitRows,
         Key::Char('x') => Action::ClosePane,
@@ -79,6 +83,56 @@ pub fn prefix_table(event: &KeyEvent) -> Option<Action> {
     })
 }
 
+/// Every command name, for completion and for the help overlay.
+///
+/// The aliases are included deliberately: someone who types `vsplit` should
+/// see it offered rather than be told it does not exist after the fact.
+pub const COMMANDS: &[&str] = &[
+    "choose",
+    "detach",
+    "even-horizontal",
+    "even-vertical",
+    "kill-pane",
+    "new-window",
+    "next",
+    "prev",
+    "select-window",
+    "split-h",
+    "split-v",
+    "tiled",
+    "zoom",
+];
+
+/// Commands starting with `prefix`. An empty prefix offers everything, which
+/// is what makes the box a menu as well as a completion.
+pub fn complete(prefix: &str) -> Vec<&'static str> {
+    let word = prefix.split_whitespace().next().unwrap_or("");
+    if prefix.contains(char::is_whitespace) {
+        // Past the verb: nothing to complete, and offering verbs again would
+        // be actively misleading.
+        return Vec::new();
+    }
+    COMMANDS.iter().copied().filter(|c| c.starts_with(word)).collect()
+}
+
+/// The longest prefix every candidate shares, which is how far Tab can go
+/// without guessing.
+pub fn common_prefix(candidates: &[&str]) -> String {
+    let Some(first) = candidates.first() else { return String::new() };
+    let mut end = first.len();
+    for other in &candidates[1..] {
+        end = end.min(
+            first
+                .chars()
+                .zip(other.chars())
+                .take_while(|(a, b)| a == b)
+                .map(|(a, _)| a.len_utf8())
+                .sum(),
+        );
+    }
+    first[..end].to_string()
+}
+
 /// Parse a typed command line.
 ///
 /// The names are the long forms of the prefix keys rather than a new
@@ -98,6 +152,7 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         "prev" | "previous-window" => Action::PreviousWindow,
         "kill-pane" | "killp" => Action::ClosePane,
         "zoom" => Action::ToggleZoom,
+        "choose" | "choose-tree" => Action::Choose,
         "detach" | "det" => Action::Detach,
         "even-horizontal" => Action::ApplyLayout(NamedLayout::EvenHorizontal),
         "even-vertical" => Action::ApplyLayout(NamedLayout::EvenVertical),
@@ -140,7 +195,7 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::ApplyLayout(NamedLayout::EvenHorizontal) => P::EvenHorizontal,
         Action::ApplyLayout(NamedLayout::EvenVertical) => P::EvenVertical,
         Action::ApplyLayout(NamedLayout::Tiled) => P::Tiled,
-        Action::Detach | Action::SendPrefix | Action::EnterCommand => return None,
+        Action::Detach | Action::SendPrefix | Action::EnterCommand | Action::Choose => return None,
     })
 }
 
@@ -218,5 +273,40 @@ mod tests {
         assert_eq!(split_direction(Action::SplitColumns), Some(Direction::Columns));
         assert_eq!(split_direction(Action::SplitRows), Some(Direction::Rows));
         assert_eq!(split_direction(Action::ToggleZoom), None);
+    }
+
+    #[test]
+    fn completion_offers_what_starts_with_the_word() {
+        assert_eq!(complete("spl"), vec!["split-h", "split-v"]);
+        assert_eq!(complete("zo"), vec!["zoom"]);
+        assert!(complete("qqq").is_empty());
+        // An empty line offers the whole menu, which is what makes the box
+        // useful before you know the names.
+        assert_eq!(complete("").len(), COMMANDS.len());
+    }
+
+    #[test]
+    fn completion_stops_at_the_verb() {
+        // Past the first word there is nothing to complete, and offering
+        // verbs again would suggest `select-window select-window`.
+        assert!(complete("select-window ").is_empty());
+        assert!(complete("select-window 2").is_empty());
+    }
+
+    #[test]
+    fn tab_completes_only_as_far_as_the_candidates_agree() {
+        assert_eq!(common_prefix(&complete("spl")), "split-");
+        assert_eq!(common_prefix(&complete("zo")), "zoom");
+        assert_eq!(common_prefix(&[]), "");
+    }
+
+    #[test]
+    fn every_offered_command_actually_parses() {
+        // A completion that suggests something `parse_command` rejects would
+        // be worse than no completion at all.
+        for name in COMMANDS {
+            let line = if *name == "select-window" { "select-window 1" } else { name };
+            assert!(parse_command(line).is_ok(), "{name} is offered but does not parse");
+        }
     }
 }

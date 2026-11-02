@@ -53,6 +53,7 @@ cargo run -p haven -- shell-info
 | `e` / `E` / `t` | even-horizontal / even-vertical / tiled layout |
 | `d` | detach |
 | `:` | open the command line |
+| `s` | the session tree: sessions, windows, panes |
 | `Ctrl+A` | send a literal `Ctrl+A` |
 
 ### Command line
@@ -68,7 +69,26 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `kill-pane`, `zoom`, `detach` | as the keys do |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |
 
+`Tab` completes as far as the candidates agree. A box above the bar lists what
+matches as you type, with the first entry — what `Tab` would take — marked.
 `Esc` cancels, `Backspace` on an empty line leaves the mode.
+
+### Session tree
+
+`Ctrl+A` `s` opens a chooser over the panes, listing every session and, for
+the one you are attached to, its windows and the panes inside them. It opens
+on the pane you are in.
+
+| Key | Does |
+| --- | --- |
+| `j` / `k` or arrows | move (wraps) |
+| type anything | filter the list |
+| `Backspace` | undo a filter character |
+| `Enter` | go there — attaching to another session if that is what is selected |
+| `Esc` | close |
+
+Only the attached session can show its windows and panes; for the others the
+daemon reports counts alone, so that is what is listed.
 
 ### Status bar
 

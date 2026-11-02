@@ -13,7 +13,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -192,6 +192,8 @@ pub enum Action {
     NextWindow,
     PreviousWindow,
     SelectWindow(u16),
+    /// Focus a pane by id, switching windows if it lives in another one.
+    SelectPane(u32),
     EvenHorizontal,
     EvenVertical,
     Tiled,
@@ -303,8 +305,18 @@ pub struct SessionStatus {
 pub struct WindowInfo {
     pub id: u32,
     pub name: String,
-    pub panes: u16,
+    /// The panes themselves, not a count: a chooser has to list them, and a
+    /// count cannot be navigated.
+    pub panes: Vec<PaneInfo>,
+    pub active_pane: u32,
     pub zoomed: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct PaneInfo {
+    pub id: u32,
+    /// Whatever the program running in it last called itself.
+    pub title: String,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]

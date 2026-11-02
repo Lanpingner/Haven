@@ -6,6 +6,7 @@
 //! escape sequences. Neither can reach into mux state, and neither can drive
 //! the other's code path.
 
+pub mod chooser;
 pub mod frame;
 pub mod frontend;
 pub mod input;
@@ -35,6 +36,9 @@ pub enum Intercepted {
     Act(Action),
     /// End the session for this client.
     Detach,
+    /// Show the session tree. The client owns it, because only the client
+    /// holds both the session listing and the attached session's windows.
+    OpenChooser,
 }
 
 /// Decides what a keystroke means before it reaches a pane.
@@ -72,6 +76,8 @@ pub struct Client<F, T> {
     /// What the client is doing with keystrokes: passing them on, holding the
     /// prefix, or collecting a command.
     pub mode: status_bar::Mode,
+    /// The session tree, while it is open.
+    pub chooser: Option<chooser::Chooser>,
     /// Last session listing received, for `haven ls`.
     pub sessions: Vec<haven_proto::SessionInfo>,
     attached: bool,
@@ -102,6 +108,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             clipboard: None,
             key_filter: None,
             mode: status_bar::Mode::Normal,
+            chooser: None,
             sessions: Vec::new(),
             attached: false,
         }
@@ -121,12 +128,96 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         Ok(())
     }
 
+    /// Open the session tree, asking the daemon for a fresh listing: the one
+    /// we hold could be minutes old, and a chooser showing a session that has
+    /// since died is worse than a moment's delay.
+    fn open_chooser(&mut self) -> Result<(), TransportError> {
+        self.transport.send(ClientMsg::ListSessions)?;
+        self.chooser = Some(chooser::Chooser::new(&self.sessions, self.frame.status.as_ref()));
+        Ok(())
+    }
+
+    /// Drive the chooser. Returns `Redraw` for anything it handles, which is
+    /// everything: a modal overlay that let keys through to the shell behind
+    /// it would be a nasty surprise.
+    fn chooser_key(&mut self, event: &input::KeyEvent) -> Result<Tick, TransportError> {
+        use input::{Key, KeyState, NamedKey};
+        if event.state == KeyState::Release {
+            return Ok(Tick::Idle);
+        }
+        let Some(chooser) = self.chooser.as_mut() else { return Ok(Tick::Idle) };
+
+        match &event.key {
+            Key::Named(NamedKey::Escape) => self.chooser = None,
+            Key::Named(NamedKey::Up) => chooser.move_by(-1),
+            Key::Named(NamedKey::Down) => chooser.move_by(1),
+            Key::Char('k') if chooser.filter.is_empty() => chooser.move_by(-1),
+            Key::Char('j') if chooser.filter.is_empty() => chooser.move_by(1),
+            Key::Named(NamedKey::Backspace) => {
+                chooser.filter.pop();
+                chooser.resettle();
+            }
+            Key::Named(NamedKey::Enter) => {
+                let choice = chooser.choice();
+                self.chooser = None;
+                if let Some(choice) = choice {
+                    self.pick(choice)?;
+                }
+            }
+            Key::Char(c) if !event.mods.contains(input::Modifiers::CTRL) => {
+                chooser.filter.push(*c);
+                chooser.resettle();
+            }
+            _ => {}
+        }
+        Ok(Tick::Redraw)
+    }
+
+    /// Rebuild the chooser from newer data, keeping the selection where the
+    /// user left it rather than snapping back to the active pane.
+    fn refresh_chooser(&mut self) {
+        let Some(old) = self.chooser.as_ref() else { return };
+        let mut next = chooser::Chooser::new(&self.sessions, self.frame.status.as_ref());
+        next.filter = old.filter.clone();
+        // The chooser is opened before the session listing has arrived, so
+        // the first rebuild is the one that finally has rows in it. Keeping
+        // the old selection then would pin it to row zero — the session —
+        // instead of the pane the user is actually in.
+        if !old.rows.is_empty() {
+            next.selected = old.selected.min(next.rows.len().saturating_sub(1));
+        }
+        next.resettle();
+        self.chooser = Some(next);
+    }
+
+    fn pick(&mut self, choice: chooser::Choice) -> Result<(), TransportError> {
+        match choice {
+            chooser::Choice::Session(id) => {
+                // Attaching elsewhere invalidates every pane we hold, so the
+                // frame is cleared rather than left showing the old session.
+                let mut caps = self.frontend.caps();
+                caps.size = status_bar::reserve(caps.size);
+                self.frame.panes.clear();
+                self.frame.status = None;
+                self.transport.send(ClientMsg::Attach { session: Some(id), caps })
+            }
+            chooser::Choice::Window(index) => {
+                self.transport.send(ClientMsg::Action(Action::SelectWindow(index)))
+            }
+            chooser::Choice::Pane(id) => {
+                self.transport.send(ClientMsg::Action(Action::SelectPane(id)))
+            }
+        }
+    }
+
     /// Rebuild the status line into the frame's widgets.
     ///
     /// Done every redraw rather than on change, because the clock moves with
     /// no message to prompt it, and the bar is one row of text.
     fn rebuild_status(&mut self) {
-        self.frame.widgets.retain(|w| w.kind != frame::WidgetKind::StatusLine);
+        self.frame.widgets.retain(|w| {
+            !matches!(w.kind, frame::WidgetKind::StatusLine | frame::WidgetKind::Overlay)
+        });
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -135,6 +226,13 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             status_bar::build(self.frame.size, self.frame.status.as_ref(), &self.mode, now)
         {
             self.frame.widgets.push(bar);
+        }
+        if let Some(box_) = status_bar::suggestions(self.frame.size, &self.mode) {
+            self.frame.widgets.push(box_);
+        }
+        // After the bar, so it draws on top of it.
+        if let Some(widget) = self.chooser.as_ref().and_then(|c| c.widget(self.frame.size)) {
+            self.frame.widgets.push(widget);
         }
     }
 
@@ -194,6 +292,11 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 Ok(Tick::Redraw)
             }
             InputEvent::Key(key) => {
+                // The chooser is modal and owns the keyboard while it is up,
+                // so it is consulted before the key table rather than after.
+                if self.chooser.is_some() {
+                    return self.chooser_key(&key);
+                }
                 // Taken out and put back so the filter can borrow the mode
                 // mutably without borrowing the whole client.
                 let mut filter = self.key_filter.take();
@@ -204,6 +307,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     Some(Intercepted::Act(action)) => {
                         self.transport.send(ClientMsg::Action(action))?;
                         return Ok(Tick::Idle);
+                    }
+                    Some(Intercepted::OpenChooser) => {
+                        self.open_chooser()?;
+                        return Ok(Tick::Redraw);
                     }
                     Some(Intercepted::Detach) => {
                         self.transport.send(ClientMsg::Detach)?;
@@ -274,11 +381,15 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
             ServerMsg::Status(status) => {
                 self.frame.status = Some(status);
+                self.refresh_chooser();
                 true
             }
             ServerMsg::Sessions { sessions, .. } => {
                 self.sessions = sessions;
-                false
+                // The listing is what the chooser was waiting for.
+                let open = self.chooser.is_some();
+                self.refresh_chooser();
+                open
             }
             ServerMsg::Refused { reason } => {
                 self.frame.notice = Some(reason);

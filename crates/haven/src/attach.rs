@@ -68,37 +68,53 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
             return Intercepted::Consumed;
         }
         match mode {
-            Mode::Command(buffer) => {
-                return match &event.key {
+            Mode::Command { text, suggestions } => {
+                let out = match &event.key {
                     Key::Named(NamedKey::Escape) => {
                         *mode = Mode::Normal;
-                        Intercepted::Consumed
+                        return Intercepted::Consumed;
                     }
                     Key::Named(NamedKey::Backspace) => {
-                        if buffer.pop().is_none() {
+                        if text.pop().is_none() {
                             *mode = Mode::Normal;
+                            return Intercepted::Consumed;
                         }
                         Intercepted::Consumed
                     }
                     Key::Named(NamedKey::Enter) => {
-                        let line = buffer.clone();
+                        let line = text.clone();
                         *mode = Mode::Normal;
-                        run_command(&line)
+                        return run_command(&line);
+                    }
+                    Key::Named(NamedKey::Tab) => {
+                        // Complete as far as every candidate agrees, which is
+                        // as far as can be done without choosing for the user.
+                        let candidates = keys::complete(text);
+                        let common = keys::common_prefix(&candidates);
+                        if common.len() > text.len() {
+                            *text = common;
+                        } else if candidates.len() == 1 {
+                            *text = candidates[0].to_string();
+                        }
+                        Intercepted::Consumed
                     }
                     Key::Char(c) if !event.mods.contains(Modifiers::CTRL) => {
-                        buffer.push(*c);
+                        text.push(*c);
                         Intercepted::Consumed
                     }
                     _ => Intercepted::Consumed,
                 };
+                *suggestions = keys::complete(text).into_iter().map(|s| s.to_string()).collect();
+                return out;
             }
             Mode::Prefix => {
                 *mode = Mode::Normal;
                 return match keys::prefix_table(event) {
                     Some(Action::EnterCommand) => {
-                        *mode = Mode::Command(String::new());
+                        *mode = Mode::command(String::new());
                         Intercepted::Consumed
                     }
+                    Some(Action::Choose) => Intercepted::OpenChooser,
                     Some(Action::Detach) => Intercepted::Detach,
                     Some(Action::SendPrefix) => Intercepted::Pass,
                     Some(action) => match keys::to_proto(action) {
@@ -130,6 +146,7 @@ fn run_command(line: &str) -> Intercepted {
     }
     match keys::parse_command(line.trim()) {
         Ok(Action::Detach) => Intercepted::Detach,
+        Ok(Action::Choose) => Intercepted::OpenChooser,
         Ok(action) => match keys::to_proto(action) {
             Some(wire) => Intercepted::Act(wire),
             None => Intercepted::Consumed,
@@ -302,10 +319,10 @@ mod tests {
     #[test]
     fn a_release_does_not_type_into_a_command() {
         let mut filter = key_filter();
-        let mut mode = Mode::Command(String::new());
+        let mut mode = Mode::command(String::new());
         filter(&key(Key::Char('z'), Modifiers::empty()), &mut mode);
         filter(&release(Key::Char('z'), Modifiers::empty()), &mut mode);
-        assert_eq!(mode, Mode::Command("z".into()), "the release typed a second character");
+        assert_eq!(mode.command_text(), Some("z"), "the release typed a second character");
     }
 
     #[test]
@@ -333,12 +350,12 @@ mod tests {
             filter(&key(Key::Char(':'), Modifiers::empty()), &mut mode),
             Intercepted::Consumed
         );
-        assert_eq!(mode, Mode::Command(String::new()));
+        assert_eq!(mode.command_text(), Some(""));
 
         for c in "split-v".chars() {
             filter(&key(Key::Char(c), Modifiers::empty()), &mut mode);
         }
-        assert_eq!(mode, Mode::Command("split-v".into()), "the line was not collected");
+        assert_eq!(mode.command_text(), Some("split-v"), "the line was not collected");
 
         let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
         // The same action the `%` binding produces: one vocabulary, two ways in.
@@ -349,15 +366,15 @@ mod tests {
     #[test]
     fn escape_abandons_a_command_and_backspace_backs_out_of_an_empty_one() {
         let mut filter = key_filter();
-        let mut mode = Mode::Command("zoo".into());
+        let mut mode = Mode::command("zoo".into());
         filter(&key(Key::Named(NamedKey::Backspace), Modifiers::empty()), &mut mode);
-        assert_eq!(mode, Mode::Command("zo".into()));
+        assert_eq!(mode.command_text(), Some("zo"));
 
-        mode = Mode::Command("x".into());
+        mode = Mode::command("x".into());
         filter(&key(Key::Named(NamedKey::Escape), Modifiers::empty()), &mut mode);
         assert_eq!(mode, Mode::Normal);
 
-        mode = Mode::Command(String::new());
+        mode = Mode::command(String::new());
         filter(&key(Key::Named(NamedKey::Backspace), Modifiers::empty()), &mut mode);
         assert_eq!(mode, Mode::Normal, "backspace on an empty line should leave the mode");
     }
@@ -365,7 +382,7 @@ mod tests {
     #[test]
     fn an_unknown_command_is_swallowed_rather_than_typed_into_the_pane() {
         let mut filter = key_filter();
-        let mut mode = Mode::Command("nonsense".into());
+        let mut mode = Mode::command("nonsense".into());
         let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
         assert_eq!(out, Intercepted::Consumed);
         assert_eq!(mode, Mode::Normal);

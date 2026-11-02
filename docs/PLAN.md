@@ -1100,6 +1100,14 @@ Window names fall back to the active pane's title, which is why the status is
 sent on change rather than on layout change: titles arrive later than layouts
 and move while the layout does not.
 
+The command line now completes (`Tab`, plus a box of candidates), and
+`Ctrl+A s` opens a session tree. The tree lives in `haven-client` rather than
+behind the key filter because it is the only place holding both halves of
+what it shows — the session listing and the attached session's windows — and
+a filter owning it would be a second place that knows what a session is. It
+is a flat list of indented rows, not a real tree: expand/collapse state would
+buy nothing when the point is to see everything at once.
+
 **Bugs this work surfaced, worth remembering:**
 - The GPU window ran without a key filter at all. It built its own `Client`
   and never installed one, so `Ctrl+A` went straight to the shell and no

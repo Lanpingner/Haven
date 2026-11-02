@@ -188,7 +188,9 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
         Action::ApplyLayout(layout) => mux.apply_named_layout(layout)?,
         // Standalone mode has no command line yet; the prefix table is the
         // whole interface there.
-        Action::Detach | Action::SendPrefix | Action::EnterCommand => {}
+        // Standalone mode has no command line and no session list: there is
+        // exactly one session, and it is this process.
+        Action::Detach | Action::SendPrefix | Action::EnterCommand | Action::Choose => {}
     }
     Ok(false)
 }

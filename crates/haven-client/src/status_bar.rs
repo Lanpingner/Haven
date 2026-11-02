@@ -35,8 +35,70 @@ pub enum Mode {
     Normal,
     /// The prefix key was pressed and the next key is a command.
     Prefix,
-    /// A command is being typed, with the text so far.
-    Command(String),
+    /// A command is being typed: the text so far, and what it could become.
+    ///
+    /// The suggestions are carried rather than computed because the command
+    /// table lives in the composition root, above this crate — the same
+    /// reason the key table does.
+    Command { text: String, suggestions: Vec<String> },
+}
+
+impl Mode {
+    pub fn command(text: String) -> Self {
+        Self::Command { text, suggestions: Vec::new() }
+    }
+
+    pub fn command_text(&self) -> Option<&str> {
+        match self {
+            Self::Command { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+}
+
+/// The completion box, drawn just above the bar while a command is being
+/// typed. `None` when there is nothing to suggest, so an exact command does
+/// not leave a box with one obvious entry in it.
+pub fn suggestions(size: CellSize, mode: &Mode) -> Option<Widget> {
+    let Mode::Command { text, suggestions } = mode else { return None };
+    if suggestions.is_empty() || (suggestions.len() == 1 && suggestions[0] == *text) {
+        return None;
+    }
+    let rows = suggestions.len().min(size.rows.saturating_sub(2) as usize);
+    if rows == 0 {
+        return None;
+    }
+    let width = suggestions.iter().map(|s| s.chars().count()).max().unwrap_or(0) + 2;
+    let cols = width.min(size.cols as usize).max(4);
+
+    let style = Style { fg: Color::Indexed(0), bg: Color::Indexed(7), ..Style::default() };
+    let first = Style { fg: Color::Indexed(0), bg: Color::Indexed(11), ..Style::default() };
+    let out: Vec<FrameRow> = suggestions
+        .iter()
+        .take(rows)
+        .enumerate()
+        .map(|(i, name)| FrameRow {
+            spans: vec![Span {
+                col: 0,
+                text: pad(&format!(" {name}"), cols),
+                // The first is what Tab would complete to, so it is marked.
+                style: if i == 0 { first } else { style },
+            }],
+            rev: 0,
+        })
+        .collect();
+
+    Some(Widget {
+        kind: WidgetKind::Overlay,
+        rect: PaneRect {
+            pane: haven_proto::PaneId(u32::MAX - 2),
+            col: 0,
+            row: size.rows - ROWS - out.len() as u16,
+            cols: cols as u16,
+            rows: out.len() as u16,
+        },
+        rows: out,
+    })
 }
 
 /// Build the bar. `now_unix` is passed in rather than read here so the whole
@@ -54,7 +116,7 @@ pub fn build(
 
     // A command being typed replaces the bar: what you are typing matters
     // more than what the session is called.
-    if let Mode::Command(text) = mode {
+    if let Mode::Command { text, .. } = mode {
         let line = format!(":{text}");
         return Some(widget(size, pad(&line, cols), command_style()));
     }
@@ -96,8 +158,8 @@ fn right_text(status: Option<&SessionStatus>, mode: &Mode, now_unix: u64) -> Str
         parts.push("PREFIX".to_string());
     }
     if let Some(s) = status {
-        let panes: u16 =
-            s.windows.iter().find(|w| w.id == s.active_window).map(|w| w.panes).unwrap_or(0);
+        let panes =
+            s.windows.iter().find(|w| w.id == s.active_window).map(|w| w.panes.len()).unwrap_or(0);
         parts.push(format!("{panes} panes"));
         if s.clients > 1 {
             parts.push(format!("{} clients", s.clients));
@@ -162,7 +224,11 @@ fn command_style() -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use haven_proto::{SessionId, WindowInfo};
+    use haven_proto::{PaneInfo, SessionId, WindowInfo};
+
+    fn pane(id: u32) -> PaneInfo {
+        PaneInfo { id, title: format!("pane{id}") }
+    }
 
     fn size(cols: u16, rows: u16) -> CellSize {
         CellSize { cols, rows, pixel_width: 0, pixel_height: 0 }
@@ -173,8 +239,20 @@ mod tests {
             session: SessionId(1),
             name: "work".into(),
             windows: vec![
-                WindowInfo { id: 1, name: "shell".into(), panes: 2, zoomed: false },
-                WindowInfo { id: 2, name: "vim".into(), panes: 1, zoomed: false },
+                WindowInfo {
+                    id: 1,
+                    name: "shell".into(),
+                    panes: vec![pane(1), pane(2)],
+                    active_pane: 1,
+                    zoomed: false,
+                },
+                WindowInfo {
+                    id: 2,
+                    name: "vim".into(),
+                    panes: vec![pane(3)],
+                    active_pane: 3,
+                    zoomed: false,
+                },
             ],
             active_window: 1,
             started_unix: 1000,
@@ -227,7 +305,7 @@ mod tests {
 
     #[test]
     fn typing_a_command_replaces_the_bar() {
-        let mode = Mode::Command("split-h".into());
+        let mode = Mode::command("split-h".into());
         let line = text(&build(size(40, 24), Some(&status()), &mode, 1000).unwrap());
         assert!(line.starts_with(":split-h"), "{line:?}");
     }
@@ -250,5 +328,44 @@ mod tests {
     fn a_detached_bar_still_fills_the_row() {
         let w = build(size(30, 24), None, &Mode::Normal, 0).unwrap();
         assert_eq!(text(&w).chars().count(), 30);
+    }
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use super::*;
+
+    fn size(cols: u16, rows: u16) -> CellSize {
+        CellSize { cols, rows, pixel_width: 0, pixel_height: 0 }
+    }
+
+    fn mode(text: &str, names: &[&str]) -> Mode {
+        Mode::Command {
+            text: text.into(),
+            suggestions: names.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn the_box_sits_directly_above_the_bar() {
+        let m = mode("s", &["split-h", "split-v", "select-window"]);
+        let w = suggestions(size(80, 24), &m).expect("box");
+        assert_eq!(w.rect.row + w.rect.rows, 24 - ROWS, "not flush with the bar");
+        assert_eq!(w.rows.len(), 3);
+    }
+
+    #[test]
+    fn nothing_to_choose_means_no_box() {
+        assert!(suggestions(size(80, 24), &mode("zoom", &[])).is_none());
+        // One candidate that is already what was typed is not a suggestion.
+        assert!(suggestions(size(80, 24), &mode("zoom", &["zoom"])).is_none());
+        assert!(suggestions(size(80, 24), &Mode::Normal).is_none());
+    }
+
+    #[test]
+    fn the_box_stays_inside_a_short_screen() {
+        let names: Vec<&str> = vec!["a", "b", "c", "d", "e", "f"];
+        let w = suggestions(size(20, 4), &mode("", &names)).expect("box");
+        assert!(w.rect.row + w.rect.rows <= 4 - ROWS);
     }
 }

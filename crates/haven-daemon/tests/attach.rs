@@ -247,7 +247,8 @@ fn the_status_reaches_the_client_and_follows_the_layout() {
     );
     let status = client.frame.status.clone().expect("status");
     assert_eq!(status.windows.len(), 1);
-    assert_eq!(status.windows[0].panes, 1);
+    assert_eq!(status.windows[0].panes.len(), 1);
+    assert_eq!(status.windows[0].active_pane, status.windows[0].panes[0].id);
     assert_eq!(status.active_window, status.windows[0].id);
     assert!(status.started_unix > 0, "no start time to measure uptime from");
 
@@ -255,11 +256,11 @@ fn the_status_reaches_the_client_and_follows_the_layout() {
     // leave the pane count permanently wrong.
     send_action(&mut client, Action::SplitColumns).expect("split");
     assert!(
-        settle(&mut daemon, &mut [&mut client], |c| c[0]
-            .frame
-            .status
-            .as_ref()
-            .is_some_and(|s| s.windows[0].panes == 2)),
+        settle(&mut daemon, &mut [&mut client], |c| c[0].frame.status.as_ref().is_some_and(|s| s
+            .windows[0]
+            .panes
+            .len()
+            == 2)),
         "the status did not follow the split: {:?}",
         client.frame.status
     );

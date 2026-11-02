@@ -214,3 +214,44 @@ fn version_skew_surfaces_as_a_readable_notice() {
     assert_eq!(client.tick().unwrap(), Tick::Redraw);
     assert!(client.frame.notice.as_deref().unwrap().contains("restart the daemon"));
 }
+
+#[test]
+fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
+    use haven_client::chooser::{Choice, Chooser};
+    use haven_proto::{PaneInfo, SessionId, SessionInfo, SessionStatus, WindowInfo};
+
+    let status = SessionStatus {
+        session: SessionId(1),
+        name: "work".into(),
+        windows: vec![WindowInfo {
+            id: 1,
+            name: "shell".into(),
+            panes: vec![
+                PaneInfo { id: 7, title: String::new() },
+                PaneInfo { id: 8, title: String::new() },
+            ],
+            active_pane: 8,
+            zoomed: false,
+        }],
+        active_window: 1,
+        started_unix: 0,
+        clients: 1,
+    };
+    let sessions = vec![SessionInfo {
+        id: SessionId(1),
+        name: "work".into(),
+        windows: 1,
+        panes: 2,
+        clients: 1,
+        size: size(80, 24),
+    }];
+
+    // Built before the listing arrives: nothing to select.
+    let empty = Chooser::new(&[], Some(&status));
+    assert!(empty.rows.is_empty(), "a chooser with no sessions should have no rows");
+
+    // Once it does, the selection must land on the active pane rather than
+    // staying at row zero.
+    let settled = Chooser::new(&sessions, Some(&status));
+    assert_eq!(settled.choice(), Some(Choice::Pane(8)));
+}

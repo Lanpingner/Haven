@@ -418,6 +418,10 @@ impl Daemon {
                 runtime.select_window(n as usize)?;
                 false
             }
+            Action::SelectPane(id) => {
+                runtime.session.focus_pane(haven_proto::PaneId(id));
+                false
+            }
             Action::EvenHorizontal => {
                 runtime.apply_named_layout(NamedLayout::EvenHorizontal)?;
                 false
@@ -570,7 +574,21 @@ impl SessionHost {
                         .map(short_title)
                         .unwrap_or_else(|| format!("{}", w.id.0))
                 }),
-                panes: w.root.panes().len().min(u16::MAX as usize) as u16,
+                panes: w
+                    .root
+                    .panes()
+                    .into_iter()
+                    .map(|p| haven_proto::PaneInfo {
+                        id: p.0,
+                        title: self
+                            .runtime
+                            .pane(p)
+                            .and_then(|r| r.title())
+                            .map(short_title)
+                            .unwrap_or_default(),
+                    })
+                    .collect(),
+                active_pane: w.active.0,
                 zoomed: w.zoomed.is_some(),
             })
             .collect();
