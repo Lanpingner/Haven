@@ -235,7 +235,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 self.frame.remove_pane(pane);
                 true
             }
-            ServerMsg::Sessions(sessions) => {
+            ServerMsg::Sessions { sessions, .. } => {
                 self.sessions = sessions;
                 false
             }

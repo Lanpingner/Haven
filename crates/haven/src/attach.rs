@@ -124,7 +124,8 @@ pub fn run(socket: &Path, session: Option<SessionId>, host: HostCaps) -> io::Res
 }
 
 /// Ask the daemon for its session list.
-pub fn list(socket: &Path) -> io::Result<Vec<haven_proto::SessionInfo>> {
+/// The sessions a daemon is holding, and when that daemon was built.
+pub fn list(socket: &Path) -> io::Result<(Vec<haven_proto::SessionInfo>, u64)> {
     let mut transport = match SocketTransport::connect(socket) {
         Ok(t) => t,
         // No socket means no sessions, which is an answer rather than a failure.
@@ -132,7 +133,7 @@ pub fn list(socket: &Path) -> io::Result<Vec<haven_proto::SessionInfo>> {
             if e.kind() == io::ErrorKind::NotFound
                 || e.kind() == io::ErrorKind::ConnectionRefused =>
         {
-            return Ok(Vec::new())
+            return Ok((Vec::new(), 0))
         }
         Err(e) => return Err(e),
     };
@@ -140,7 +141,10 @@ pub fn list(socket: &Path) -> io::Result<Vec<haven_proto::SessionInfo>> {
     wait_for_sessions(&mut transport)
 }
 
-pub fn kill_session(socket: &Path, id: SessionId) -> io::Result<Vec<haven_proto::SessionInfo>> {
+pub fn kill_session(
+    socket: &Path,
+    id: SessionId,
+) -> io::Result<(Vec<haven_proto::SessionInfo>, u64)> {
     let mut transport = SocketTransport::connect(socket)?;
     transport.send(ClientMsg::KillSession(id)).map_err(to_io)?;
     wait_for_sessions(&mut transport)
@@ -157,11 +161,15 @@ pub fn shutdown(socket: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn wait_for_sessions(transport: &mut SocketTransport) -> io::Result<Vec<haven_proto::SessionInfo>> {
+fn wait_for_sessions(
+    transport: &mut SocketTransport,
+) -> io::Result<(Vec<haven_proto::SessionInfo>, u64)> {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         match transport.try_recv() {
-            Ok(Some(haven_proto::ServerMsg::Sessions(sessions))) => return Ok(sessions),
+            Ok(Some(haven_proto::ServerMsg::Sessions { sessions, daemon_build })) => {
+                return Ok((sessions, daemon_build))
+            }
             Ok(Some(_)) => {}
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
             Err(e) => return Err(to_io(e)),

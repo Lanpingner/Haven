@@ -13,7 +13,24 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// When this executable was built, as seconds since the epoch, or `0` if it
+/// cannot be told.
+///
+/// The daemon outlives every client and holds the terminal emulator, so
+/// rebuilding after a parser fix changes nothing until the daemon is
+/// restarted — the old one keeps running the old code and the bug looks
+/// unfixed. A client that is newer than the daemon it attached to can at
+/// least say so.
+pub fn build_stamp() -> u64 {
+    std::fs::metadata("/proc/self/exe")
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct PaneId(pub u32);
@@ -207,6 +224,9 @@ pub enum ServerMsg {
     Hello {
         protocol: u32,
         session: SessionId,
+        /// The daemon's [`build_stamp`], so a client can notice it is talking
+        /// to a binary older than its own.
+        build: u64,
     },
     /// Sent before any snapshot or delta that references new entries.
     Tables(Tables),
@@ -249,7 +269,12 @@ pub enum ServerMsg {
         status: i32,
     },
     /// Reply to [`ClientMsg::ListSessions`].
-    Sessions(Vec<SessionInfo>),
+    Sessions {
+        sessions: Vec<SessionInfo>,
+        /// The daemon's [`build_stamp`]: `haven ls` is where someone looks
+        /// when a rebuild appears to have changed nothing.
+        daemon_build: u64,
+    },
     /// Version skew, in words rather than as a decode failure.
     Refused {
         reason: String,
@@ -340,7 +365,7 @@ mod tests {
 
     #[test]
     fn framing_round_trips_and_waits_for_partial_frames() {
-        let msg = ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(7) };
+        let msg = ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(7), build: 42 };
         let bytes = frame::encode(&msg).unwrap();
 
         // A truncated frame is "not yet", not an error: that distinction is

@@ -251,19 +251,38 @@ fn attach(args: Args) -> ExitCode {
     }
 }
 
+/// The daemon holds the terminal emulator and outlives every client, so a
+/// rebuild changes nothing until it is restarted. That looks exactly like a
+/// fix that did not work, so say it where someone will be looking.
+fn warn_if_daemon_is_stale(daemon_build: u64) {
+    let ours = haven_proto::build_stamp();
+    if daemon_build != 0 && ours != 0 && daemon_build < ours {
+        let age = ours - daemon_build;
+        eprintln!(
+            "haven: the running daemon was built {age}s before this binary; it is still \
+             executing the older code.\n       `haven server stop` and reattach to pick up \
+             the new build."
+        );
+    }
+}
+
 fn list(args: Args) -> ExitCode {
     match haven::attach::list(&socket_of(&args)) {
-        Ok(sessions) if sessions.is_empty() => {
+        Ok((sessions, daemon_build)) if sessions.is_empty() => {
             println!("no sessions");
+            // A daemon with no sessions is still a daemon, and still the one
+            // whose code is running.
+            warn_if_daemon_is_stale(daemon_build);
             ExitCode::SUCCESS
         }
-        Ok(sessions) => {
+        Ok((sessions, daemon_build)) => {
             for s in sessions {
                 println!(
                     "{}: {} ({} windows, {} panes, {} clients, {}x{})",
                     s.id.0, s.name, s.windows, s.panes, s.clients, s.size.cols, s.size.rows
                 );
             }
+            warn_if_daemon_is_stale(daemon_build);
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -280,7 +299,7 @@ fn kill_session(args: Args) -> ExitCode {
     };
     match haven::attach::kill_session(&socket_of(&args), haven_proto::SessionId(id)) {
         Ok(remaining) => {
-            println!("{} session(s) left", remaining.len());
+            println!("{} session(s) left", remaining.0.len());
             ExitCode::SUCCESS
         }
         Err(e) => {

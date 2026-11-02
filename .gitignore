@@ -10,3 +10,4 @@ flamegraph.svg
 .s[a-v][a-z]
 .sw[a-p]
 *.swp
+a.out

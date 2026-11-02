@@ -1126,6 +1126,16 @@ and theming (M7), sixel/kitty graphics.
   `CSI > 1 u` (kitty keyboard push) restore the cursor and `CSI ? Pm r/s`
   (XTRESTORE/XTSAVE) move the scroll region. Private sequences other than DA2
   are now ignored rather than run as their public namesakes.
+- The daemon holds the emulator and outlives every client, so rebuilding after
+  a parser fix changes nothing until the daemon restarts — and that is
+  indistinguishable from a fix that did not work. It cost a round trip of "it
+  still does it". `ServerMsg::Sessions` now carries the daemon's build stamp
+  and `haven ls` says so plainly.
+- `PROTOCOL_VERSION` could not report its own skew: the version lives *inside*
+  a message, so a wire-format change makes the frame fail to decode before
+  anything can compare versions. The decode error now names the likely cause
+  instead of reporting "Hit the end of buffer". Proper negotiation ahead of the
+  first typed message is still owed.
 - Presenting to an unmapped window is not merely wasted work. With
   `PresentMode::Fifo` the acquire waits for a vblank the window will never get,
   and that wait sits inside the event loop — so X requests go unanswered and a

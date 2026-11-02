@@ -38,7 +38,7 @@ fn layout(panes: &[(u32, u16, u16, u16, u16)], active: u32) -> Layout {
 #[test]
 fn attach_then_render_a_pane_end_to_end() {
     let server = ScriptedTransport::new([
-        ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1) },
+        ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1), build: 0 },
         ServerMsg::Layout(layout(&[(1, 0, 0, 20, 2)], 1)),
         ServerMsg::Snapshot {
             pane: PaneId(1),

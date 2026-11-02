@@ -83,6 +83,23 @@ impl Server {
         let (emu, _, _) = run_to_screen(&cfg, limits, send.as_bytes()).expect("attach");
         emu.dump()
     }
+
+    /// As [`Self::attach`], but keeps the emulator so a test can look at the
+    /// styles the client actually wrote, not just the characters.
+    fn attach_emu(&self, send: &str, cols: u16, rows: u16) -> haven::haven_core::Emulator {
+        let cfg = PtyConfig {
+            program: Some(Path::new(HAVEN).to_path_buf()),
+            args: vec!["attach".into(), "--socket".into(), self.socket.clone().into()],
+            env: vec![("TERM".into(), "xterm-256color".into())],
+            env_remove: vec!["LINES".into(), "COLUMNS".into()],
+            size: PtySize { cols, rows, ..Default::default() },
+            ..Default::default()
+        };
+        let limits =
+            PumpLimits { idle: Duration::from_millis(2000), total: Duration::from_secs(25) };
+        let (emu, _, _) = run_to_screen(&cfg, limits, send.as_bytes()).expect("attach");
+        emu
+    }
 }
 
 impl Drop for Server {
@@ -174,4 +191,39 @@ fn attaching_starts_a_daemon_when_none_is_running() {
     let _ = Command::new(HAVEN).args(["server", "stop", "--socket"]).arg(&socket).status();
     std::thread::sleep(Duration::from_millis(200));
     let _ = std::fs::remove_file(&socket);
+}
+
+#[test]
+fn xtmodkeys_does_not_underline_the_session() {
+    // `CSI > 4 ; 1 m` is modifyOtherKeys. fish sends it before every prompt.
+    // Parsed as `SGR 4;1` it sets underline on the pen and nothing resets it,
+    // so every cell erased afterwards is drawn with a rule through it.
+    //
+    // This drives the whole daemon path — pty, socket, client, serializer —
+    // rather than the direct render path, because that is where it was seen.
+    let server = Server::start("xtmodkeys");
+    let emu = server.attach_emu("printf '\\033[>4;1mUNDERTEST\\n'\n", 60, 8);
+
+    let underlined: Vec<(usize, usize)> = emu
+        .term
+        .grid
+        .rows()
+        .iter()
+        .enumerate()
+        .flat_map(|(r, row)| {
+            row.cells.iter().enumerate().filter_map(move |(c, cell)| Some((r, c)).zip(Some(cell)))
+        })
+        .filter(|((_, _), cell)| {
+            emu.term.styles.get(cell.style).underline != haven::haven_core::Underline::None
+        })
+        .map(|(pos, _)| pos)
+        .collect();
+
+    assert!(
+        underlined.is_empty(),
+        "XTMODKEYS underlined {} cells (first at {:?}); screen:\n{}",
+        underlined.len(),
+        underlined.first(),
+        emu.dump()
+    );
 }

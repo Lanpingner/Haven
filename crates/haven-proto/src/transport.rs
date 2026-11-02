@@ -151,8 +151,37 @@ impl<S: Read + Write> Framed<S> {
                 Ok(Some(msg))
             }
             Ok(None) => Ok(None),
-            Err(e) => Err(TransportError::Protocol(e.to_string())),
+            // A well-framed body that will not decode means the peer is not
+            // speaking our protocol. In practice that is always a daemon left
+            // running from an older build — it outlives every client, so a
+            // rebuild does not replace it. Postcard's own message ("Hit the
+            // end of buffer") tells nobody that.
+            Err(e) => Err(TransportError::Protocol(format!(
+                "cannot decode a frame from the peer ({e}). This usually means it is \
+                 running a different build than this one — protocol v{}. If a haven \
+                 daemon is still running from before a rebuild, `haven server stop` \
+                 will replace it.",
+                crate::PROTOCOL_VERSION
+            ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod decode_errors {
+    use super::*;
+
+    #[test]
+    fn an_undecodable_frame_blames_the_build_not_the_buffer() {
+        // A valid length prefix with a body that is not a `ServerMsg`: exactly
+        // what an older daemon's reply looks like after a wire-format change.
+        let mut framed = Framed::new(std::io::Cursor::new(Vec::new()));
+        framed.inbox.extend_from_slice(&3u32.to_le_bytes());
+        framed.inbox.extend_from_slice(&[0xff, 0xff, 0xff]);
+        let err = framed.next_message::<ServerMsg>().unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("different build"), "unhelpful protocol error: {text}");
+        assert!(text.contains("haven server stop"), "no way out offered: {text}");
     }
 }
 
@@ -247,7 +276,11 @@ mod tests {
         assert_eq!(server.next_message::<ClientMsg>().unwrap(), None);
 
         server
-            .queue(&ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(2) })
+            .queue(&ServerMsg::Hello {
+                protocol: PROTOCOL_VERSION,
+                session: SessionId(2),
+                build: 0,
+            })
             .unwrap();
         server.flush().unwrap();
         assert!(matches!(client.try_recv().unwrap(), Some(ServerMsg::Hello { .. })));
@@ -289,7 +322,7 @@ mod tests {
         assert_eq!(server_rx.try_recv().unwrap(), ClientMsg::Detach);
 
         server_tx
-            .send(ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1) })
+            .send(ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1), build: 0 })
             .unwrap();
         assert!(matches!(client.try_recv().unwrap(), Some(ServerMsg::Hello { .. })));
         assert_eq!(client.try_recv().unwrap(), None, "empty is not an error");

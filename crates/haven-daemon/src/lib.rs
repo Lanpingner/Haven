@@ -286,6 +286,7 @@ impl Daemon {
                 let _ = client.framed.queue(&ServerMsg::Hello {
                     protocol: PROTOCOL_VERSION,
                     session: SessionId(id),
+                    build: haven_proto::build_stamp(),
                 });
             }
             ClientMsg::Input { pane, bytes } => {
@@ -302,7 +303,10 @@ impl Daemon {
             ClientMsg::Action(action) => self.act(index, action)?,
             ClientMsg::ListSessions => {
                 let sessions = self.session_infos();
-                let _ = self.clients[index].framed.queue(&ServerMsg::Sessions(sessions));
+                let _ = self.clients[index].framed.queue(&ServerMsg::Sessions {
+                    sessions,
+                    daemon_build: haven_proto::build_stamp(),
+                });
             }
             ClientMsg::KillSession(SessionId(id)) => {
                 self.sessions.remove(&id);
@@ -313,7 +317,10 @@ impl Daemon {
                         .queue(&ServerMsg::Refused { reason: "session killed".into() });
                 }
                 let sessions = self.session_infos();
-                let _ = self.clients[index].framed.queue(&ServerMsg::Sessions(sessions));
+                let _ = self.clients[index].framed.queue(&ServerMsg::Sessions {
+                    sessions,
+                    daemon_build: haven_proto::build_stamp(),
+                });
             }
             ClientMsg::Shutdown => {
                 self.sessions.clear();
