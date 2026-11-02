@@ -10,7 +10,9 @@
 //! A tree would need expand and collapse state for no gain: the whole point
 //! is to see everything at once and jump to one of it.
 
-use haven_core::{Color, Style};
+use haven_core::Style;
+
+use crate::theme::Theme;
 use haven_proto::{CellSize, PaneRect, SessionId, SessionInfo, SessionStatus};
 
 use crate::frame::{FrameRow, Span, Widget, WidgetKind};
@@ -30,6 +32,12 @@ pub struct Row {
     pub choice: Choice,
     /// Where you already are, so the chooser opens on it.
     pub current: bool,
+    /// Last among its siblings, so its branch closes instead of running on
+    /// into whitespace below.
+    pub last: bool,
+    /// Whether the row's parent was itself a last child. Without this the
+    /// trunk keeps being drawn beneath a tab that has nothing after it.
+    pub parent_last: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -61,6 +69,8 @@ impl Chooser {
                 ),
                 choice: Choice::Session(info.id),
                 current: here && status.is_none(),
+                last: false,
+                parent_last: false,
             });
             if !here {
                 continue;
@@ -83,8 +93,12 @@ impl Chooser {
                     ),
                     choice: Choice::Window(index as u16),
                     current: active_window && window.panes.len() <= 1,
+                    last: index + 1 == status.windows.len(),
+                    parent_last: false,
                 });
-                for pane in &window.panes {
+                let pane_count = window.panes.len();
+                let tab_is_last = index + 1 == status.windows.len();
+                for (pane_index, pane) in window.panes.iter().enumerate() {
                     let active = active_window && pane.id == window.active_pane;
                     rows.push(Row {
                         indent: 2,
@@ -95,6 +109,8 @@ impl Chooser {
                         },
                         choice: Choice::Pane(pane.id),
                         current: active,
+                        last: pane_index + 1 == pane_count,
+                        parent_last: tab_is_last,
                     });
                 }
             }
@@ -150,51 +166,70 @@ impl Chooser {
     }
 
     /// Draw it centred, as an overlay over the panes.
-    pub fn widget(&self, size: CellSize) -> Option<Widget> {
+    pub fn widget(&self, size: CellSize, theme: &Theme) -> Option<Widget> {
         let visible = self.visible();
-        if size.rows < 6 || size.cols < 24 {
+        if size.rows < 7 || size.cols < 28 {
             return None;
         }
+        let g = &theme.glyphs;
         let title = if self.filter.is_empty() {
-            "  session / tab / pane  —  enter picks, esc closes, type filters  ".to_string()
+            " session / tab / pane ".to_string()
         } else {
-            format!(" sessions  filter: {} ", self.filter)
+            format!(" filter: {} ", self.filter)
         };
 
-        let widest =
-            visible.iter().map(|(_, r)| r.text.chars().count() + r.indent as usize * 2).max();
-        let body_width = widest.unwrap_or(0).max(title.chars().count()) + 4;
-        let cols = body_width.min(size.cols as usize - 2).max(24);
+        let widest = visible
+            .iter()
+            .map(|(_, r)| r.text.chars().count() + guide_width(r.indent) + 6)
+            .max()
+            .unwrap_or(0);
+        let cols = widest
+            .max(title.chars().count() + 4)
+            .max(HINT.chars().count() + 4)
+            .min(size.cols as usize - 2)
+            .max(28);
+        let inner = cols - 2;
 
-        // Leave the status line visible: it is where the mode is shown.
-        let max_rows = (size.rows as usize).saturating_sub(4);
-        let shown = visible.len().min(max_rows).max(1);
-        let rows = shown + 2;
-
-        let col = ((size.cols as usize - cols) / 2) as u16;
-        let row = ((size.rows as usize - rows) / 2) as u16;
-
-        // Scroll so the selection stays on screen.
+        // Two rows of border, one of hint, and the status bar keeps its own.
+        let room = (size.rows as usize).saturating_sub(5);
+        let shown = visible.len().min(room).max(1);
         let at = visible.iter().position(|(i, _)| *i == self.selected).unwrap_or(0);
         let first = at.saturating_sub(shown.saturating_sub(1));
 
-        let mut out = Vec::with_capacity(rows);
-        out.push(line(&centre(&title, cols, '─'), frame_style()));
-        for (index, (row_index, entry)) in visible.iter().skip(first).take(shown).enumerate() {
-            let _ = index;
-            let text = format!(
-                "{}{}",
-                "  ".repeat(entry.indent as usize),
-                if entry.current { format!("* {}", entry.text) } else { entry.text.clone() }
-            );
-            let style = if *row_index == self.selected { selected_style() } else { entry_style() };
-            out.push(line(&pad(&format!(" {text}"), cols), style));
-        }
-        if visible.is_empty() {
-            out.push(line(&pad(" (nothing matches)", cols), entry_style()));
-        }
-        out.push(line(&centre("", cols, '─'), frame_style()));
+        let mut out = Vec::with_capacity(shown + 3);
+        out.push(crate::status_bar::border_row(g, cols, &title, theme, true));
 
+        if visible.is_empty() {
+            out.push(panel_line(g, inner, "  nothing matches", theme.panel_dim.style(), theme));
+        }
+        for (row_index, entry) in visible.iter().skip(first).take(shown) {
+            let selected = *row_index == self.selected;
+            let text = format!(
+                "{}{}{}",
+                guide(g, entry.indent, entry.last, entry.parent_last),
+                entry.text,
+                if entry.current { format!("  {}", g.here) } else { String::new() }
+            );
+            let style = if selected {
+                theme.selection.style()
+            } else if entry.indent == 0 {
+                theme.panel_title.style()
+            } else if entry.current {
+                theme.panel.style()
+            } else {
+                theme.panel_dim.style()
+            };
+            out.push(panel_line(g, inner, &format!(" {text}"), style, theme));
+        }
+
+        // A way out, stated: a modal nobody can leave is a trap.
+        let more = visible.len().saturating_sub(shown);
+        let hint = if more > 0 { format!("{HINT} · +{more} more") } else { HINT.to_string() };
+        out.push(panel_line(g, inner, &hint, theme.panel_dim.style(), theme));
+        out.push(crate::status_bar::border_row(g, cols, "", theme, false));
+
+        let col = ((size.cols as usize - cols) / 2) as u16;
+        let row = ((size.rows as usize).saturating_sub(out.len()) / 2) as u16;
         Some(Widget {
             kind: WidgetKind::Overlay,
             rect: PaneRect {
@@ -209,39 +244,49 @@ impl Chooser {
     }
 }
 
-fn line(text: &str, style: Style) -> FrameRow {
-    FrameRow { spans: vec![Span { col: 0, text: text.to_string(), style }], rev: 0 }
+const HINT: &str = " enter · esc · type to filter";
+
+/// How wide a guide is at a given depth, so widths can be worked out before
+/// the guide itself exists.
+fn guide_width(indent: u8) -> usize {
+    indent as usize * 2
 }
 
-fn pad(text: &str, cols: usize) -> String {
-    let mut out: String = text.chars().take(cols).collect();
-    let len = out.chars().count();
-    if len < cols {
-        out.push_str(&" ".repeat(cols - len));
+/// The tree guide for a row. Drawing the shape beats indenting with spaces:
+/// the eye follows a line, and three levels of plain indentation read as a
+/// list that happens to be ragged.
+fn guide(g: &crate::theme::Glyphs, indent: u8, last: bool, parent_last: bool) -> String {
+    let arm = if last { &g.last_branch } else { &g.branch };
+    match indent {
+        0 => String::new(),
+        1 => arm.clone(),
+        // A trunk under a parent that has no siblings left would be a line
+        // drawn to nothing.
+        _ if parent_last => format!("{}{}", " ".repeat(g.trunk.chars().count()), arm),
+        _ => format!("{}{}", g.trunk, arm),
     }
-    out
 }
 
-fn centre(text: &str, cols: usize, fill: char) -> String {
-    let len = text.chars().count();
-    if len >= cols {
-        return text.chars().take(cols).collect();
+/// One row of a panel: border, content padded to the inner width, border.
+fn panel_line(
+    g: &crate::theme::Glyphs,
+    inner: usize,
+    text: &str,
+    style: Style,
+    theme: &Theme,
+) -> FrameRow {
+    FrameRow {
+        spans: vec![
+            Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() },
+            Span { col: 1, text: crate::status_bar::pad(text, inner), style },
+            Span {
+                col: (inner + 1) as u16,
+                text: g.vertical.clone(),
+                style: theme.panel_border.style(),
+            },
+        ],
+        rev: 0,
     }
-    let left = (cols - len) / 2;
-    let right = cols - len - left;
-    format!("{}{}{}", fill.to_string().repeat(left), text, fill.to_string().repeat(right))
-}
-
-fn frame_style() -> Style {
-    Style { fg: Color::Indexed(12), bg: Color::Indexed(0), ..Style::default() }
-}
-
-fn entry_style() -> Style {
-    Style { fg: Color::Indexed(7), bg: Color::Indexed(0), ..Style::default() }
-}
-
-fn selected_style() -> Style {
-    Style { fg: Color::Indexed(0), bg: Color::Indexed(12), ..Style::default() }
 }
 
 #[cfg(test)]
@@ -320,6 +365,35 @@ mod tests {
     }
 
     #[test]
+    fn a_single_pane_tab_still_opens_on_the_pane() {
+        let mut st = status();
+        st.windows[0].panes.truncate(1);
+        st.windows[0].active_pane = 10;
+        let c = Chooser::new(&[info(1, "work", 1)], Some(&st));
+        assert_eq!(c.choice(), Some(Choice::Pane(10)));
+    }
+
+    #[test]
+    fn no_trunk_is_drawn_under_the_last_tab() {
+        let c = Chooser::new(&[info(1, "work", 1)], Some(&status()));
+        let g = crate::theme::Glyphs::default();
+        let pane = c.rows.iter().find(|r| r.indent == 2).expect("a pane row");
+        assert!(pane.parent_last, "the only tab is the last one");
+        let drawn = guide(&g, pane.indent, pane.last, pane.parent_last);
+        assert!(!drawn.starts_with(&g.trunk), "a trunk was drawn to nothing: {drawn:?}");
+        // The branch itself is still there.
+        assert!(drawn.contains(&g.branch) || drawn.contains(&g.last_branch));
+    }
+
+    #[test]
+    fn the_last_child_closes_its_branch() {
+        let c = Chooser::new(&[info(1, "work", 1)], Some(&status()));
+        let panes: Vec<&Row> = c.rows.iter().filter(|r| r.indent == 2).collect();
+        assert!(!panes[0].last, "the first pane is not the last one");
+        assert!(panes[1].last, "the last pane should close its branch");
+    }
+
+    #[test]
     fn moving_wraps_in_both_directions() {
         let mut c = Chooser::new(&[info(1, "work", 1)], Some(&status()));
         c.selected = 0;
@@ -348,16 +422,13 @@ mod tests {
     #[test]
     fn the_overlay_fits_inside_the_screen() {
         let c = Chooser::new(&[info(1, "work", 1)], Some(&status()));
-        for (cols, rows) in [(40u16, 10u16), (200, 60), (26, 8)] {
-            let w = c.widget(size(cols, rows)).expect("widget");
+        for (cols, rows) in [(40u16, 10u16), (200, 60), (30, 8)] {
+            let w = c.widget(size(cols, rows), &Theme::haven()).expect("widget");
             assert!(w.rect.col + w.rect.cols <= cols, "too wide at {cols}x{rows}");
             assert!(w.rect.row + w.rect.rows <= rows, "too tall at {cols}x{rows}");
             for row in &w.rows {
-                assert_eq!(
-                    row.spans[0].text.chars().count(),
-                    w.rect.cols as usize,
-                    "ragged row at {cols}x{rows}"
-                );
+                let width: usize = row.spans.iter().map(|s| s.text.chars().count()).sum();
+                assert_eq!(width, w.rect.cols as usize, "ragged row at {cols}x{rows}");
             }
         }
     }
@@ -365,6 +436,6 @@ mod tests {
     #[test]
     fn a_screen_too_small_gets_no_overlay_rather_than_a_broken_one() {
         let c = Chooser::new(&[info(1, "work", 1)], Some(&status()));
-        assert!(c.widget(size(20, 4)).is_none());
+        assert!(c.widget(size(20, 4), &Theme::haven()).is_none());
     }
 }

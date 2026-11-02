@@ -63,6 +63,9 @@ pub struct Renderer {
     pub fonts: FontStack,
     cell: CellMetrics,
     solid: Vec<Quad>,
+    /// Background rectangles, kept apart so they can be drawn underneath the
+    /// box drawing rather than on top of it.
+    backdrop: Vec<Quad>,
     glyphs: Vec<Quad>,
     /// Bumped on every frame, for tests and for a frame-time HUD later.
     pub frames: u64,
@@ -458,6 +461,7 @@ impl Renderer {
             fonts,
             cell,
             solid: Vec::new(),
+            backdrop: Vec::new(),
             glyphs: Vec::new(),
             frames: 0,
         })
@@ -554,6 +558,7 @@ impl Renderer {
         cursor_shape: CursorShape,
     ) {
         self.solid.clear();
+        self.backdrop.clear();
         self.glyphs.clear();
         let ch = self.cell.height as f32;
 
@@ -591,6 +596,15 @@ impl Renderer {
                 self.push_background(start, end, y, colour, palette);
             }
         }
+
+        // Backgrounds are collected apart and go under everything else.
+        // They cannot share a buffer with box drawing: a run is flushed when
+        // it *ends*, which is after the cells it covers have been drawn, so
+        // the background painted over every procedural line that had a
+        // background behind it. Panes never showed it because their lines sit
+        // on the default background, which emits no quad at all.
+        self.backdrop.append(&mut self.solid);
+        std::mem::swap(&mut self.solid, &mut self.backdrop);
     }
 
     fn push_background(
@@ -606,7 +620,7 @@ impl Renderer {
             return;
         }
         let (cw, ch) = (self.cell.width as f32, self.cell.height as f32);
-        self.solid.push(Quad {
+        self.backdrop.push(Quad {
             pos: [start as f32 * cw, y],
             size: [(end - start) as f32 * cw, ch],
             uv: [0.0; 4],

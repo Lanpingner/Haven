@@ -12,6 +12,10 @@ pub mod frontend;
 pub mod input;
 pub mod status_bar;
 
+/// Themes live in the protocol crate: the daemon owns the configuration and
+/// hands one to every client, so it is wire data, not a client's own idea.
+pub use haven_proto::theme;
+
 pub use frame::{FrameModel, PaneFrame, Span, Widget, WidgetKind};
 pub use frontend::{Frontend, NullFrontend, PresentError, ScriptedFrontend};
 pub use input::{
@@ -78,6 +82,9 @@ pub struct Client<F, T> {
     pub mode: status_bar::Mode,
     /// The session tree, while it is open.
     pub chooser: Option<chooser::Chooser>,
+    /// What the interface is painted with. Every colour and every drawing
+    /// character comes from here; nothing below may hardcode one.
+    pub theme: theme::Theme,
     /// Why the session is ending, when it is ending badly. A frontend reports
     /// this after it has given the terminal back.
     fatal: Option<String>,
@@ -112,6 +119,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             key_filter: None,
             mode: status_bar::Mode::Normal,
             chooser: None,
+            theme: theme::Theme::default(),
             fatal: None,
             sessions: Vec::new(),
             attached: false,
@@ -226,16 +234,22 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        if let Some(bar) =
-            status_bar::build(self.frame.size, self.frame.status.as_ref(), &self.mode, now)
-        {
+        if let Some(bar) = status_bar::build(
+            self.frame.size,
+            self.frame.status.as_ref(),
+            &self.mode,
+            now,
+            &self.theme,
+        ) {
             self.frame.widgets.push(bar);
         }
-        if let Some(box_) = status_bar::suggestions(self.frame.size, &self.mode) {
+        if let Some(box_) = status_bar::suggestions(self.frame.size, &self.mode, &self.theme) {
             self.frame.widgets.push(box_);
         }
         // After the bar, so it draws on top of it.
-        if let Some(widget) = self.chooser.as_ref().and_then(|c| c.widget(self.frame.size)) {
+        if let Some(widget) =
+            self.chooser.as_ref().and_then(|c| c.widget(self.frame.size, &self.theme))
+        {
             self.frame.widgets.push(widget);
         }
     }
@@ -411,6 +425,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             ServerMsg::Bell { .. } => true,
             ServerMsg::PaneExited { pane, .. } => {
                 self.frame.remove_pane(pane);
+                true
+            }
+            ServerMsg::Theme(theme) => {
+                self.theme = *theme;
                 true
             }
             ServerMsg::Status(status) => {

@@ -13,6 +13,8 @@ haven-proto.workspace = true
 haven-pty.workspace = true
 rustix = { version = "1", features = ["event", "fs"] }
 libc = "0.2"
+toml = "1.1.8"
+serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]
 haven-client.workspace = true

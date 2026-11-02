@@ -73,6 +73,42 @@ same actions the keys do, so nothing is reachable one way and not the other.
 matches as you type, with the first entry — what `Tab` would take — marked.
 `Esc` cancels, `Backspace` on an empty line leaves the mode.
 
+### Configuration and themes
+
+The daemon owns the configuration, so one session looks the same through a
+window and through a terminal, and an edit reaches every attached client
+without reattaching — the file is re-read when its timestamp moves.
+
+`$XDG_CONFIG_HOME/haven/config.toml` (or `~/.config/haven/config.toml`):
+
+```toml
+theme = "nord"        # haven, nord, gruvbox, daylight, slate, ansi, plain
+```
+
+Or a theme of your own, as a table, or as
+`~/.config/haven/themes/<name>.toml` named the same way:
+
+```toml
+[theme]
+base = "gruvbox"      # start here and change only what follows
+name = "mine"
+bar_session = { fg = "#1d2021", bg = "#83a598", bold = true }
+selection   = { fg = 0, bg = 12 }     # palette indices work too
+glyphs      = { here = "*" }
+```
+
+Every colour and drawing character the interface uses comes from the theme;
+nothing below it hardcodes one. Colours are `"#rrggbb"`, a palette index
+(`12` or `"12"`), or `"default"` to leave it to the terminal. `plain` uses no
+colour and no box drawing, for a terminal that cannot manage either.
+
+A broken theme is reported on the daemon's stderr and the interface keeps the
+default rather than refusing to paint.
+
+A theme is *data*. Plugins — code that computes what a status line says — are
+a separate thing and are not built yet (`docs/PLAN.md` §15); when they are, a
+plugin will supply one of these same tables.
+
 ### What the levels are
 
 The word *window* means two things in a GPU terminal, which is worth stating

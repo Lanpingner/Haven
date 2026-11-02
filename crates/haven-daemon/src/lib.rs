@@ -24,6 +24,7 @@ use haven_proto::{
 use haven_pty::{Pty, PtySize};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 
+pub mod config;
 pub mod sync;
 
 use sync::SyncState;
@@ -53,6 +54,9 @@ struct SessionHost {
 
 struct Client {
     framed: Framed<UnixStream>,
+    /// The theme this client has been sent, so a reload only pushes to
+    /// clients that do not already have it.
+    theme_sent: Option<haven_proto::theme::Theme>,
     caps: ClientCaps,
     session: Option<u32>,
     sync: SyncState,
@@ -72,6 +76,9 @@ pub struct Daemon {
     make_spawner: Box<dyn FnMut() -> Spawner>,
     policy: ResizePolicy,
     shutting_down: bool,
+    /// Configuration, re-read when the file moves. The daemon owns it so a
+    /// change reaches every attached client at once.
+    config: config::ConfigWatcher,
 }
 
 impl std::fmt::Debug for Daemon {
@@ -97,6 +104,7 @@ impl Daemon {
             make_spawner: Box::new(make_spawner),
             policy: ResizePolicy::default(),
             shutting_down: false,
+            config: config::ConfigWatcher::new(default_config_path(), default_theme_dir()),
         }
     }
 
@@ -167,6 +175,7 @@ impl Daemon {
             caps: ClientCaps::null(CellSize::default()),
             session: None,
             sync: SyncState::default(),
+            theme_sent: None,
             last_status: None,
         });
         Ok(())
@@ -193,12 +202,27 @@ impl Daemon {
     }
 
     /// One iteration: accept, read, pump, sync, flush.
+    /// Where the configuration is read from, and where named themes live.
+    pub fn watch_config(&mut self, path: PathBuf, theme_dir: PathBuf) {
+        self.config = config::ConfigWatcher::new(path, theme_dir);
+    }
+
     pub fn tick(&mut self, timeout: Duration) -> io::Result<()> {
         self.accept_pending()?;
         self.wait(timeout)?;
         self.read_clients()?;
         self.pump_sessions()?;
         self.apply_resize_policy()?;
+        // A changed theme invalidates what every client was last sent, which
+        // is what turns an edit into a redraw rather than into nothing.
+        if self.config.poll() {
+            for client in &mut self.clients {
+                client.theme_sent = None;
+            }
+            if let Some(problem) = &self.config.problem {
+                eprintln!("haven: config: {problem}");
+            }
+        }
         self.sync_clients()?;
         self.flush_clients();
         Ok(())
@@ -513,7 +537,12 @@ impl Daemon {
                 *attached.entry(id).or_default() += 1;
             }
         }
+        let theme = self.config.theme();
         for client in &mut self.clients {
+            if client.theme_sent.as_ref() != Some(theme) {
+                let _ = client.framed.queue(&ServerMsg::Theme(Box::new(theme.clone())));
+                client.theme_sent = Some(theme.clone());
+            }
             let Some(id) = client.session else { continue };
             let Some(host) = self.sessions.get(&id) else { continue };
             sync_one(client, host, attached.get(&id).copied().unwrap_or(0));
@@ -544,6 +573,24 @@ fn short_title(title: &str) -> String {
     let tail = title.rsplit('/').next().unwrap_or(title).trim();
     let tail = if tail.is_empty() { title.trim() } else { tail };
     tail.chars().take(16).collect()
+}
+
+/// `$XDG_CONFIG_HOME/haven/config.toml`, falling back to `~/.config`.
+pub fn default_config_path() -> PathBuf {
+    config_dir().join("config.toml")
+}
+
+/// Where a named theme is looked up.
+pub fn default_theme_dir() -> PathBuf {
+    config_dir().join("themes")
+}
+
+fn config_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("haven")
 }
 
 /// Seconds since the epoch, or `0` if the clock is before it.

@@ -9,10 +9,11 @@
 //! on the bottom row because the client never offers that row to the daemon,
 //! so no pane is ever laid out underneath it.
 
-use haven_core::{Color, Style};
+use haven_core::Style;
 use haven_proto::{CellSize, PaneRect, SessionStatus};
 
 use crate::frame::{FrameRow, Span, Widget, WidgetKind};
+use crate::theme::Theme;
 
 /// How many rows the status line takes.
 pub const ROWS: u16 = 1;
@@ -59,34 +60,42 @@ impl Mode {
 /// The completion box, drawn just above the bar while a command is being
 /// typed. `None` when there is nothing to suggest, so an exact command does
 /// not leave a box with one obvious entry in it.
-pub fn suggestions(size: CellSize, mode: &Mode) -> Option<Widget> {
+pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget> {
     let Mode::Command { text, suggestions } = mode else { return None };
     if suggestions.is_empty() || (suggestions.len() == 1 && suggestions[0] == *text) {
         return None;
     }
-    let rows = suggestions.len().min(size.rows.saturating_sub(2) as usize);
-    if rows == 0 {
+    // Two rows go to the border, and the bar keeps its own.
+    let room = (size.rows as usize).saturating_sub(ROWS as usize + 2);
+    let shown = suggestions.len().min(room);
+    if shown == 0 {
         return None;
     }
-    let width = suggestions.iter().map(|s| s.chars().count()).max().unwrap_or(0) + 2;
-    let cols = width.min(size.cols as usize).max(4);
+    let widest = suggestions.iter().take(shown).map(|s| s.chars().count()).max().unwrap_or(0);
+    let inner = widest.max("completions".len());
+    let cols = (inner + 4).min(size.cols as usize);
+    let inner = cols.saturating_sub(4);
 
-    let style = Style { fg: Color::Indexed(0), bg: Color::Indexed(7), ..Style::default() };
-    let first = Style { fg: Color::Indexed(0), bg: Color::Indexed(11), ..Style::default() };
-    let out: Vec<FrameRow> = suggestions
-        .iter()
-        .take(rows)
-        .enumerate()
-        .map(|(i, name)| FrameRow {
-            spans: vec![Span {
-                col: 0,
-                text: pad(&format!(" {name}"), cols),
-                // The first is what Tab would complete to, so it is marked.
-                style: if i == 0 { first } else { style },
-            }],
+    let g = &theme.glyphs;
+    let mut out = Vec::with_capacity(shown + 2);
+    out.push(border_row(g, cols, " completions ", theme, true));
+    for (i, name) in suggestions.iter().take(shown).enumerate() {
+        // The first is what Tab takes, so it is the one that looks chosen.
+        let style = if i == 0 { theme.selection.style() } else { theme.panel.style() };
+        out.push(FrameRow {
+            spans: vec![
+                Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() },
+                Span { col: 1, text: pad(&format!(" {name}"), inner + 2), style },
+                Span {
+                    col: (inner + 3) as u16,
+                    text: g.vertical.clone(),
+                    style: theme.panel_border.style(),
+                },
+            ],
             rev: 0,
-        })
-        .collect();
+        });
+    }
+    out.push(border_row(g, cols, "", theme, false));
 
     Some(Widget {
         kind: WidgetKind::Overlay,
@@ -101,6 +110,41 @@ pub fn suggestions(size: CellSize, mode: &Mode) -> Option<Widget> {
     })
 }
 
+/// A top or bottom border, with an optional title set into it.
+pub(crate) fn border_row(
+    g: &crate::theme::Glyphs,
+    cols: usize,
+    title: &str,
+    theme: &Theme,
+    top: bool,
+) -> FrameRow {
+    let (left, right) =
+        if top { (&g.top_left, &g.top_right) } else { (&g.bottom_left, &g.bottom_right) };
+    let inner = cols.saturating_sub(2);
+    let title: String = title.chars().take(inner).collect();
+    let bars = inner - title.chars().count();
+    let before = if title.is_empty() { bars } else { 1.min(bars) };
+    let after = bars - before;
+
+    let mut spans = vec![Span {
+        col: 0,
+        text: format!("{left}{}", g.horizontal.repeat(before)),
+        style: theme.panel_border.style(),
+    }];
+    let mut at = 1 + before;
+    if !title.is_empty() {
+        let width = title.chars().count();
+        spans.push(Span { col: at as u16, text: title, style: theme.panel_title.style() });
+        at += width;
+    }
+    spans.push(Span {
+        col: at as u16,
+        text: format!("{}{right}", g.horizontal.repeat(after)),
+        style: theme.panel_border.style(),
+    });
+    FrameRow { spans, rev: 0 }
+}
+
 /// Build the bar. `now_unix` is passed in rather than read here so the whole
 /// thing stays a pure function and can be tested at a fixed instant.
 pub fn build(
@@ -108,6 +152,7 @@ pub fn build(
     status: Option<&SessionStatus>,
     mode: &Mode,
     now_unix: u64,
+    theme: &Theme,
 ) -> Option<Widget> {
     if size.rows <= ROWS || size.cols == 0 {
         return None;
@@ -117,59 +162,114 @@ pub fn build(
     // A command being typed replaces the bar: what you are typing matters
     // more than what the session is called.
     if let Mode::Command { text, .. } = mode {
-        let line = format!(":{text}");
-        return Some(widget(size, pad(&line, cols), command_style()));
+        let mut spans = Spans::new(cols);
+        spans.push(" : ", theme.bar_session.style());
+        // A block stands in for the cursor, which the pane still owns.
+        spans.push(&format!("{text}\u{2588}"), theme.command.style());
+        spans.fill(theme.command.style());
+        return Some(widget(size, spans.finish()));
     }
 
-    let left = match status {
-        Some(s) => format!(" [{}] ", s.name),
-        None => " [detached] ".to_string(),
-    };
-    let middle = status.map(windows_text).unwrap_or_default();
-    let right = right_text(status, mode, now_unix);
-
-    let mut line = String::new();
-    line.push_str(&left);
-    line.push_str(&middle);
-    // Right-align the clock, or just append it when the bar is too narrow to
-    // align anything.
-    let used = line.chars().count() + right.chars().count();
-    if used < cols {
-        line.push_str(&" ".repeat(cols - used));
+    let mut spans = Spans::new(cols);
+    match status {
+        Some(s) => spans.push(&format!(" {} ", s.name), theme.bar_session.style()),
+        None => spans.push(" detached ", theme.bar_alert.style()),
     }
-    line.push_str(&right);
 
-    Some(widget(size, pad(&line, cols), normal_style()))
-}
-
-fn windows_text(s: &SessionStatus) -> String {
-    let mut out = String::new();
-    for w in &s.windows {
-        let marker = if w.id == s.active_window { "*" } else { " " };
-        let zoom = if w.zoomed { "Z" } else { "" };
-        out.push_str(&format!("{}:{}{}{} ", w.id, w.name, zoom, marker));
-    }
-    out
-}
-
-fn right_text(status: Option<&SessionStatus>, mode: &Mode, now_unix: u64) -> String {
-    let mut parts = Vec::new();
-    if *mode == Mode::Prefix {
-        parts.push("PREFIX".to_string());
-    }
+    // Tabs, each its own span so the current one can be painted rather than
+    // marked with a character the eye has to hunt for.
     if let Some(s) = status {
-        let panes =
-            s.windows.iter().find(|w| w.id == s.active_window).map(|w| w.panes.len()).unwrap_or(0);
-        parts.push(format!("{panes} panes"));
-        if s.clients > 1 {
-            parts.push(format!("{} clients", s.clients));
+        spans.push(" ", theme.bar.style());
+        for w in &s.windows {
+            let active = w.id == s.active_window;
+            let zoom = if w.zoomed { " \u{25a3}" } else { "" };
+            let label = format!(" {}:{}{} ", w.id, w.name, zoom);
+            spans.push(&label, if active { theme.tab_active.style() } else { theme.tab.style() });
+            spans.push(" ", theme.bar.style());
         }
-        parts.push(uptime(now_unix.saturating_sub(s.started_unix)));
     }
-    if parts.is_empty() {
-        return String::new();
+
+    let right = right_text(status, now_unix, theme);
+    let alert = (*mode == Mode::Prefix).then(|| " PREFIX ".to_string());
+    let tail = alert.as_ref().map(|a| a.chars().count()).unwrap_or(0) + right.chars().count();
+    spans.fill_to(cols.saturating_sub(tail), theme.bar.style());
+    if let Some(alert) = alert {
+        spans.push(&alert, theme.bar_alert.style());
     }
-    format!(" {} ", parts.join(" | "))
+    spans.push(&right, theme.bar_dim.style());
+    spans.fill(theme.bar.style());
+
+    Some(widget(size, spans.finish()))
+}
+
+/// Builds one row out of styled runs, tracking how wide it has become so the
+/// right-hand end can be placed exactly.
+struct Spans {
+    cols: usize,
+    used: usize,
+    spans: Vec<Span>,
+}
+
+impl Spans {
+    fn new(cols: usize) -> Self {
+        Self { cols, used: 0, spans: Vec::new() }
+    }
+
+    fn push(&mut self, text: &str, style: Style) {
+        if self.used >= self.cols || text.is_empty() {
+            return;
+        }
+        let room = self.cols - self.used;
+        let text: String = text.chars().take(room).collect();
+        let width = text.chars().count();
+        self.spans.push(Span { col: self.used as u16, text, style });
+        self.used += width;
+    }
+
+    /// Pad with blanks until the row is `target` wide.
+    fn fill_to(&mut self, target: usize, style: Style) {
+        if target > self.used {
+            let n = target - self.used;
+            self.push(&" ".repeat(n), style);
+        }
+    }
+
+    fn fill(&mut self, style: Style) {
+        self.fill_to(self.cols, style);
+    }
+
+    fn finish(self) -> Vec<Span> {
+        self.spans
+    }
+}
+
+fn right_text(status: Option<&SessionStatus>, now_unix: u64, theme: &Theme) -> String {
+    let Some(s) = status else { return String::new() };
+    let panes =
+        s.windows.iter().find(|w| w.id == s.active_window).map(|w| w.panes.len()).unwrap_or(0);
+    let sep = &theme.glyphs.separator;
+    let mut parts = vec![format!("{panes} panes")];
+    if s.clients > 1 {
+        parts.push(format!("{} clients", s.clients));
+    }
+    parts.push(uptime(now_unix.saturating_sub(s.started_unix)));
+    format!(" {} ", parts.join(&format!(" {sep} ")))
+}
+
+fn widget(size: CellSize, spans: Vec<Span>) -> Widget {
+    Widget {
+        kind: WidgetKind::StatusLine,
+        rect: PaneRect {
+            pane: haven_proto::PaneId(u32::MAX),
+            col: 0,
+            row: size.rows - ROWS,
+            cols: size.cols,
+            rows: ROWS,
+        },
+        // The bar is rebuilt every frame — the clock moves on its own — so
+        // there is no revision for a frontend to skip on.
+        rows: vec![FrameRow { spans, rev: 0 }],
+    }
 }
 
 /// Elapsed time, in the largest unit that still says something useful.
@@ -184,41 +284,15 @@ pub fn uptime(secs: u64) -> String {
     }
 }
 
-/// Exactly `cols` columns: a short line would leave the pane row showing
-/// through, and a long one would wrap onto a pane.
-fn pad(line: &str, cols: usize) -> String {
-    let mut out: String = line.chars().take(cols).collect();
+/// Exactly `cols` columns, so a panel row never leaves a pane showing
+/// through it or spills onto the next one.
+pub(crate) fn pad(text: &str, cols: usize) -> String {
+    let mut out: String = text.chars().take(cols).collect();
     let len = out.chars().count();
     if len < cols {
         out.push_str(&" ".repeat(cols - len));
     }
     out
-}
-
-fn widget(size: CellSize, text: String, style: Style) -> Widget {
-    Widget {
-        kind: WidgetKind::StatusLine,
-        rect: PaneRect {
-            pane: haven_proto::PaneId(u32::MAX),
-            col: 0,
-            row: size.rows - ROWS,
-            cols: size.cols,
-            rows: ROWS,
-        },
-        // The bar is rebuilt every frame — the clock moves on its own — so
-        // there is no revision for a frontend to skip on.
-        rows: vec![FrameRow { spans: vec![Span { col: 0, text, style }], rev: 0 }],
-    }
-}
-
-fn normal_style() -> Style {
-    // Bright white on blue. Black on blue is the obvious choice and is
-    // genuinely hard to read: both are dark, and the bar is small text.
-    Style { fg: Color::Indexed(15), bg: Color::Indexed(4), ..Style::default() }
-}
-
-fn command_style() -> Style {
-    Style { fg: Color::Indexed(0), bg: Color::Indexed(3), ..Style::default() }
 }
 
 #[cfg(test)]
@@ -260,8 +334,14 @@ mod tests {
         }
     }
 
+    /// The whole row, as one string: the bar is several styled runs now, so
+    /// a test that looked at only the first span would miss most of it.
     fn text(w: &Widget) -> String {
-        w.rows[0].spans[0].text.clone()
+        w.rows[0].spans.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    fn theme() -> Theme {
+        Theme::haven()
     }
 
     #[test]
@@ -274,23 +354,36 @@ mod tests {
 
     #[test]
     fn the_bar_names_the_session_the_windows_and_the_time() {
-        let w = build(size(60, 24), Some(&status()), &Mode::Normal, 1000 + 125).unwrap();
+        let w = build(size(60, 24), Some(&status()), &Mode::Normal, 1000 + 125, &theme()).unwrap();
         let line = text(&w);
-        assert!(line.contains("[work]"), "no session name: {line:?}");
+        assert!(line.contains("work"), "no session name: {line:?}");
         assert!(line.contains("1:shell"), "no window list: {line:?}");
         assert!(line.contains("2 panes"), "no pane count: {line:?}");
         assert!(line.contains("02:05"), "no uptime: {line:?}");
     }
 
     #[test]
-    fn the_active_window_is_the_marked_one() {
+    fn the_active_tab_is_painted_not_merely_marked() {
+        // It used to be a trailing asterisk the eye had to hunt for. The
+        // current tab now gets its own style, so the test looks at the style
+        // rather than at a character.
         let mut s = status();
         s.active_window = 2;
-        let line = text(&build(size(60, 24), Some(&s), &Mode::Normal, 1000).unwrap());
-        let shell = line.find("1:shell").unwrap();
-        let vim = line.find("2:vim").unwrap();
-        assert_eq!(&line[shell + "1:shell".len()..shell + "1:shell".len() + 1], " ");
-        assert_eq!(&line[vim + "2:vim".len()..vim + "2:vim".len() + 1], "*");
+        let theme = theme();
+        let w = build(size(60, 24), Some(&s), &Mode::Normal, 1000, &theme).unwrap();
+        let active = w.rows[0]
+            .spans
+            .iter()
+            .find(|sp| sp.text.contains("2:vim"))
+            .expect("no span for the active tab");
+        let inactive = w.rows[0]
+            .spans
+            .iter()
+            .find(|sp| sp.text.contains("1:shell"))
+            .expect("no span for the other tab");
+        assert_eq!(active.style, theme.tab_active.style());
+        assert_eq!(inactive.style, theme.tab.style());
+        assert_ne!(active.style, inactive.style);
     }
 
     #[test]
@@ -298,7 +391,8 @@ mod tests {
         // Too narrow to fit everything, and wide enough to spare: both must
         // come out exactly `cols`, or it draws over a pane or leaves a gap.
         for cols in [10u16, 40, 200] {
-            let w = build(size(cols, 24), Some(&status()), &Mode::Normal, 9_999_999).unwrap();
+            let w =
+                build(size(cols, 24), Some(&status()), &Mode::Normal, 9_999_999, &theme()).unwrap();
             assert_eq!(text(&w).chars().count(), cols as usize, "width wrong at {cols}");
         }
     }
@@ -306,13 +400,18 @@ mod tests {
     #[test]
     fn typing_a_command_replaces_the_bar() {
         let mode = Mode::command("split-h".into());
-        let line = text(&build(size(40, 24), Some(&status()), &mode, 1000).unwrap());
-        assert!(line.starts_with(":split-h"), "{line:?}");
+        let line = text(&build(size(40, 24), Some(&status()), &mode, 1000, &theme()).unwrap());
+        // A `:` badge, then what is being typed, then a block for the
+        // cursor — the pane still owns the real one.
+        assert!(line.contains(':'), "no prompt: {line:?}");
+        assert!(line.contains("split-h\u{2588}"), "no text or cursor: {line:?}");
+        assert_eq!(line.chars().count(), 40, "the command line must fill the row");
     }
 
     #[test]
     fn the_prefix_is_visible_while_it_is_armed() {
-        let line = text(&build(size(60, 24), Some(&status()), &Mode::Prefix, 1000).unwrap());
+        let line =
+            text(&build(size(60, 24), Some(&status()), &Mode::Prefix, 1000, &theme()).unwrap());
         assert!(line.contains("PREFIX"), "{line:?}");
     }
 
@@ -326,7 +425,7 @@ mod tests {
 
     #[test]
     fn a_detached_bar_still_fills_the_row() {
-        let w = build(size(30, 24), None, &Mode::Normal, 0).unwrap();
+        let w = build(size(30, 24), None, &Mode::Normal, 0, &theme()).unwrap();
         assert_eq!(text(&w).chars().count(), 30);
     }
 }
@@ -334,6 +433,7 @@ mod tests {
 #[cfg(test)]
 mod suggestion_tests {
     use super::*;
+    use crate::theme::Theme;
 
     fn size(cols: u16, rows: u16) -> CellSize {
         CellSize { cols, rows, pixel_width: 0, pixel_height: 0 }
@@ -349,23 +449,25 @@ mod suggestion_tests {
     #[test]
     fn the_box_sits_directly_above_the_bar() {
         let m = mode("s", &["split-h", "split-v", "select-window"]);
-        let w = suggestions(size(80, 24), &m).expect("box");
+        let w = suggestions(size(80, 24), &m, &Theme::haven()).expect("box");
         assert_eq!(w.rect.row + w.rect.rows, 24 - ROWS, "not flush with the bar");
-        assert_eq!(w.rows.len(), 3);
+        // Three entries plus a border above and below.
+        assert_eq!(w.rows.len(), 5);
     }
 
     #[test]
     fn nothing_to_choose_means_no_box() {
-        assert!(suggestions(size(80, 24), &mode("zoom", &[])).is_none());
+        let t = Theme::haven();
+        assert!(suggestions(size(80, 24), &mode("zoom", &[]), &t).is_none());
         // One candidate that is already what was typed is not a suggestion.
-        assert!(suggestions(size(80, 24), &mode("zoom", &["zoom"])).is_none());
-        assert!(suggestions(size(80, 24), &Mode::Normal).is_none());
+        assert!(suggestions(size(80, 24), &mode("zoom", &["zoom"]), &t).is_none());
+        assert!(suggestions(size(80, 24), &Mode::Normal, &t).is_none());
     }
 
     #[test]
     fn the_box_stays_inside_a_short_screen() {
         let names: Vec<&str> = vec!["a", "b", "c", "d", "e", "f"];
-        let w = suggestions(size(20, 4), &mode("", &names)).expect("box");
+        let w = suggestions(size(20, 4), &mode("", &names), &Theme::haven()).expect("box");
         assert!(w.rect.row + w.rect.rows <= 4 - ROWS);
     }
 }

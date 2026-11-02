@@ -7,13 +7,14 @@
 use haven_core::{Cell, Cursor, Style};
 use serde::{Deserialize, Serialize};
 
+pub mod theme;
 pub mod transport;
 
 pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -270,6 +271,10 @@ pub enum ServerMsg {
         pane: PaneId,
         status: i32,
     },
+    /// What the interface is painted with. Sent on attach and again whenever
+    /// the daemon's configuration changes, so editing a theme reaches every
+    /// attached client without reattaching.
+    Theme(Box<theme::Theme>),
     /// Session, window and pane facts for the status line.
     Status(SessionStatus),
     /// Reply to [`ClientMsg::ListSessions`].

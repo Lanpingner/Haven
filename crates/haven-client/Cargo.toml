@@ -10,6 +10,7 @@ license.workspace = true
 bitflags = "2.13.2"
 haven-core.workspace = true
 haven-proto.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
 
 [lints]
 workspace = true

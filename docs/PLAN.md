@@ -1118,7 +1118,25 @@ command names keep tmux's `window` (with `new-tab` and friends accepted as
 aliases). The session tree therefore has three levels, not four: the desktop
 window is what is looking at it.
 
+The interface is themed, and a theme is *data* rather than code, which is why
+it did not wait for the plugin host. The daemon owns the config file and sends
+`ServerMsg::Theme` on attach and whenever the file's timestamp moves, so an
+edit repaints every attached client without a reattach. Two types, not one:
+the wire `Theme` is a fixed struct of plain `Color`s, and the daemon's
+`ThemeFile` is all-optional with string colours. They were briefly the same
+type, which does not work — postcard is not self-describing and cannot
+deserialize the untagged colour that makes a config file pleasant to write.
+
 **Bugs this work surfaced, worth remembering:**
+- Box drawing vanished wherever a panel gave it a background. Procedural box
+  drawing and background rectangles shared one quad buffer, and a background
+  run is flushed when it *ends* — after the cells it covers have been drawn —
+  so it painted over every line beneath it. Panes never showed it because
+  their lines sit on the default background, which emits no quad at all.
+  Backgrounds are collected separately now and drawn underneath.
+- Rounded corners are outside `U+2500-259F`, so they fall back to the font and
+  leave a gap where they should meet the line the renderer drew itself. The
+  default glyphs are square for that reason.
 - `PROTOCOL_VERSION` was never read. The client ignored it in `Hello`, so
   version skew was only noticed when some later message failed to decode — in
   whichever code path first asked for one. Attaching to a daemon from an older
