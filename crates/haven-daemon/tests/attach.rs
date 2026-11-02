@@ -84,7 +84,9 @@ fn attaching_delivers_a_layout_and_a_snapshot() {
     let pane = client.focus.expect("focus");
     let frame = client.frame.pane(pane).expect("pane in frame");
     assert_eq!(frame.rect.cols, 40, "the pane should fill the client");
-    assert_eq!(frame.rows.len(), 8);
+    // One row fewer than the client's screen: the client keeps the bottom
+    // row for its status line and never offers it to the daemon.
+    assert_eq!(frame.rows.len(), 7, "the status line's row was given to a pane");
 }
 
 #[test]
@@ -232,4 +234,33 @@ fn colours_survive_the_round_trip_through_the_protocol() {
     let frame = client.frame.pane(pane).unwrap();
     let span = frame.rows[0].spans.iter().find(|s| s.text.contains("GREEN")).expect("span");
     assert_eq!(span.style.fg, Color::Rgb(Rgb::new(10, 200, 30)), "truecolor was lost on the wire");
+}
+
+#[test]
+fn the_status_reaches_the_client_and_follows_the_layout() {
+    let mut daemon = daemon();
+    let mut client = attach(&mut daemon, 40, 8);
+
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| c[0].frame.status.is_some()),
+        "no status ever arrived"
+    );
+    let status = client.frame.status.clone().expect("status");
+    assert_eq!(status.windows.len(), 1);
+    assert_eq!(status.windows[0].panes, 1);
+    assert_eq!(status.active_window, status.windows[0].id);
+    assert!(status.started_unix > 0, "no start time to measure uptime from");
+
+    // Splitting must be reflected: a status pinned to the first layout would
+    // leave the pane count permanently wrong.
+    send_action(&mut client, Action::SplitColumns).expect("split");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| c[0]
+            .frame
+            .status
+            .as_ref()
+            .is_some_and(|s| s.windows[0].panes == 2)),
+        "the status did not follow the split: {:?}",
+        client.frame.status
+    );
 }

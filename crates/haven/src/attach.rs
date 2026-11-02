@@ -9,7 +9,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use haven_client::input::KeyEvent;
+use haven_client::input::{Key, KeyEvent, Modifiers, NamedKey};
+use haven_client::status_bar::Mode;
 use haven_client::{Client, Intercepted, Tick};
 use haven_proto::transport::SocketTransport;
 use haven_proto::{ClientMsg, SessionId, Transport};
@@ -49,28 +50,81 @@ pub fn connect_or_start(socket: &Path) -> io::Result<SocketTransport> {
 }
 
 /// The prefix key table, as a filter the client consults per keystroke.
-fn key_filter() -> impl FnMut(&KeyEvent) -> Intercepted {
-    let mut armed = false;
-    move |event: &KeyEvent| {
-        if armed {
-            armed = false;
-            return match keys::prefix_table(event) {
-                Some(Action::Detach) => Intercepted::Detach,
-                Some(Action::SendPrefix) => Intercepted::Pass,
-                Some(action) => match keys::to_proto(action) {
-                    Some(wire) => Intercepted::Act(wire),
+/// The client's key handling: a prefix table, and a command line behind `:`.
+///
+/// The mode is the client's, not this closure's, because the status line
+/// shows it. Everything resolves to the same [`keys::Action`], so a typed
+/// command and a bound key cannot drift apart.
+fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
+    move |event: &KeyEvent, mode: &mut Mode| {
+        match mode {
+            Mode::Command(buffer) => {
+                return match &event.key {
+                    Key::Named(NamedKey::Escape) => {
+                        *mode = Mode::Normal;
+                        Intercepted::Consumed
+                    }
+                    Key::Named(NamedKey::Backspace) => {
+                        if buffer.pop().is_none() {
+                            *mode = Mode::Normal;
+                        }
+                        Intercepted::Consumed
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        let line = buffer.clone();
+                        *mode = Mode::Normal;
+                        run_command(&line)
+                    }
+                    Key::Char(c) if !event.mods.contains(Modifiers::CTRL) => {
+                        buffer.push(*c);
+                        Intercepted::Consumed
+                    }
+                    _ => Intercepted::Consumed,
+                };
+            }
+            Mode::Prefix => {
+                *mode = Mode::Normal;
+                return match keys::prefix_table(event) {
+                    Some(Action::EnterCommand) => {
+                        *mode = Mode::Command(String::new());
+                        Intercepted::Consumed
+                    }
+                    Some(Action::Detach) => Intercepted::Detach,
+                    Some(Action::SendPrefix) => Intercepted::Pass,
+                    Some(action) => match keys::to_proto(action) {
+                        Some(wire) => Intercepted::Act(wire),
+                        None => Intercepted::Consumed,
+                    },
+                    // An unbound key after the prefix does nothing rather
+                    // than leaking into the pane.
                     None => Intercepted::Consumed,
-                },
-                // An unbound key after the prefix does nothing rather than
-                // leaking into the pane.
-                None => Intercepted::Consumed,
-            };
+                };
+            }
+            Mode::Normal => {}
         }
         if keys::is_prefix(event) {
-            armed = true;
+            *mode = Mode::Prefix;
             return Intercepted::Consumed;
         }
         Intercepted::Pass
+    }
+}
+
+/// Execute a typed command line.
+///
+/// An empty line is a no-op rather than an error: pressing Enter on nothing
+/// is how people cancel.
+fn run_command(line: &str) -> Intercepted {
+    if line.trim().is_empty() {
+        return Intercepted::Consumed;
+    }
+    match keys::parse_command(line.trim()) {
+        Ok(Action::Detach) => Intercepted::Detach,
+        Ok(action) => match keys::to_proto(action) {
+            Some(wire) => Intercepted::Act(wire),
+            None => Intercepted::Consumed,
+        },
+        Err(_) => Intercepted::Consumed,
     }
 }
 

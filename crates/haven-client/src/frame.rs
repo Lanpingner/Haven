@@ -104,6 +104,8 @@ pub struct FrameModel {
     /// Which pane has focus, mirrored from the layout. A frontend needs it to
     /// know whose cursor to draw.
     pub focus: Option<PaneId>,
+    /// Session facts for the status line, as the daemon last reported them.
+    pub status: Option<haven_proto::SessionStatus>,
     /// Out-of-band message to show the user (version skew, server gone).
     pub notice: Option<String>,
     /// Bumped whenever anything changed, for frontends that cache aggressively.
@@ -117,6 +119,7 @@ impl FrameModel {
             panes: BTreeMap::new(),
             widgets: Vec::new(),
             palette: Palette::default(),
+            status: None,
             focus: None,
             notice: None,
             generation: 0,

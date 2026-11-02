@@ -13,7 +13,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -268,6 +268,8 @@ pub enum ServerMsg {
         pane: PaneId,
         status: i32,
     },
+    /// Session, window and pane facts for the status line.
+    Status(SessionStatus),
     /// Reply to [`ClientMsg::ListSessions`].
     Sessions {
         sessions: Vec<SessionInfo>,
@@ -279,6 +281,30 @@ pub enum ServerMsg {
     Refused {
         reason: String,
     },
+}
+
+/// What a status line needs, which is more than a pane's contents.
+///
+/// Sent whenever the layout changes rather than on a timer: the one part that
+/// moves on its own is the clock, and a client can read that itself from
+/// `started_unix` without the daemon waking up to tell it.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct SessionStatus {
+    pub session: SessionId,
+    pub name: String,
+    pub windows: Vec<WindowInfo>,
+    pub active_window: u32,
+    /// When the session was created, in seconds since the epoch.
+    pub started_unix: u64,
+    pub clients: u16,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct WindowInfo {
+    pub id: u32,
+    pub name: String,
+    pub panes: u16,
+    pub zoomed: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]

@@ -26,6 +26,8 @@ pub enum Action {
     Detach,
     /// Send the prefix key itself to the pane.
     SendPrefix,
+    /// Open the command line.
+    EnterCommand,
 }
 
 /// Ctrl+A, like screen and like most tmux configurations in the wild.
@@ -39,6 +41,7 @@ pub fn is_prefix(event: &KeyEvent) -> bool {
 pub fn prefix_table(event: &KeyEvent) -> Option<Action> {
     let shift = event.mods.contains(Modifiers::SHIFT);
     Some(match event.key {
+        Key::Char(':') => Action::EnterCommand,
         Key::Char('%') => Action::SplitColumns,
         Key::Char('"') => Action::SplitRows,
         Key::Char('x') => Action::ClosePane,
@@ -76,6 +79,43 @@ pub fn prefix_table(event: &KeyEvent) -> Option<Action> {
     })
 }
 
+/// Parse a typed command line.
+///
+/// The names are the long forms of the prefix keys rather than a new
+/// vocabulary: anything a binding can do, a typed command can do, because
+/// both resolve to the same [`Action`] (`docs/PLAN.md` §11.2).
+pub fn parse_command(line: &str) -> Result<Action, String> {
+    let mut parts = line.split_whitespace();
+    let Some(verb) = parts.next() else {
+        return Err(String::new());
+    };
+    let arg = parts.next();
+    Ok(match verb {
+        "split-h" | "splitw" | "sp" => Action::SplitRows,
+        "split-v" | "vsplit" | "vs" => Action::SplitColumns,
+        "new-window" | "neww" => Action::NewWindow,
+        "next" | "next-window" => Action::NextWindow,
+        "prev" | "previous-window" => Action::PreviousWindow,
+        "kill-pane" | "killp" => Action::ClosePane,
+        "zoom" => Action::ToggleZoom,
+        "detach" | "det" => Action::Detach,
+        "even-horizontal" => Action::ApplyLayout(NamedLayout::EvenHorizontal),
+        "even-vertical" => Action::ApplyLayout(NamedLayout::EvenVertical),
+        "tiled" => Action::ApplyLayout(NamedLayout::Tiled),
+        "select-window" | "selectw" => {
+            let n: usize = arg
+                .ok_or_else(|| "select-window needs a number".to_string())?
+                .parse()
+                .map_err(|_| "select-window needs a number".to_string())?;
+            if n == 0 {
+                return Err("windows are numbered from 1".into());
+            }
+            Action::SelectWindow(n - 1)
+        }
+        other => return Err(format!("unknown command: {other}")),
+    })
+}
+
 /// Map a local action onto the wire enum. `None` means the action is handled
 /// client-side (detaching, say) rather than by the daemon.
 pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
@@ -100,7 +140,7 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::ApplyLayout(NamedLayout::EvenHorizontal) => P::EvenHorizontal,
         Action::ApplyLayout(NamedLayout::EvenVertical) => P::EvenVertical,
         Action::ApplyLayout(NamedLayout::Tiled) => P::Tiled,
-        Action::Detach | Action::SendPrefix => return None,
+        Action::Detach | Action::SendPrefix | Action::EnterCommand => return None,
     })
 }
 

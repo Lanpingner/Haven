@@ -42,6 +42,9 @@ type Spawner = Box<dyn FnMut(PtySize) -> io::Result<Pty>>;
 
 struct SessionHost {
     name: String,
+    /// For the status line's "time open". Wall clock rather than `Instant`,
+    /// so a client can render it without the daemon ticking.
+    started_unix: u64,
     runtime: MuxRuntime<Spawner>,
     policy: ResizePolicy,
     /// The size last applied, so we only resize when it actually changes.
@@ -53,6 +56,10 @@ struct Client {
     caps: ClientCaps,
     session: Option<u32>,
     sync: SyncState,
+    /// The status last sent. Window names come from pane titles, which arrive
+    /// after the first layout and change while the layout does not, so tying
+    /// the status to layout changes left the names stuck at their ids.
+    last_status: Option<haven_proto::SessionStatus>,
 }
 
 /// The server.
@@ -160,6 +167,7 @@ impl Daemon {
             caps: ClientCaps::null(CellSize::default()),
             session: None,
             sync: SyncState::default(),
+            last_status: None,
         });
         Ok(())
     }
@@ -355,6 +363,7 @@ impl Daemon {
             id,
             SessionHost {
                 name: format!("haven-{id}"),
+                started_unix: unix_now(),
                 runtime,
                 policy: self.policy,
                 applied: Some(caps.size),
@@ -492,10 +501,18 @@ impl Daemon {
     }
 
     fn sync_clients(&mut self) -> io::Result<()> {
+        // Counted once: the status line reports how many clients share the
+        // session, and that is a property of the session, not of the reader.
+        let mut attached: std::collections::HashMap<u32, u16> = std::collections::HashMap::new();
+        for client in &self.clients {
+            if let Some(id) = client.session {
+                *attached.entry(id).or_default() += 1;
+            }
+        }
         for client in &mut self.clients {
             let Some(id) = client.session else { continue };
             let Some(host) = self.sessions.get(&id) else { continue };
-            sync_one(client, host);
+            sync_one(client, host, attached.get(&id).copied().unwrap_or(0));
         }
         Ok(())
     }
@@ -517,8 +534,59 @@ impl Drop for Daemon {
     }
 }
 
+/// A window name has to share one row with everything else, so take the last
+/// path component and cap it.
+fn short_title(title: &str) -> String {
+    let tail = title.rsplit('/').next().unwrap_or(title).trim();
+    let tail = if tail.is_empty() { title.trim() } else { tail };
+    tail.chars().take(16).collect()
+}
+
+/// Seconds since the epoch, or `0` if the clock is before it.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+impl SessionHost {
+    /// What the status line needs. Window names fall back to the active
+    /// pane's title, which is what a shell sets and what a user recognises.
+    fn status(&self, clients: u16) -> haven_proto::SessionStatus {
+        let session = &self.runtime.session;
+        let windows = session
+            .windows
+            .iter()
+            .map(|w| haven_proto::WindowInfo {
+                id: w.id.0,
+                // An explicit name wins; otherwise the active pane's title,
+                // which is what the shell sets and what the user recognises.
+                // The id alone tells nobody which window is which.
+                name: w.title.clone().unwrap_or_else(|| {
+                    self.runtime
+                        .pane(w.active)
+                        .and_then(|p| p.title())
+                        .map(short_title)
+                        .unwrap_or_else(|| format!("{}", w.id.0))
+                }),
+                panes: w.root.panes().len().min(u16::MAX as usize) as u16,
+                zoomed: w.zoomed.is_some(),
+            })
+            .collect();
+        haven_proto::SessionStatus {
+            session: session.id,
+            name: self.name.clone(),
+            windows,
+            active_window: session.windows.get(session.active).map(|w| w.id.0).unwrap_or(0),
+            started_unix: self.started_unix,
+            clients,
+        }
+    }
+}
+
 /// Bring one client up to date with one session.
-fn sync_one(client: &mut Client, host: &SessionHost) {
+fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
     let layout = host.runtime.session.layout(host.runtime.size());
     if client.sync.layout_changed(&layout) {
         let _ = client.framed.queue(&ServerMsg::Layout(layout.clone()));
@@ -530,6 +598,12 @@ fn sync_one(client: &mut Client, host: &SessionHost) {
                 let _ = client.framed.queue(&ServerMsg::PaneExited { pane, status: 0 });
             }
         }
+    }
+
+    let status = host.status(clients);
+    if client.last_status.as_ref() != Some(&status) {
+        let _ = client.framed.queue(&ServerMsg::Status(status.clone()));
+        client.last_status = Some(status);
     }
 
     for (rect, pane) in host.runtime.visible() {

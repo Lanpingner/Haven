@@ -1093,6 +1093,13 @@ and theming (M7), sixel/kitty graphics.
 - `haven attach` has no detach-and-leave-running key beyond `Ctrl+A d`, and no
   session naming yet (`-t` takes an id).
 
+Status line and command line (part of M4) are in: the client keeps the bottom
+row, builds the bar as a `WidgetKind::StatusLine` — the same mechanism a
+plugin will use — and the daemon sends a `SessionStatus` whenever it changes.
+Window names fall back to the active pane's title, which is why the status is
+sent on change rather than on layout change: titles arrive later than layouts
+and move while the layout does not.
+
 **Bugs this work surfaced, worth remembering:**
 - `ED`/`EL` treated parameter `0` as "absent", shifting every erase mode by one
   and breaking `[1K`/`[2K`. Caught by a tab-stop test, not by the erase tests.

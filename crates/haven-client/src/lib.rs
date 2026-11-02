@@ -9,6 +9,7 @@
 pub mod frame;
 pub mod frontend;
 pub mod input;
+pub mod status_bar;
 
 pub use frame::{FrameModel, PaneFrame, Span, Widget, WidgetKind};
 pub use frontend::{Frontend, NullFrontend, PresentError, ScriptedFrontend};
@@ -37,7 +38,11 @@ pub enum Intercepted {
 }
 
 /// Decides what a keystroke means before it reaches a pane.
-pub type KeyFilter = Box<dyn FnMut(&KeyEvent) -> Intercepted>;
+///
+/// The mode is passed in rather than captured, because it is not private to
+/// the filter: the status line has to show whether the prefix is armed and
+/// what is being typed, and two copies of that state would drift.
+pub type KeyFilter = Box<dyn FnMut(&KeyEvent, &mut status_bar::Mode) -> Intercepted>;
 
 /// What the client decided to do with one iteration, so a frontend's main loop
 /// (winit's, or a termios read loop) can act without re-deriving it.
@@ -64,6 +69,9 @@ pub struct Client<F, T> {
     pub clipboard: Option<String>,
     /// Consulted for every keystroke before it is sent to a pane.
     pub key_filter: Option<KeyFilter>,
+    /// What the client is doing with keystrokes: passing them on, holding the
+    /// prefix, or collecting a command.
+    pub mode: status_bar::Mode,
     /// Last session listing received, for `haven ls`.
     pub sessions: Vec<haven_proto::SessionInfo>,
     attached: bool,
@@ -84,6 +92,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
     pub fn new(frontend: F, transport: T) -> Self {
         let caps = frontend.caps();
         let (size, tier) = (caps.size, caps.key_tier);
+        let _ = &size;
         Self {
             frontend,
             transport,
@@ -92,6 +101,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             encoder: KeyEncoder::new(tier),
             clipboard: None,
             key_filter: None,
+            mode: status_bar::Mode::Normal,
             sessions: Vec::new(),
             attached: false,
         }
@@ -103,10 +113,29 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         &mut self,
         session: Option<haven_proto::SessionId>,
     ) -> Result<(), TransportError> {
-        let caps = self.frontend.caps();
+        let mut caps = self.frontend.caps();
+        self.frame.size = caps.size;
+        caps.size = status_bar::reserve(caps.size);
         self.transport.send(ClientMsg::Attach { session, caps })?;
         self.attached = true;
         Ok(())
+    }
+
+    /// Rebuild the status line into the frame's widgets.
+    ///
+    /// Done every redraw rather than on change, because the clock moves with
+    /// no message to prompt it, and the bar is one row of text.
+    fn rebuild_status(&mut self) {
+        self.frame.widgets.retain(|w| w.kind != frame::WidgetKind::StatusLine);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Some(bar) =
+            status_bar::build(self.frame.size, self.frame.status.as_ref(), &self.mode, now)
+        {
+            self.frame.widgets.push(bar);
+        }
     }
 
     pub fn is_attached(&self) -> bool {
@@ -140,6 +169,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         }
 
         if outcome == Tick::Redraw {
+            self.rebuild_status();
             // A present failure is the frontend's problem to report; it must
             // not take down the session.
             let _ = self.frontend.present(&self.frame);
@@ -156,13 +186,20 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
             InputEvent::Resize(size) => {
                 let mut caps = self.frontend.caps();
-                caps.size = size;
                 self.frame.size = size;
+                // The daemon lays panes out in the space it is told about, so
+                // the row the status line occupies is simply never offered.
+                caps.size = status_bar::reserve(size);
                 self.transport.send(ClientMsg::Resize { caps })?;
                 Ok(Tick::Redraw)
             }
             InputEvent::Key(key) => {
-                match self.key_filter.as_mut().map(|f| f(&key)) {
+                // Taken out and put back so the filter can borrow the mode
+                // mutably without borrowing the whole client.
+                let mut filter = self.key_filter.take();
+                let verdict = filter.as_mut().map(|f| f(&key, &mut self.mode));
+                self.key_filter = filter;
+                match verdict {
                     Some(Intercepted::Consumed) => return Ok(Tick::Redraw),
                     Some(Intercepted::Act(action)) => {
                         self.transport.send(ClientMsg::Action(action))?;
@@ -233,6 +270,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             ServerMsg::Bell { .. } => true,
             ServerMsg::PaneExited { pane, .. } => {
                 self.frame.remove_pane(pane);
+                true
+            }
+            ServerMsg::Status(status) => {
+                self.frame.status = Some(status);
                 true
             }
             ServerMsg::Sessions { sessions, .. } => {

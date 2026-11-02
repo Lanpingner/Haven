@@ -52,7 +52,31 @@ cargo run -p haven -- shell-info
 | `c` / `n` / `p` / `1`-`9` | new window / next / previous / select |
 | `e` / `E` / `t` | even-horizontal / even-vertical / tiled layout |
 | `d` | detach |
+| `:` | open the command line |
 | `Ctrl+A` | send a literal `Ctrl+A` |
+
+### Command line
+
+`Ctrl+A` `:` opens a command line on the status bar. Commands resolve to the
+same actions the keys do, so nothing is reachable one way and not the other.
+
+| Command | Does |
+| --- | --- |
+| `split-h` / `split-v` | split into rows / columns |
+| `new-window`, `next`, `prev` | window management |
+| `select-window <n>` | go to window *n* (numbered from 1) |
+| `kill-pane`, `zoom`, `detach` | as the keys do |
+| `even-horizontal`, `even-vertical`, `tiled` | layouts |
+
+`Esc` cancels, `Backspace` on an empty line leaves the mode.
+
+### Status bar
+
+The bottom row shows the session name, its windows with the active one marked
+(`*`, plus `Z` when zoomed), the pane count, how many clients are attached
+when more than one, and how long the session has been open. The client keeps
+that row for itself and never offers it to the daemon, so no pane is ever laid
+out underneath it.
 
 ## Layout
 

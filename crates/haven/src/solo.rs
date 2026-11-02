@@ -186,7 +186,9 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
             mux.select_window(index)?;
         }
         Action::ApplyLayout(layout) => mux.apply_named_layout(layout)?,
-        Action::Detach | Action::SendPrefix => {}
+        // Standalone mode has no command line yet; the prefix table is the
+        // whole interface there.
+        Action::Detach | Action::SendPrefix | Action::EnterCommand => {}
     }
     Ok(false)
 }

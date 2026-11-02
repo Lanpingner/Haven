@@ -124,9 +124,13 @@ fn resize_updates_caps_and_tells_the_server() {
     let mut client = Client::new(frontend, ScriptedTransport::new([]));
     assert_eq!(client.tick().unwrap(), Tick::Redraw);
     match &client.transport.sent[0] {
-        ClientMsg::Resize { caps } => assert_eq!(caps.size, size(100, 30)),
+        // The daemon is told about one row fewer than the screen has: the
+        // bottom row belongs to the status line, and a pane laid out there
+        // would be drawn over every frame.
+        ClientMsg::Resize { caps } => assert_eq!(caps.size, size(100, 29)),
         other => panic!("expected a resize, got {other:?}"),
     }
+    // The frontend still draws the whole screen.
     assert_eq!(client.frame.size, size(100, 30));
 }
 
