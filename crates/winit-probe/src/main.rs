@@ -45,6 +45,9 @@ options:
                         cause is winit or X, not the renderer.
   --present-mode <m>    fifo (default), mailbox, immediate, auto-vsync,
                         auto-no-vsync. `fifo` is vsync and the suspect.
+  --backend <b>         vulkan, gl, or all (default). On X11 a Vulkan
+                        swapchain can block for seconds on a window the WM
+                        has unmapped; GL goes through a different path.
   --skip-occluded       stop drawing while the window is hidden, which is what
                         a fixed application should do.
   --continuous          redraw as fast as possible instead of only when asked,
@@ -98,6 +101,7 @@ struct Options {
     poll: bool,
     stall: Duration,
     seconds: Option<u64>,
+    backends: wgpu::Backends,
 }
 
 impl Default for Options {
@@ -110,6 +114,7 @@ impl Default for Options {
             poll: false,
             stall: Duration::from_millis(100),
             seconds: None,
+            backends: wgpu::Backends::all(),
         }
     }
 }
@@ -126,6 +131,15 @@ fn parse_args() -> Result<Options, String> {
             "--present-mode" => {
                 let v = it.next().ok_or("--present-mode needs a value")?;
                 o.present = PresentArg::parse(&v).ok_or(format!("unknown present mode {v:?}"))?;
+            }
+            "--backend" => {
+                let v = it.next().ok_or("--backend needs a value")?;
+                o.backends = match v.as_str() {
+                    "vulkan" => wgpu::Backends::VULKAN,
+                    "gl" => wgpu::Backends::GL,
+                    "all" => wgpu::Backends::all(),
+                    other => return Err(format!("unknown backend {other:?}")),
+                };
             }
             "--seconds" => {
                 let v = it.next().ok_or("--seconds needs a value")?;
@@ -243,6 +257,17 @@ impl App {
         eprintln!("[{:>7}ms] {msg}", millis(self.start));
     }
 
+    /// What the window itself claims. `Occluded` is driven by X11's
+    /// `VisibilityNotify`, which an *unmapped* window never sends — so under a
+    /// tag-switching WM it never fires and cannot be the signal for "stop
+    /// drawing". If `is_visible()` tracks the unmap, it can be.
+    fn visibility(&self) -> String {
+        match self.window.as_ref().and_then(|w| w.is_visible()) {
+            Some(v) => format!("is_visible={v}"),
+            None => "is_visible=unknown".to_string(),
+        }
+    }
+
     /// Run `f`, timing it, and say so if it took long enough to be a freeze.
     fn timed<T>(&mut self, what: &'static str, f: impl FnOnce(&mut Self) -> T) -> T {
         *self.beat.doing.lock().unwrap() = what;
@@ -253,7 +278,8 @@ impl App {
         self.beat.busy_since.store(0, Ordering::Relaxed);
         let ms = took.as_millis() as u64;
         if took >= self.opts.stall {
-            self.log(format!("SLOW: {what} took {ms}ms"));
+            let vis = self.visibility();
+            self.log(format!("SLOW: {what} took {ms}ms ({vis})"));
         }
         if ms > self.worst.0 {
             self.worst = (ms, what);
@@ -265,7 +291,10 @@ impl App {
 
     fn init_gpu(&mut self, window: Arc<Window>) {
         let size = window.inner_size();
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: self.opts.backends,
+            ..Default::default()
+        });
         let surface = match instance.create_surface(window) {
             Ok(s) => s,
             Err(e) => {
@@ -450,8 +479,9 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Occluded(occluded) => {
                 self.occluded = occluded;
+                let vis = self.visibility();
                 self.log(format!(
-                    "Occluded({occluded}){}",
+                    "Occluded({occluded}) {vis}{}",
                     if self.opts.skip_occluded { " — will stop drawing" } else { "" }
                 ));
                 if !occluded {
@@ -460,7 +490,10 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            WindowEvent::Focused(f) => self.log(format!("Focused({f})")),
+            WindowEvent::Focused(f) => {
+                let vis = self.visibility();
+                self.log(format!("Focused({f}) {vis}"));
+            }
             WindowEvent::Resized(size) => {
                 self.log(format!("Resized({}x{})", size.width, size.height));
                 if let Some(gpu) = &mut self.gpu {
