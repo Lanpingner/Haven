@@ -207,6 +207,10 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     // Capital P: `p` is already the previous tab, and last-wins would have
     // quietly taken it away.
     ("P", "command-palette"),
+    // Also on the prefix, not only on `Alt+C`. A feature reachable solely
+    // through a modifier combination is at the mercy of whatever else on the
+    // desktop wants that combination.
+    ("g", "choose-shell"),
     ("h", "focus-left"),
     ("j", "focus-down"),
     ("k", "focus-up"),

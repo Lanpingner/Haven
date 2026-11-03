@@ -81,6 +81,7 @@ then whatever else `/etc/shells` holds.
 | `D` | detach every other client |
 | `Ctrl+S` / `Ctrl+R` | save every session / build back the saved ones |
 | `P` | the command palette |
+| `g` | open a pane and choose what runs in it |
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree: sessions, windows, panes |

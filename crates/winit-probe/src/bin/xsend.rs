@@ -24,23 +24,35 @@ fn main() {
     // With no window manager running there is nothing to give a window the
     // input focus, and XTEST delivers to whatever has it — so without this
     // every keystroke goes to the root and the test silently proves nothing.
+    // With a window manager running, the WM has already given focus to the
+    // window it mapped, and picking "the first viewable child of root"
+    // instead lands on one of the WM's own windows — so every keystroke goes
+    // somewhere invisible and the test proves nothing.
     let root = conn.setup().roots[screen_num].root;
-    if let Some(tree) = conn.query_tree(root).ok().and_then(|c| c.reply().ok()) {
-        for child in tree.children {
-            let viewable = conn
-                .get_window_attributes(child)
-                .ok()
-                .and_then(|c| c.reply().ok())
-                .map(|a| a.map_state == xproto::MapState::VIEWABLE)
-                .unwrap_or(false);
-            if viewable {
-                let _ =
-                    conn.set_input_focus(xproto::InputFocus::PARENT, child, x11rb::CURRENT_TIME);
-                let _ = conn.flush();
-                eprintln!("xsend: focused window 0x{child:x}");
-                break;
+    if std::env::var_os("XSEND_KEEP_FOCUS").is_none() {
+        if let Some(tree) = conn.query_tree(root).ok().and_then(|c| c.reply().ok()) {
+            for child in tree.children {
+                let viewable = conn
+                    .get_window_attributes(child)
+                    .ok()
+                    .and_then(|c| c.reply().ok())
+                    .map(|a| a.map_state == xproto::MapState::VIEWABLE)
+                    .unwrap_or(false);
+                if viewable {
+                    let _ = conn.set_input_focus(
+                        xproto::InputFocus::PARENT,
+                        child,
+                        x11rb::CURRENT_TIME,
+                    );
+                    let _ = conn.flush();
+                    eprintln!("xsend: focused window 0x{child:x}");
+                    break;
+                }
             }
         }
+    }
+    if let Some(reply) = conn.get_input_focus().ok().and_then(|c| c.reply().ok()) {
+        eprintln!("xsend: input focus is 0x{:x}", reply.focus);
     }
 
     let setup = conn.setup();

@@ -34,6 +34,7 @@ rather than a code change.
 | `D` | detach every other client |
 | `Ctrl+S` / `Ctrl+R` | [save](./sessions.md) every session / build back the saved ones |
 | `P` | the command palette |
+| `g` | open a pane and [choose what runs in it](./sessions.md#choosing-a-shell) |
 | `[` / `]` | enter copy mode / paste the newest buffer |
 | `d` | detach |
 | `:` | open the command line |

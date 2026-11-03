@@ -88,7 +88,10 @@ that will not exist again.
 
 ## Choosing a shell
 
-`Alt+C` — no prefix — opens a new pane and asks what to run in it. Arrows or
+`Alt+C` — no prefix — opens a new pane and asks what to run in it, and so
+does `Ctrl+A` `g`. Two ways in on purpose: a feature reachable only through
+a modifier combination is at the mercy of whatever else on the desktop wants
+that combination. Arrows or
 `j`/`k` to move, a digit to take one outright, `Enter` for the highlighted one,
 `Esc` to drop it.
 
