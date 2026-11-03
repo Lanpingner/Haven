@@ -43,6 +43,10 @@ pub enum Intercepted {
     /// Show the session tree. The client owns it, because only the client
     /// holds both the session listing and the attached session's windows.
     OpenChooser,
+    /// Make a session and move to it. The client owns this for the same
+    /// reason it owns attaching: the daemon has to be told this client's
+    /// size, and only the frontend knows it.
+    NewSession,
 }
 
 /// Decides what a keystroke means before it reaches a pane.
@@ -198,6 +202,19 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         self.chooser = Some(next);
     }
 
+    /// Ask the daemon for a new session and move this client to it.
+    ///
+    /// The panes we hold belong to the session we are leaving, so they go
+    /// now rather than lingering under the new one's layout.
+    pub fn new_session(&mut self, name: Option<String>) -> Result<(), TransportError> {
+        let mut caps = self.frontend.caps();
+        caps.size = status_bar::reserve(caps.size);
+        self.frame.panes.clear();
+        self.frame.status = None;
+        self.chooser = None;
+        self.transport.send(ClientMsg::NewSession { name, caps })
+    }
+
     fn pick(&mut self, choice: chooser::Choice) -> Result<(), TransportError> {
         match choice {
             chooser::Choice::Session(id) => {
@@ -341,6 +358,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     }
                     Some(Intercepted::OpenChooser) => {
                         self.open_chooser()?;
+                        return Ok(Tick::Redraw);
+                    }
+                    Some(Intercepted::NewSession) => {
+                        self.new_session(None)?;
                         return Ok(Tick::Redraw);
                     }
                     Some(Intercepted::Detach) => {

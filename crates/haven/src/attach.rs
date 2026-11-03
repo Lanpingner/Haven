@@ -115,6 +115,7 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
                         Intercepted::Consumed
                     }
                     Some(Action::Choose) => Intercepted::OpenChooser,
+                    Some(Action::NewSession) => Intercepted::NewSession,
                     Some(Action::Detach) => Intercepted::Detach,
                     Some(Action::SendPrefix) => Intercepted::Pass,
                     Some(action) => match keys::to_proto(action) {
@@ -147,6 +148,7 @@ fn run_command(line: &str) -> Intercepted {
     match keys::parse_command(line.trim()) {
         Ok(Action::Detach) => Intercepted::Detach,
         Ok(Action::Choose) => Intercepted::OpenChooser,
+        Ok(Action::NewSession) => Intercepted::NewSession,
         Ok(action) => match keys::to_proto(action) {
             Some(wire) => Intercepted::Act(wire),
             None => Intercepted::Consumed,
@@ -338,6 +340,33 @@ mod tests {
         filter(&key(Key::Char('z'), Modifiers::empty()), &mut mode);
         filter(&release(Key::Char('z'), Modifiers::empty()), &mut mode);
         assert_eq!(mode.command_text(), Some("z"), "the release typed a second character");
+    }
+
+    #[test]
+    fn capital_c_asks_for_a_session_and_lowercase_c_for_a_window() {
+        // The one that is easy to get wrong: `c` and `C` differ by a shift,
+        // and binding both to the same thing would be silent.
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode);
+        assert_eq!(
+            filter(&key(Key::Char('C'), Modifiers::SHIFT), &mut mode),
+            Intercepted::NewSession
+        );
+
+        filter(&ctrl_a(), &mut mode);
+        assert_eq!(
+            filter(&key(Key::Char('c'), Modifiers::empty()), &mut mode),
+            Intercepted::Act(Wire::NewWindow)
+        );
+    }
+
+    #[test]
+    fn new_session_is_typeable_as_well_as_bound() {
+        let mut filter = key_filter();
+        let mut mode = Mode::command("new-session".into());
+        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
+        assert_eq!(out, Intercepted::NewSession, "the typed form must match the binding");
     }
 
     #[test]

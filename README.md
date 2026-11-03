@@ -50,6 +50,7 @@ cargo run -p haven -- shell-info
 | `z` | zoom the active pane |
 | `x` | close the pane |
 | `c` / `n` / `p` / `1`-`9` | new tab / next / previous / select |
+| `C` | new session, and move to it |
 | `e` / `E` / `t` | even-horizontal / even-vertical / tiled layout |
 | `d` | detach |
 | `:` | open the command line |
@@ -65,6 +66,7 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | --- | --- |
 | `split-h` / `split-v` | split into rows / columns |
 | `new-window` (`new-tab`), `next`, `prev` | tabs |
+| `new-session` (`new`) | a new session on this daemon, named `haven-<n>` |
 | `select-window <n>` (`select-tab`) | go to tab *n* (numbered from 1) |
 | `kill-pane`, `zoom`, `detach` | as the keys do |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |

@@ -19,6 +19,8 @@ pub enum Action {
     ClosePane,
     ToggleZoom,
     NewWindow,
+    /// Make a session and move to it.
+    NewSession,
     NextWindow,
     PreviousWindow,
     SelectWindow(usize),
@@ -51,6 +53,9 @@ pub fn prefix_table(event: &KeyEvent) -> Option<Action> {
         Key::Char('x') => Action::ClosePane,
         Key::Char('z') => Action::ToggleZoom,
         Key::Char('c') => Action::NewWindow,
+        // Capital C, because `c` is already the new window: the same split
+        // tmux settles on once someone wants both.
+        Key::Char('C') => Action::NewSession,
         Key::Char('n') => Action::NextWindow,
         Key::Char('p') => Action::PreviousWindow,
         Key::Char('d') => Action::Detach,
@@ -90,6 +95,7 @@ pub fn prefix_table(event: &KeyEvent) -> Option<Action> {
 pub const COMMANDS: &[&str] = &[
     "choose",
     "new-tab",
+    "new-session",
     "detach",
     "even-horizontal",
     "even-vertical",
@@ -150,6 +156,7 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         "split-v" | "vsplit" | "vs" => Action::SplitColumns,
         // tmux's names, plus the ones someone who calls them tabs will try.
         "new-window" | "neww" | "new-tab" => Action::NewWindow,
+        "new-session" | "new" => Action::NewSession,
         "next" | "next-window" | "next-tab" => Action::NextWindow,
         "prev" | "previous-window" | "prev-tab" => Action::PreviousWindow,
         "kill-pane" | "killp" => Action::ClosePane,
@@ -197,7 +204,13 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::ApplyLayout(NamedLayout::EvenHorizontal) => P::EvenHorizontal,
         Action::ApplyLayout(NamedLayout::EvenVertical) => P::EvenVertical,
         Action::ApplyLayout(NamedLayout::Tiled) => P::Tiled,
-        Action::Detach | Action::SendPrefix | Action::EnterCommand | Action::Choose => return None,
+        // Client-side: these need the frontend's size, or the client's own
+        // state, neither of which the daemon's action table has.
+        Action::Detach
+        | Action::SendPrefix
+        | Action::EnterCommand
+        | Action::Choose
+        | Action::NewSession => return None,
     })
 }
 

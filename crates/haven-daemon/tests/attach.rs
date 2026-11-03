@@ -83,6 +83,12 @@ where
     false
 }
 
+/// Which session a client is on, as the daemon reports it to the status bar.
+/// The pane ids restart per session, so they cannot tell the two apart.
+fn session_name(client: &TestClient) -> Option<String> {
+    client.frame.status.as_ref().map(|s| s.name.clone())
+}
+
 fn send_input(client: &mut TestClient, pane: PaneId, bytes: &[u8]) {
     client.transport.send(ClientMsg::Input { pane, bytes: bytes.to_vec() }).expect("send input");
 }
@@ -223,6 +229,54 @@ fn asking_for_a_session_that_does_not_exist_says_so() {
     );
     assert!(client.frame.notice.as_deref().unwrap().contains("no such session"));
     assert!(daemon.session_names().is_empty(), "a bad attach must not create a session");
+}
+
+#[test]
+fn a_new_session_is_made_beside_the_one_that_exists() {
+    // `Attach { session: None }` joins the first session and only creates
+    // one when there are none, so until this message there was no way to
+    // have two sessions on one daemon at all.
+    let mut daemon = daemon();
+    let mut client = attach(&mut daemon, 40, 8);
+    settle(&mut daemon, &mut [&mut client], |c| session_name(c[0]).is_some());
+    assert_eq!(session_name(&client).as_deref(), Some("haven-1"));
+    assert_eq!(daemon.session_names().len(), 1);
+
+    client.new_session(None).expect("ask for a session");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            session_name(c[0]).as_deref() == Some("haven-2")
+        }),
+        "the client never landed in the new session; sessions={:?} on={:?}",
+        daemon.session_names(),
+        session_name(&client)
+    );
+    assert_eq!(daemon.session_names().len(), 2, "the old session was replaced, not kept");
+    // And the new one is live, not an empty shell.
+    let pane = client.focus.expect("focus");
+    send_input(&mut client, pane, b"hello\n");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame.pane_text(pane).contains("got:hello")
+        }),
+        "the new session's pane is not running anything"
+    );
+}
+
+#[test]
+fn a_new_session_can_be_named() {
+    let mut daemon = daemon();
+    let mut client = attach(&mut daemon, 40, 8);
+    settle(&mut daemon, &mut [&mut client], |c| session_name(c[0]).is_some());
+
+    client.new_session(Some("work".into())).expect("ask for a session");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            session_name(c[0]).as_deref() == Some("work")
+        }),
+        "the name was dropped: {:?}",
+        daemon.session_names()
+    );
 }
 
 #[test]

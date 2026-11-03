@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -152,6 +152,15 @@ impl RowRle {
 pub enum ClientMsg {
     Attach {
         session: Option<SessionId>,
+        caps: ClientCaps,
+    },
+    /// Make a session and attach to it. Distinct from `Attach { session:
+    /// None }`, which joins the first session that exists and only creates
+    /// one when there are none — so without this there was no way to have a
+    /// second session on one daemon at all.
+    NewSession {
+        /// `None` lets the daemon name it, as it does the first one.
+        name: Option<String>,
         caps: ClientCaps,
     },
     /// Already-resolved input. Key *encoding* happens client-side, because only

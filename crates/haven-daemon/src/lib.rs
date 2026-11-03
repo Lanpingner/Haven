@@ -311,15 +311,11 @@ impl Daemon {
                     }
                     None => self.first_or_create(caps)?,
                 };
-                let client = &mut self.clients[index];
-                client.caps = caps;
-                client.session = Some(id);
-                client.sync.invalidate();
-                let _ = client.framed.queue(&ServerMsg::Hello {
-                    protocol: PROTOCOL_VERSION,
-                    session: SessionId(id),
-                    build: haven_proto::build_stamp(),
-                });
+                self.join(index, id, caps);
+            }
+            ClientMsg::NewSession { name, caps } => {
+                let id = self.create_session(name, caps)?;
+                self.join(index, id, caps);
             }
             ClientMsg::Input { pane, bytes } => {
                 if let Some(host) = self.host_of(index) {
@@ -379,14 +375,22 @@ impl Daemon {
         if let Some(id) = self.sessions.keys().next().copied() {
             return Ok(id);
         }
+        self.create_session(None, caps)
+    }
+
+    /// Make a session, whether or not one already exists.
+    fn create_session(&mut self, name: Option<String>, caps: ClientCaps) -> io::Result<u32> {
         let id = self.next_session;
         self.next_session += 1;
+        // An unnamed session is numbered, which is what makes `haven-2`
+        // follow `haven-1` without the client having to invent a name.
+        let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("haven-{id}"));
         let spawner = (self.make_spawner)();
-        let runtime = MuxRuntime::new(SessionId(id), &format!("haven-{id}"), caps.size, spawner)?;
+        let runtime = MuxRuntime::new(SessionId(id), &name, caps.size, spawner)?;
         self.sessions.insert(
             id,
             SessionHost {
-                name: format!("haven-{id}"),
+                name,
                 started_unix: unix_now(),
                 runtime,
                 policy: self.policy,
@@ -394,6 +398,25 @@ impl Daemon {
             },
         );
         Ok(id)
+    }
+
+    /// Point a client at a session and tell it so. Attaching and creating
+    /// end the same way, and a second copy of this was how the two could
+    /// have drifted.
+    fn join(&mut self, index: usize, id: u32, caps: ClientCaps) {
+        let client = &mut self.clients[index];
+        client.caps = caps;
+        client.session = Some(id);
+        client.sync.invalidate();
+        // The theme is sent once per session; a client that moved to another
+        // one has to be told again.
+        client.theme_sent = None;
+        client.last_status = None;
+        let _ = client.framed.queue(&ServerMsg::Hello {
+            protocol: PROTOCOL_VERSION,
+            session: SessionId(id),
+            build: haven_proto::build_stamp(),
+        });
     }
 
     fn host_of(&mut self, index: usize) -> Option<&mut SessionHost> {

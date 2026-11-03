@@ -1137,6 +1137,16 @@ also fires for every `PROMPT_COMMAND` function and names the tab after the
 prompt, so `PS0` plus `history 1` is used instead. It is expanded exactly
 once per interactive command line, which is the gate wanted.
 
+There was no way to make a second session. `Attach { session: None }` calls
+`first_or_create`, which joins the first session that exists and only creates
+one when there are none, and nothing else created one at all — so a daemon
+held exactly one session for its whole life, and the chooser's session level
+could never have more than one row. `ClientMsg::NewSession { name, caps }`
+creates and attaches in one step, bound to `Ctrl+A` `C` (capital, because `c`
+is the new tab) and typed as `new-session`. It is a client-side action like
+detaching, because the daemon needs this client's size and only the frontend
+knows it.
+
 **Bugs this work surfaced, worth remembering:**
 - Panes stacked one above another had nothing between them. The layout
   reserves a cell between neighbours in both directions (`SEPARATOR`), but

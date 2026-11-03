@@ -190,7 +190,13 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
         // whole interface there.
         // Standalone mode has no command line and no session list: there is
         // exactly one session, and it is this process.
-        Action::Detach | Action::SendPrefix | Action::EnterCommand | Action::Choose => {}
+        // Standalone mode is one session, and it is this process: there is
+        // nowhere for a second one to live.
+        Action::Detach
+        | Action::SendPrefix
+        | Action::EnterCommand
+        | Action::Choose
+        | Action::NewSession => {}
     }
     Ok(false)
 }
