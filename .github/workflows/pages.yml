@@ -27,11 +27,19 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # First, so a Pages misconfiguration fails in seconds rather than after
+      # the toolchain and mdbook have been installed. `enablement` turns Pages
+      # on for the repository if it is off, which is what the first run of this
+      # workflow on a fresh repo needs.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo install mdbook --locked
+      # Pinned: an mdbook minor release can change the generated HTML, and a
+      # docs site is not the place to find that out from a red build.
+      - run: cargo install mdbook --locked --version 0.5.4
       - run: mdbook build site
-      - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site/book

@@ -35,7 +35,7 @@ and the command-named tabs are what Haven draws today.
 
 [Jump to the comparison](./comparison.md) ·
 [build it](./build.md) ·
-[source on GitHub](https://github.com/berromaa/HavenTerminal)
+[source on GitHub](https://github.com/Lanpingner/Haven)
 
 ## One codebase, one parser, one keymap
 

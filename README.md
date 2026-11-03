@@ -16,7 +16,7 @@ interactive capability probe are not written yet. See
 [its status section](docs/PLAN.md#20-implementation-status) for exactly what
 exists.
 
-There is a project page at <https://berromaa.github.io/HavenTerminal/> — an
+There is a project page at <https://lanpingner.github.io/Haven/> — an
 mdBook whose chapters are the markdown files in [site/src/](site/src/). Build it
 with `mdbook serve site --open`; the last chapter includes this repository's
 [docs/PLAN.md](docs/PLAN.md) verbatim rather than copying it.

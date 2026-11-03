@@ -4,8 +4,8 @@ Rust 1.85 or newer, and a GPU backend wgpu can reach for the window. There are
 no packages yet; this is a from-source project for now.
 
 ```sh
-git clone https://github.com/berromaa/HavenTerminal
-cd HavenTerminal
+git clone https://github.com/Lanpingner/Haven
+cd Haven
 
 cargo test --workspace     # 400 tests, incl. mc/vim/less driven on real ptys
 ```
