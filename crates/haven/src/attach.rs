@@ -101,7 +101,14 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode, &Bindings) -> Intercepted {
                     Key::Named(NamedKey::Enter) => {
                         let line = text.clone();
                         *mode = Mode::Normal;
-                        return run_command(&line);
+                        // Through `act`, not `run_command`: a typed line is
+                        // a bound command that happens to have been typed,
+                        // and the two commands that change the client's own
+                        // mode were the two a typed line could not run. That
+                        // made most of the command palette inert — its
+                        // entries are `command-prompt <verb> ` strings, so
+                        // picking one asked for a prompt and got silence.
+                        return act(&line, mode, bindings);
                     }
                     Key::Named(NamedKey::Tab) => {
                         // Complete as far as every candidate agrees, which is
@@ -212,7 +219,8 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::ChooseShell(verb)) => Intercepted::ChooseShell(verb),
         Ok(Action::ContainerShell { verb, spec }) => Intercepted::ChooseLifetime { verb, spec },
         Ok(Action::ContainerMounts { add, remove }) => Intercepted::ContainerMounts { add, remove },
-        // Both need the client's mode, which a typed line has no access to.
+        // Reached only when a caller has no mode to change — `act` handles
+        // these, and everything with a mode goes through `act`.
         Ok(Action::SwitchTable(_)) => Intercepted::Consumed,
         Ok(Action::CommandPalette) => Intercepted::OpenMenu {
             title: "command".into(),
@@ -230,7 +238,6 @@ fn run_command(line: &str) -> Intercepted {
         // A literal prefix key goes to the pane, which is what `send-prefix`
         // means and the only way to drive a nested session.
         Ok(Action::SendPrefix) => Intercepted::Pass,
-        // Opening a prompt from a prompt would be a loop with nothing in it.
         Ok(Action::EnterCommand(_)) => Intercepted::Consumed,
         Ok(action) => match keys::to_proto(action) {
             Some(wire) => Intercepted::Act(wire),
@@ -668,6 +675,53 @@ mod tests {
             keys::parse_command("choose-shell split-v"),
             Ok(keys::Action::ChooseShell("split-v".into()))
         );
+    }
+
+    /// A key table named `copy`, so `switch-table copy` has something to
+    /// arm: a name no table answers to is deliberately refused.
+    fn copy_table() -> Bindings {
+        keys().with(None, "copy", &[("q".into(), "copy-mode".into())])
+    }
+
+    #[test]
+    fn a_typed_line_can_run_the_commands_that_change_the_clients_own_mode() {
+        // These two were unreachable from the command line and from the
+        // palette, which is most of what the palette is: its entries for
+        // commands that take an argument are `command-prompt <verb> `
+        // strings, so picking one asked for a prompt and got nothing.
+        let mut filter = key_filter();
+        let mut mode = Mode::command("command-prompt rename-window ".into());
+        assert_eq!(
+            filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode, &keys()),
+            Intercepted::Consumed
+        );
+        assert_eq!(
+            mode.command_text(),
+            Some("rename-window "),
+            "picking it from the palette should leave a prompt with the verb on it"
+        );
+
+        let mut mode = Mode::command("switch-table copy".into());
+        filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode, &copy_table());
+        assert_eq!(mode.table(), Some("copy"), "a typed switch-table armed nothing");
+    }
+
+    #[test]
+    fn every_palette_entry_does_something_when_it_is_picked() {
+        // The palette is built from `COMMANDS`, so a command that resolves
+        // to nothing is an entry that looks like a feature and is not one.
+        for name in keys::COMMANDS {
+            let entry = keys::palette_entry(name);
+            let mut mode = Mode::command(entry.clone());
+            let mut filter = key_filter();
+            let verdict =
+                filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode, &keys());
+            let opened_a_prompt = mode.command_text().is_some();
+            assert!(
+                verdict != Intercepted::Consumed || opened_a_prompt || mode.table().is_some(),
+                "picking {name:?} ran {entry:?} and nothing happened"
+            );
+        }
     }
 
     #[test]

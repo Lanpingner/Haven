@@ -108,6 +108,14 @@ pub enum Tick {
     Finished,
 }
 
+/// Seconds since the epoch, for the bar's clock.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Above this many entries a menu is narrowed by typing rather than picked
 /// from by number. Nine is where digits stop working; the margin is for the
 /// ones you can still count down to faster than you can type.
@@ -162,6 +170,9 @@ pub struct Client<F, T> {
     /// Why the session is ending, when it is ending badly. A frontend reports
     /// this after it has given the terminal back.
     fatal: Option<String>,
+    /// The second the bar was last drawn for. Redrawing when it moves is
+    /// what makes the clock a clock.
+    last_clock: u64,
     /// Last session listing received, for `haven ls`.
     pub sessions: Vec<haven_proto::SessionInfo>,
     attached: bool,
@@ -205,6 +216,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             dragging: None,
             fatal: None,
             sessions: Vec::new(),
+            last_clock: 0,
             attached: false,
         }
     }
@@ -812,18 +824,29 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         }
     }
 
+    /// How long a frontend may sleep before the bar is out of date.
+    ///
+    /// `None` when there is no bar to keep up to date, which is what lets an
+    /// idle window cost nothing at all.
+    pub fn next_wake(&self) -> Option<std::time::Duration> {
+        self.frame.status.as_ref()?;
+        let subsec = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        // To the next whole second, so the displayed time changes when the
+        // clock does rather than a fraction late.
+        Some(std::time::Duration::from_nanos(1_000_000_000 - u64::from(subsec)))
+    }
+
     /// Rebuild the status line into the frame's widgets.
     ///
     /// Done every redraw rather than on change, because the clock moves with
     /// no message to prompt it, and the bar is one row of text.
-    fn rebuild_status(&mut self) {
+    fn rebuild_status(&mut self, now: u64) {
         self.frame.widgets.retain(|w| {
             !matches!(w.kind, frame::WidgetKind::StatusLine | frame::WidgetKind::Overlay)
         });
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
         if let Some(bar) = status_bar::build(
             self.frame.size,
             self.frame.status.as_ref(),
@@ -881,6 +904,15 @@ impl<F: Frontend, T: Transport> Client<F, T> {
 
     /// One iteration: drain input, drain server messages, present if needed.
     pub fn tick(&mut self) -> Result<Tick, TransportError> {
+        self.tick_at(unix_now())
+    }
+
+    /// [`Client::tick`], told what time it is.
+    ///
+    /// The clock is a parameter so that the bar's own clock can be tested
+    /// without sleeping, and because the one thing the bar shows that no
+    /// message announces is the time.
+    pub fn tick_at(&mut self, now: u64) -> Result<Tick, TransportError> {
         let mut outcome = Tick::Idle;
 
         while let Some(event) = self.frontend.next_input() {
@@ -908,8 +940,15 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         if self.fatal.is_some() {
             return Ok(Tick::Finished);
         }
+        // The clock is the one thing on the bar that changes with nothing to
+        // announce it, so nothing was redrawing it: the time sat still until
+        // a keystroke or some output happened to repaint the row.
+        if outcome == Tick::Idle && self.frame.status.is_some() && now != self.last_clock {
+            outcome = Tick::Redraw;
+        }
         if outcome == Tick::Redraw {
-            self.rebuild_status();
+            self.last_clock = now;
+            self.rebuild_status(now);
             // A present failure is the frontend's problem to report; it must
             // not take down the session.
             let _ = self.frontend.present(&self.frame);

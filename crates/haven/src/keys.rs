@@ -292,6 +292,18 @@ fn optional(line: &str, verb: &str) -> Option<String> {
     (!rest.is_empty()).then_some(rest)
 }
 
+/// What `command-prompt` should put on the line, spaces and all.
+///
+/// Only the leading space that separates it from the verb is dropped; a
+/// trailing one belongs to the caller, who put it there so the cursor would
+/// land after the verb rather than inside it.
+fn prefill(line: &str, verb: &str) -> String {
+    line.trim_start()
+        .strip_prefix(verb)
+        .map(|rest| rest.strip_prefix(' ').unwrap_or(rest).to_string())
+        .unwrap_or_default()
+}
+
 /// Everything after the verb, kept whole: a name is not a list of words.
 fn rest_of(line: &str, verb: &str) -> String {
     line.trim().strip_prefix(verb).map(|rest| rest.trim().to_string()).unwrap_or_default()
@@ -395,7 +407,11 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         "resize-up" => Action::Resize(Edge::Up),
         "resize-down" => Action::Resize(Edge::Down),
         "send-prefix" => Action::SendPrefix,
-        "command-prompt" => Action::EnterCommand(rest_of(line, verb)),
+        // Not `rest_of`: the trailing space is the point. `command-prompt
+        // rename-window ` means "open the line with the verb typed and the
+        // cursor after it", and trimming it left you typing the name onto
+        // the end of the verb.
+        "command-prompt" => Action::EnterCommand(prefill(line, verb)),
         "copy-mode" | "copy" => Action::Copy,
         "paste-buffer" | "paste" => Action::Paste,
         "scroll-up" | "page-up" => Action::Scroll(PAGE_ROWS),

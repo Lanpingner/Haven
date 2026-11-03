@@ -12,7 +12,7 @@ rather than a code change.
 
 | Key | Action |
 |---|---|
-| `%` / `"` | split into columns / rows |
+| `%` / `"` | split into columns / rows, in the directory you are in |
 | `h` `j` `k` `l` or arrows | move focus |
 | `H` `J` `K` `L` | resize |
 | `z` | zoom the active pane |

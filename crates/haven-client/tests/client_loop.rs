@@ -621,6 +621,51 @@ fn a_menu_pick_that_only_has_something_to_say_says_it() {
 }
 
 #[test]
+fn the_clock_on_the_bar_moves_without_anything_happening() {
+    // It did not: the bar was rebuilt only when something else caused a
+    // redraw, so the session's age sat still until a keystroke or some
+    // output repainted the row. The one thing on the bar that no message
+    // announces was the one thing nothing redrew.
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Status(haven_proto::SessionStatus {
+            session: SessionId(1),
+            name: "work".into(),
+            windows: vec![],
+            active_window: 0,
+            started_unix: 1_000,
+            clients: 1,
+        }),
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 6), []), server);
+    assert_eq!(client.tick_at(1_060).unwrap(), Tick::Redraw, "the status should have arrived");
+    let before = client.frontend.presented.len();
+
+    // Same second, nothing happening: no work at all.
+    assert_eq!(client.tick_at(1_060).unwrap(), Tick::Idle);
+    assert_eq!(client.frontend.presented.len(), before, "an idle tick must not repaint");
+
+    // The second moves, so the bar does.
+    assert_eq!(client.tick_at(1_061).unwrap(), Tick::Redraw);
+    assert_eq!(client.frontend.presented.len(), before + 1);
+    assert!(
+        client.next_wake().is_some(),
+        "a frontend that sleeps until something happens has to be told to wake for this"
+    );
+}
+
+#[test]
+fn a_client_with_no_bar_has_no_reason_to_wake() {
+    // The other half: an idle window with nothing to show still costs
+    // nothing, which is the property the event loop was written for.
+    let server = ScriptedTransport::new([ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1))]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 6), []), server);
+    client.tick_at(1_000).unwrap();
+    assert_eq!(client.tick_at(1_001).unwrap(), Tick::Idle);
+    assert!(client.next_wake().is_none());
+}
+
+#[test]
 fn a_long_list_is_typed_at_rather_than_counted_down() {
     // A machine with sixty images filled the screen with a menu you could
     // only reach the top of. Digits stop at nine; typing does not.

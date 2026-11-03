@@ -17,8 +17,10 @@ use haven_client::{Client, Tick};
 use haven_core::term::CursorShape;
 use haven_core::Palette;
 use haven_proto::{CellSize, ClientCaps, ColorDepth, FrontendKind, KeyTier, SessionId, Transport};
+use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
+
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamed};
 use winit::window::{Window, WindowId};
@@ -525,9 +527,20 @@ impl<T: Transport> ApplicationHandler<Wake> for App<T> {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.pump(event_loop);
-        // Idle means idle: no timer, no polling. The watcher thread wakes us
-        // when the daemon has something to say (`docs/PLAN.md` §12.4).
-        event_loop.set_control_flow(ControlFlow::Wait);
+        // Idle means idle: no polling. The watcher thread wakes us when the
+        // daemon has something to say (`docs/PLAN.md` §12.4).
+        //
+        // The one exception is the bar's clock, which no message announces:
+        // waiting for an event meant the time sat still until something else
+        // happened to redraw the row. So the wait ends at the next whole
+        // second — and only while there is a bar, so a window with no status
+        // line still costs nothing at all.
+        match self.client.next_wake() {
+            Some(wake) => {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + wake))
+            }
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
     }
 }
 

@@ -737,6 +737,76 @@ fn a_saved_session_comes_back_with_its_shape_and_its_directories() {
 }
 
 #[test]
+fn a_new_pane_starts_where_the_one_you_were_in_is() {
+    // It started wherever the daemon happened to be — usually `/`, because
+    // the daemon is autostarted and outlives the shell that asked for it.
+    // Splitting a pane to run one command against the files in front of you
+    // meant `cd`-ing back to them first, every time.
+    let mut daemon = Daemon::detached(shell_spawner);
+    let mut client = attach(&mut daemon, 40, 10);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+
+    let first = client.focus.expect("focus");
+    send_input(&mut client, first, b"cd /tmp\n");
+    for _ in 0..40 {
+        daemon.tick(Duration::from_millis(10)).expect("tick");
+        let _ = client.tick();
+    }
+
+    send_action(&mut client, Action::SplitColumns { program: None }).expect("split");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.panes.len() == 2);
+    for _ in 0..40 {
+        daemon.tick(Duration::from_millis(10)).expect("tick");
+        let _ = client.tick();
+    }
+
+    // Read the directories back the way a save does, off /proc.
+    daemon.save_path = std::env::temp_dir().join(format!("haven-cwd-{}.toml", std::process::id()));
+    let (_, problem) = daemon.save_sessions();
+    assert_eq!(problem, None);
+    let saved = haven_daemon::snapshot::Snapshot::read(&daemon.save_path).expect("read");
+    let dirs: Vec<Option<&str>> =
+        saved.sessions[0].windows[0].panes.iter().map(|p| p.cwd.as_deref()).collect();
+    assert!(
+        dirs.iter().filter(|d| **d == Some("/tmp")).count() == 2,
+        "the new pane should have opened in /tmp too: {dirs:?}"
+    );
+    let _ = std::fs::remove_file(&daemon.save_path);
+}
+
+#[test]
+fn renaming_a_session_reaches_everything_that_shows_its_name() {
+    // It reached nothing. The name was kept twice — once in the mux, once
+    // beside it in the daemon — and `rename-session` wrote the mux's copy
+    // while the status bar, `haven ls` and the session tree all read the
+    // other one. The command worked perfectly and showed up nowhere.
+    let mut daemon = daemon();
+    let mut client = attach(&mut daemon, 40, 10);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.status.is_some());
+
+    send_action(&mut client, Action::Rename { window: false, name: "build".into() })
+        .expect("rename");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame.status.as_ref().is_some_and(|s| s.name == "build")
+        }),
+        "the bar never heard about the rename: {:?}",
+        client.frame.status.as_ref().map(|s| s.name.clone())
+    );
+    // And the listing `haven ls` and the session tree are built from.
+    assert_eq!(daemon.session_infos()[0].name, "build");
+
+    // An empty name is not a rename: a session with no name is unreachable
+    // by name, and the old one is better than nothing.
+    send_action(&mut client, Action::Rename { window: false, name: "  ".into() }).expect("rename");
+    for _ in 0..20 {
+        daemon.tick(Duration::from_millis(5)).expect("tick");
+        let _ = client.tick();
+    }
+    assert_eq!(daemon.session_infos()[0].name, "build");
+}
+
+#[test]
 fn a_container_pane_is_saved_as_a_spec_and_restored_only_if_there_is_one_to_rejoin() {
     // Half of this is what the save file may say, and half is what a restore
     // may act on. A save file decides what a machine runs when it comes

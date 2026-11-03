@@ -574,6 +574,12 @@ impl Grid {
     }
 
     pub fn write(&mut self, c: char, width: usize) {
+        // A grid one column wide cannot hold a wide glyph at all. Wrapping
+        // it would wrap forever and writing it would write a spacer past the
+        // end of the row — which panicked, in the daemon, taking every
+        // session with it. One column is not a hypothetical: a 1x1 pty is
+        // what a client with no window size gets.
+        let width = if width == 2 && self.cols < 2 { 1 } else { width };
         if self.cursor.pending_wrap && self.autowrap {
             self.rows[self.cursor.row].wrapped = true;
             self.cursor.col = 0;
@@ -827,6 +833,18 @@ mod tests {
             g.write(c, 1);
         }
         g
+    }
+
+    #[test]
+    fn a_wide_glyph_in_a_one_column_grid_does_not_take_the_daemon_with_it() {
+        // A client that reports no window size gets a 1x1 pty, and the first
+        // CJK character or emoji written into it indexed past the end of the
+        // row. In the daemon that is every session on the machine, gone.
+        let mut g = Grid::new(1, 2);
+        g.write('あ', 2);
+        g.write('x', 1);
+        assert_eq!(g.rows[0].cells[0].c, 'あ', "the glyph is kept, narrow");
+        assert!(!g.rows[0].cells[0].flags.contains(CellFlags::WIDE));
     }
 
     #[test]

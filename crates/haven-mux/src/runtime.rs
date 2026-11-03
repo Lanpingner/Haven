@@ -314,13 +314,27 @@ impl<F: FnMut(PaneRequest) -> io::Result<Pty>> MuxRuntime<F> {
         Ok(())
     }
 
+    /// Where a new pane should start: the directory the pane you are in is
+    /// in.
+    ///
+    /// Read from the active pane rather than inherited from the daemon,
+    /// which is what used to happen — so a split opened wherever the daemon
+    /// was started, usually `/`, however deep in a tree you were. Every
+    /// terminal that splits at all splits here, and tmux needing a config
+    /// line for it is the exception people complain about.
+    fn active_cwd(&self) -> Option<std::path::PathBuf> {
+        self.panes.get(&self.session.active_pane().0)?.cwd()
+    }
+
     pub fn split(
         &mut self,
         dir: Direction,
         program: Option<std::path::PathBuf>,
     ) -> io::Result<Option<PaneId>> {
+        let cwd = self.active_cwd();
         let Some((pane, _)) = self.session.split_active(dir, 0.5) else { return Ok(None) };
-        let runtime = make_pane(&mut self.spawn, PaneRequest::running(program))?;
+        let runtime =
+            make_pane(&mut self.spawn, PaneRequest { cwd, ..PaneRequest::running(program) })?;
         self.panes.insert(pane.0, runtime);
         // The new pane's real size comes from the solver, not from the caller.
         self.sync_sizes()?;
@@ -354,8 +368,10 @@ impl<F: FnMut(PaneRequest) -> io::Result<Pty>> MuxRuntime<F> {
     }
 
     pub fn new_window(&mut self, program: Option<std::path::PathBuf>) -> io::Result<PaneId> {
+        let cwd = self.active_cwd();
         let (_, pane, _) = self.session.new_window();
-        let runtime = make_pane(&mut self.spawn, PaneRequest::running(program))?;
+        let runtime =
+            make_pane(&mut self.spawn, PaneRequest { cwd, ..PaneRequest::running(program) })?;
         self.panes.insert(pane.0, runtime);
         self.sync_sizes()?;
         Ok(pane)
@@ -475,13 +491,17 @@ impl<F: FnMut(PaneRequest) -> io::Result<Pty>> MuxRuntime<F> {
     /// layout. The old child is hung up first, so a wedged one really goes.
     pub fn respawn_active(&mut self, program: Option<std::path::PathBuf>) -> io::Result<bool> {
         let pane = self.session.active_pane();
+        // Read before the child is hung up: `/proc` has nothing to say about
+        // a process that has gone, and a respawned pane that lands in `/`
+        // rather than where you were working is a respawn you have to undo.
+        let cwd = self.active_cwd();
         let Some(old) = self.panes.get_mut(&pane.0) else { return Ok(false) };
         let size = old.pty.size();
         if old.exited.is_none() {
             let _ = old.pty.hangup(Duration::from_millis(100));
         }
         let fresh =
-            make_pane(&mut self.spawn, PaneRequest { size, program, ..Default::default() })?;
+            make_pane(&mut self.spawn, PaneRequest { size, program, cwd, ..Default::default() })?;
         self.panes.insert(pane.0, fresh);
         self.sync_sizes()?;
         Ok(true)

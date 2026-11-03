@@ -59,7 +59,6 @@ pub type SessionEnv = std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>;
 pub type ContainerSettings = std::rc::Rc<std::cell::RefCell<haven_backend::Settings>>;
 
 struct SessionHost {
-    name: String,
     /// The environment new panes in this session are given.
     env: SessionEnv,
     /// For the status line's "time open". Wall clock rather than `Instant`,
@@ -174,7 +173,7 @@ impl Daemon {
             .iter()
             .map(|(id, host)| haven_proto::SessionInfo {
                 id: SessionId(*id),
-                name: host.name.clone(),
+                name: host.name().to_string(),
                 windows: host.runtime.session.windows.len() as u16,
                 panes: host.runtime.session.panes().len() as u16,
                 clients: self.clients.iter().filter(|c| c.session == Some(*id)).count() as u16,
@@ -187,7 +186,7 @@ impl Daemon {
         self.sessions
             .iter()
             .map(|(id, host)| {
-                (SessionId(*id), host.name.clone(), host.runtime.session.windows.len())
+                (SessionId(*id), host.name().to_string(), host.runtime.session.windows.len())
             })
             .collect()
     }
@@ -557,7 +556,6 @@ impl Daemon {
         self.sessions.insert(
             id,
             SessionHost {
-                name,
                 env: cell,
                 started_unix: unix_now(),
                 runtime,
@@ -701,7 +699,7 @@ impl Daemon {
 
         let mut restored = 0u16;
         for saved in &snapshot.sessions {
-            if self.sessions.values().any(|h| h.name == saved.name) {
+            if self.sessions.values().any(|h| h.name() == saved.name) {
                 continue;
             }
             match self.restore_one(saved, size) {
@@ -775,7 +773,6 @@ impl Daemon {
         self.sessions.insert(
             id,
             SessionHost {
-                name: saved.name.clone(),
                 env: cell,
                 started_unix: unix_now(),
                 runtime,
@@ -1083,6 +1080,16 @@ pub fn unix_now() -> u64 {
 }
 
 impl SessionHost {
+    /// What this session is called.
+    ///
+    /// Read from the mux rather than kept beside it. It *was* kept beside
+    /// it, and `rename-session` wrote the mux's copy while the status bar,
+    /// `haven ls` and the session tree all read this one — so renaming a
+    /// session worked perfectly and showed up nowhere.
+    fn name(&self) -> &str {
+        &self.runtime.session.name
+    }
+
     /// What the status line needs. Window names fall back to the active
     /// pane's title, which is what a shell sets and what a user recognises.
     fn status(&self, clients: u16) -> haven_proto::SessionStatus {
@@ -1141,7 +1148,7 @@ impl SessionHost {
             .collect();
         haven_proto::SessionStatus {
             session: session.id,
-            name: self.name.clone(),
+            name: self.name().to_string(),
             windows,
             active_window: session.windows.get(session.active).map(|w| w.id.0).unwrap_or(0),
             started_unix: self.started_unix,

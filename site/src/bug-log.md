@@ -5,6 +5,48 @@ broke, because the interesting failures were never where they looked. A
 selection, kept here because they say more about the program than a feature list
 does.
 
+## Four commands that worked where nobody could see
+
+Reported in one sitting, and all four the same shape: something happened
+correctly, somewhere nothing reads.
+
+**A session rename reached nothing.** The name was kept twice — once in the
+mux, once beside it in the daemon — and `rename-session` wrote the mux's copy
+while the status bar, `haven ls` and the session tree all read the other one.
+The command was never broken. The second copy is gone; the daemon asks the
+mux.
+
+**The clock did not move.** The bar is rebuilt on every redraw, and the
+comment above it says the clock moves on its own — but a redraw only happens
+when something *else* has changed, and the time is the one thing on the bar
+that no message announces. So it sat still until a keystroke or some output
+happened to repaint the row. The client now redraws when the second it last
+drew for is no longer the current one, and tells a frontend how long it may
+sleep: the GPU window was written to wait with no timer at all, which is worth
+keeping for a window with no bar.
+
+**Picking from a menu only worked for half the verdicts.** The key path
+handled thirteen kinds of outcome; the menu path handled one — the kind that
+sends a message to the daemon — and dropped the rest in silence. So a menu
+entry whose job is to ask a second question could not ask it, and a notice
+from a menu never reached the bar. Two places interpreting one thing; now
+one.
+
+**Most of the command palette was inert.** Its entries for commands that take
+an argument are `command-prompt <verb> ` strings, and a typed line could not
+run the two commands that change the client's own mode — the prompt and
+`switch-table`. Picking `rename-window` from the palette asked for a prompt
+and got nothing. A typed line now goes through the same path a bound key
+does, because that is what it is. The trailing space in the prefill turned
+out to matter too: trimmed, you typed the name onto the end of the verb.
+
+A fifth, found while reading rather than reported: a new pane started wherever
+the *daemon* was, which for an autostarted daemon is `/`. Splitting a pane to
+run one command against the files in front of you meant `cd`-ing back to them
+first. Panes now open where the pane you were in is — including a respawn,
+whose directory has to be read before the old child is hung up, because
+`/proc` has nothing to say about a process that has gone.
+
 ## Two keys, one of them invisible
 
 `k` at the top of copy mode's view scrolls one row to reveal the row above —
@@ -147,3 +189,10 @@ before typing.
   that name because one was already there.
 - A pane-numbering overlay that any key dismisses is dismissed by the *release*
   of the key that opened it, a millisecond later. Only presses are keystrokes.
+- A double-width character in a one-column grid indexed past the end of the
+  row: the wide glyph wrapped to the next line, where it did not fit either,
+  and then wrote its spacer into a cell that was not there. One column is not
+  hypothetical — a client that reports no window size gets a 1x1 pty — and the
+  panic was in the *daemon*, so one misbehaving client took every session on
+  the machine with it. Found by attaching from a pty that had never been
+  sized, while testing something else.

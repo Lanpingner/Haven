@@ -24,7 +24,7 @@ with `mdbook serve site --open`; the last chapter includes this repository's
 ## Try it
 
 ```sh
-cargo test --workspace     # 591 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 598 tests, incl. mc/vim/less driven on real ptys
 
 # A GPU window, attached to the daemon (which it starts if needed).
 cargo run --release -p haven -- gpu
@@ -280,7 +280,7 @@ same actions the keys do, so nothing is reachable one way and not the other.
 
 | Command | Does |
 | --- | --- |
-| `split-h [prog]` / `split-v [prog]` | split into rows / columns, optionally running `prog` |
+| `split-h [prog]` / `split-v [prog]` | split into rows / columns in the current pane's directory, optionally running `prog` |
 | `choose-shell [verb]` | the shell menu, containers and all; `verb` is what to do with the pick, `new-window` by default |
 | `container-mount <path>` (`mount`) | hand a host directory to container panes; `cwd` means the pane's own |
 | `container-unmount <path>`, `container-mounts` | stop handing one over / say what they are |

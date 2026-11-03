@@ -42,6 +42,20 @@ haven tui
 Runs the whole multiplexer in-process: no socket, no background process,
 nothing left behind when it exits.
 
+It is the *mux*, not the whole interface. Splits, focus, resize, zoom, tabs,
+layouts, swap, rotate, break and join, respawn, `send-keys`, synchronize and
+rename all work from the same key table the attached modes use. What needs a
+client — the status bar, the command line, the palette, menus (so the shell
+and [container](./containers.md) chooser), copy mode and the session tree —
+is not there, and neither is anything that needs a server: detach, save and
+restore. Those keys do nothing rather than something surprising.
+
+Which half you get is not a judgement about what matters; it is where the
+code lives. The interface belongs to `haven-client`, and standalone has its
+own small loop instead. Running `haven attach` against an autostarted daemon
+costs nothing and has all of it, which is why this has not been worth
+moving.
+
 ## Headless
 
 ```sh
