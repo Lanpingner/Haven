@@ -8,6 +8,8 @@ The table below is Haven's own reading of the alternatives. Every one of them is
 a good program, and several are far more finished than this one. Corrections are
 welcome as pull requests against this page.
 
+<div class="compare">
+
 | Capability | Alacritty | kitty | WezTerm | Ghostty | tmux | **Haven** |
 |---|---|---|---|---|---|---|
 | GPU rendering | yes (GL) | yes (GL) | yes (wgpu) | yes (Metal/GL) | n/a | **yes** — wgpu: Vulkan/Metal/DX12/GL |
@@ -23,6 +25,8 @@ welcome as pull requests against this page.
 | Ligatures / images | no / no | yes / kitty graphics | yes / sixel + kitty | yes / kitty graphics | n/a | **not yet** / not yet (cell model reserves placements) |
 | Colour emoji | no | yes | yes | yes | n/a | **yes** — `COLR`, `CBDT` and `sbix`, untinted |
 | Maturity | stable, packaged | stable, packaged | stable, packaged | stable, packaged | ancient and bulletproof | **v0.0.1**, from source, Linux/X11 tested |
+
+</div>
 
 ## What Haven actually buys you
 

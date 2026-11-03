@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Haven Terminal</title>
+  <!-- The same mark as site/src/logo.svg, simplified for 16px: no gradient,
+       no status row, thicker strokes. Detail that cannot survive a browser
+       tab is detail that only blurs it. -->
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="#1b1e28"/>
+  <rect x="15" y="13" width="8" height="34" rx="2" fill="#6c9cf0"/>
+  <rect x="41" y="13" width="8" height="34" rx="2" fill="#6c9cf0"/>
+  <rect x="23" y="26" width="18" height="8" rx="2" fill="#c8d0e0"/>
+  <rect x="15" y="52" width="34" height="4" rx="2" fill="#6c9cf0"/>
+</svg>

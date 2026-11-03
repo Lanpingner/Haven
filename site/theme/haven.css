@@ -1,61 +1,776 @@
-/* Light-touch styling on top of mdBook's own themes.
-   Only two things need custom rules: the pill row on the landing page, and
-   making the wide comparison table readable instead of squashed. Everything
-   else is deliberately left to whichever mdBook theme the reader picked. */
+/* Haven Terminal — site styling on top of mdBook's own themes.
+ *
+ * Two jobs. First, retune the default `navy` theme to Haven's actual palette,
+ * the one in crates/haven-proto/src/theme.rs, so the site and the program look
+ * like the same thing. Second, provide the handful of components the landing
+ * page needs — the hero, the pills, the cards, the terminal sketch — which
+ * markdown has no way to express on its own.
+ *
+ * mdBook's other themes (light, rust, coal, ayu) are deliberately left alone
+ * apart from the link colour: someone who picks one has said what they want.
+ */
+
+/* ------------------------------------------------------------------ *
+ * 1. The palette
+ * ------------------------------------------------------------------ */
+
+:root {
+    --haven-ink: #1b1e28;
+    --haven-surface: #242836;
+    --haven-raised: #2e3344;
+    --haven-text: #c8d0e0;
+    --haven-faint: #7a849c;
+    --haven-accent: #6c9cf0;
+    --haven-accent-soft: #8ab4f8;
+    --haven-warm: #f0b46c;
+    --haven-good: #8ed0a0;
+
+    --haven-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter,
+        Roboto, "Helvetica Neue", sans-serif;
+    --haven-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code",
+        Menlo, Consolas, monospace;
+
+    --mono-font: var(--haven-mono);
+    --content-max-width: 48rem;
+    --code-font-size: 0.86em;
+}
+
+/* The default theme, rebuilt on Haven's seven swatches. */
+.navy {
+    --bg: var(--haven-ink);
+    --fg: var(--haven-text);
+
+    --sidebar-bg: #16181f;
+    --sidebar-fg: #9aa3b8;
+    --sidebar-non-existant: #4a5168;
+    --sidebar-active: var(--haven-accent);
+    --sidebar-spacer: #272c3b;
+
+    --scrollbar: #3a4258;
+    --icons: var(--haven-faint);
+    --icons-hover: var(--haven-text);
+
+    --links: var(--haven-accent);
+    --inline-code-color: var(--haven-warm);
+
+    --theme-popup-bg: var(--haven-surface);
+    --theme-popup-border: var(--haven-raised);
+    --theme-hover: var(--haven-raised);
+
+    --quote-bg: var(--haven-surface);
+    --quote-border: var(--haven-accent);
+
+    --table-border-color: var(--haven-raised);
+    --table-header-bg: var(--haven-surface);
+    --table-alternate-bg: #20242f;
+
+    --searchbar-bg: var(--haven-surface);
+    --searchbar-fg: var(--haven-text);
+    --searchbar-border-color: var(--haven-raised);
+    --searchresults-li-bg: var(--haven-surface);
+    --searchresults-border-color: var(--haven-raised);
+    --search-mark-bg: #3c5a8a;
+}
+
+/* One accent across every theme, so a reader who switches still sees Haven. */
+.light,
+.rust {
+    --links: #2d62c4;
+}
+
+/* ------------------------------------------------------------------ *
+ * 2. Typography
+ * ------------------------------------------------------------------ */
+
+html {
+    font-family: var(--haven-sans);
+}
+
+.content {
+    font-size: 1rem;
+    line-height: 1.7;
+}
+
+.content h1,
+.content h2,
+.content h3,
+.content h4 {
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    line-height: 1.25;
+}
+
+.content h1 {
+    font-size: 2.1rem;
+    margin-block: 0 1rem;
+}
+
+/* A rule above each section, which is cheaper to read than extra space. */
+.content h2 {
+    font-size: 1.45rem;
+    margin-block: 3rem 0.9rem;
+    padding-top: 1.6rem;
+    border-top: 1px solid var(--table-border-color);
+}
+
+.content h3 {
+    font-size: 1.12rem;
+    margin-block: 2rem 0.6rem;
+}
+
+.content h2:first-child,
+.content h1 + h2 {
+    border-top: 0;
+    padding-top: 0;
+    margin-top: 1.5rem;
+}
+
+.content a {
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+}
+
+.content p,
+.content li {
+    max-width: 44rem;
+}
+
+.content li + li {
+    margin-top: 0.3rem;
+}
+
+.content strong {
+    font-weight: 650;
+    color: var(--fg);
+}
+
+/* ------------------------------------------------------------------ *
+ * 3. Sidebar, with the mark at the top of it
+ * ------------------------------------------------------------------ */
+
+.sidebar-scrollbox::before {
+    content: "haven";
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.2rem 0 1.4rem;
+    padding: 0 0 1.1rem 2.4rem;
+    border-bottom: 1px solid var(--sidebar-spacer);
+    font-family: var(--haven-mono);
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--fg);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231b1e28'/%3E%3Crect x='15' y='13' width='8' height='34' rx='2' fill='%236c9cf0'/%3E%3Crect x='41' y='13' width='8' height='34' rx='2' fill='%236c9cf0'/%3E%3Crect x='23' y='26' width='18' height='8' rx='2' fill='%23c8d0e0'/%3E%3Crect x='15' y='52' width='34' height='4' rx='2' fill='%236c9cf0'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-size: 1.6rem 1.6rem;
+    background-position: left top;
+}
+
+.chapter li.chapter-item {
+    line-height: 1.45;
+    margin-block: 0.25rem;
+}
+
+.chapter li.chapter-item a {
+    border-radius: 5px;
+    padding: 0.28rem 0.5rem;
+    transition: background-color 90ms ease;
+}
+
+.chapter li.chapter-item a:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.chapter li.chapter-item a.active {
+    font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ *
+ * 4. Code
+ * ------------------------------------------------------------------ */
+
+.content pre {
+    border: 1px solid var(--table-border-color);
+    border-radius: 10px;
+    padding: 0.35rem 0.2rem;
+}
+
+.content pre > code {
+    line-height: 1.55;
+}
+
+.content :not(pre) > code {
+    white-space: nowrap;
+    font-size: 0.87em;
+}
+
+/* ------------------------------------------------------------------ *
+ * 5. Tables — several here are wide, and squashing them helps no one
+ * ------------------------------------------------------------------ */
+
+.content .table-wrapper {
+    margin: 1.6rem 0;
+    border: 1px solid var(--table-border-color);
+    border-radius: 10px;
+    overflow-x: auto;
+}
+
+.content table {
+    margin: 0;
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+}
+
+.content table thead th {
+    background: var(--table-header-bg);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 650;
+    white-space: nowrap;
+    border: 0;
+    border-bottom: 1px solid var(--table-border-color);
+}
+
+.content table td,
+.content table th {
+    padding: 0.6rem 0.85rem;
+    border: 0;
+    border-bottom: 1px solid var(--table-border-color);
+    vertical-align: top;
+    text-align: left;
+}
+
+.content table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.content table tbody tr:nth-child(2n) {
+    background: var(--table-alternate-bg);
+}
+
+/* The left column of a key or command table is always the key or the command,
+   and it must not wrap mid-binding. */
+.content table td:first-child > code:only-child {
+    white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ *
+ * 6. Quotes and keys
+ * ------------------------------------------------------------------ */
+
+.content blockquote {
+    border-inline-start: 3px solid var(--quote-border);
+    border-radius: 0 8px 8px 0;
+}
+
+kbd {
+    font-family: var(--haven-mono);
+    font-size: 0.82em;
+    border: 1px solid var(--table-border-color);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 0.08em 0.4em;
+    background: var(--table-header-bg);
+}
+
+/* ------------------------------------------------------------------ *
+ * 7. Landing page
+ * ------------------------------------------------------------------ */
+
+.hero {
+    margin-bottom: 2.5rem;
+}
+
+.hero img.mark {
+    display: block;
+    width: 84px;
+    height: 84px;
+    margin-bottom: 1.2rem;
+}
+
+.hero h1 {
+    font-size: clamp(2.2rem, 1.6rem + 2.4vw, 3rem);
+    margin-bottom: 0.5rem;
+}
+
+.hero .tagline {
+    font-size: 1.15rem;
+    line-height: 1.5;
+    color: var(--fg);
+    opacity: 0.92;
+    max-width: 34rem;
+    margin-block: 0 1.3rem;
+}
 
 .pills {
     display: flex;
     flex-wrap: wrap;
     gap: 0.4rem;
-    margin: 1.4rem 0 1.8rem;
+    margin: 1.3rem 0;
 }
 
 .pill {
-    font-family: var(--mono-font, monospace);
-    font-size: 0.78rem;
+    font-family: var(--haven-mono);
+    font-size: 0.76rem;
     line-height: 1.5;
-    padding: 0.2rem 0.65rem;
-    border: 1px solid var(--table-border-color, #ccc);
+    padding: 0.22rem 0.65rem;
+    border: 1px solid var(--table-border-color);
     border-radius: 999px;
+    background: var(--table-header-bg);
     color: var(--fg);
-    opacity: 0.85;
+    opacity: 0.8;
     white-space: nowrap;
 }
 
 .pill b {
-    font-weight: 600;
+    font-weight: 650;
     opacity: 1;
 }
 
-/* mdBook centres tables and lets them overflow the content column. The
-   comparison table has seven columns, so it needs to scroll on its own rather
-   than push the page sideways. */
-.content table {
+.cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin: 1.6rem 0 0;
+}
+
+.cta a {
+    display: inline-block;
+    padding: 0.55rem 1.1rem;
+    border-radius: 8px;
+    border: 1px solid var(--table-border-color);
+    background: var(--table-header-bg);
+    color: var(--fg);
+    font-size: 0.94rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: border-color 100ms ease, background-color 100ms ease;
+}
+
+.cta a:hover {
+    border-color: var(--links);
+    text-decoration: none;
+}
+
+.cta a.primary {
+    background: var(--links);
+    border-color: var(--links);
+    color: #10131a;
+}
+
+.cta a.primary:hover {
+    filter: brightness(1.08);
+}
+
+/* The terminal sketch: a code block given a window around it. */
+.term {
+    margin: 2.5rem 0 0.6rem;
+    border: 1px solid var(--table-border-color);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--haven-ink);
+    box-shadow: 0 20px 48px -28px rgba(0, 0, 0, 0.8);
+}
+
+.term::before {
+    content: "● ● ●";
     display: block;
-    max-width: 100%;
-    overflow-x: auto;
-    margin: 1.5rem 0;
+    padding: 0.45rem 0.85rem;
+    background: var(--haven-surface);
+    border-bottom: 1px solid var(--table-border-color);
+    color: var(--haven-faint);
+    font-size: 0.6rem;
+    letter-spacing: 0.25em;
+    opacity: 0.7;
 }
 
-.content table td,
-.content table th {
-    vertical-align: top;
+.term pre {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
 }
 
-/* The last column of every table on the comparison page is Haven's own, and is
-   the one a reader is looking for. */
-.content table td:last-child strong {
+.term pre > code {
+    font-size: 0.78em;
+    line-height: 1.5;
+    color: var(--haven-text);
+}
+
+.caption {
+    font-size: 0.85rem;
+    color: var(--fg);
+    opacity: 0.6;
+    max-width: 40rem;
+}
+
+/* Feature cards. */
+.cards {
+    display: grid;
+    gap: 0.9rem;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    margin: 1.8rem 0;
+}
+
+.card {
+    border: 1px solid var(--table-border-color);
+    border-radius: 10px;
+    padding: 1.1rem 1.2rem;
+    background: var(--table-alternate-bg, transparent);
+}
+
+/* Not a heading: mdBook builds the sidebar's in-page contents out of every
+   heading on the page, and six card titles in there is noise. */
+.card .card-title {
+    margin: 0 0 0.45rem;
+    font-size: 0.98rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+    color: var(--fg);
+    max-width: none;
+}
+
+.card p {
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    opacity: 0.85;
+    max-width: none;
+}
+
+.card p + p {
+    margin-top: 0.6rem;
+}
+
+/* ------------------------------------------------------------------ *
+ * 8. Small screens
+ * ------------------------------------------------------------------ */
+
+@media (max-width: 700px) {
+    .content h2 {
+        margin-top: 2.2rem;
+        padding-top: 1.2rem;
+    }
+
+    .hero img.mark {
+        width: 64px;
+        height: 64px;
+    }
+
+    .term pre > code {
+        font-size: 0.68em;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * 9. Depth and motion
+ *
+ * The whole site is flat surfaces on a dark ground, so depth has to come
+ * from shadow and a little perspective rather than from texture. Every
+ * transform here is decoration: the page is complete and legible with all
+ * of it switched off, which is exactly what the reduced-motion block at
+ * the end does.
+ * ------------------------------------------------------------------ */
+
+/* A glow behind the hero, so the mark does not sit on flat black. */
+.hero {
+    position: relative;
+}
+
+.hero::before {
+    content: "";
+    position: absolute;
+    inset: -6rem -8rem auto -12rem;
+    height: 26rem;
+    z-index: -1;
+    pointer-events: none;
+    background:
+        radial-gradient(42rem 20rem at 18% 10%, rgba(108, 156, 240, 0.16), transparent 70%),
+        radial-gradient(32rem 16rem at 72% 0%, rgba(240, 180, 108, 0.07), transparent 70%);
+}
+
+.hero img.mark {
+    filter: drop-shadow(0 14px 28px rgba(0, 0, 0, 0.55))
+        drop-shadow(0 0 22px rgba(108, 156, 240, 0.25));
+    transition: transform 400ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.hero img.mark:hover {
+    transform: translateY(-3px) rotate(-3deg) scale(1.04);
+}
+
+/* ---- screenshots, on a stage ---- */
+
+.shot {
+    --rx: 0deg;
+    --ry: 0deg;
+    margin: 2.2rem 0 0.8rem;
+    perspective: 1600px;
+}
+
+.shot .frame {
+    position: relative;
+    border: 1px solid var(--table-border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--haven-surface);
+    transform-style: preserve-3d;
+    transform: perspective(1600px) rotateX(var(--rx)) rotateY(var(--ry));
+    transition: transform 500ms cubic-bezier(0.2, 0.7, 0.3, 1),
+        box-shadow 500ms cubic-bezier(0.2, 0.7, 0.3, 1);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.06) inset,
+        0 18px 40px -22px rgba(0, 0, 0, 0.9),
+        0 48px 90px -50px rgba(0, 0, 0, 0.9);
+}
+
+/* The hero rests at a slight angle and follows the pointer while you are over
+   it. The resting angle is declared on `.shot`, not on `.frame`, so that the
+   inline properties haven.js writes there override it — a declaration on the
+   frame itself would win against anything inherited and the tilt would never
+   move. */
+.shot.angled {
+    --rx: 4deg;
+    --ry: -7deg;
+}
+
+.shot.angled:hover .frame {
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.08) inset,
+        0 24px 50px -24px rgba(0, 0, 0, 0.9),
+        0 60px 110px -55px rgba(108, 156, 240, 0.35);
+}
+
+.shot .frame::before {
+    content: "";
+    display: block;
+    height: 1.9rem;
+    background: linear-gradient(var(--haven-surface), var(--haven-raised));
+    border-bottom: 1px solid var(--table-border-color);
+    /* three dots, drawn rather than typed, so they cannot be selected */
+    background-image:
+        radial-gradient(circle at 1.05rem 0.95rem, #3f465c 4px, transparent 4.5px),
+        radial-gradient(circle at 1.95rem 0.95rem, #3f465c 4px, transparent 4.5px),
+        radial-gradient(circle at 2.85rem 0.95rem, #3f465c 4px, transparent 4.5px),
+        linear-gradient(var(--haven-surface), var(--haven-raised));
+}
+
+.shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin: 0;
+}
+
+/* A gallery of two or three, side by side where there is room. */
+.gallery {
+    display: grid;
+    gap: 1.1rem;
+    grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+    margin: 1.8rem 0;
+}
+
+.gallery .shot {
+    margin: 0;
+}
+
+.gallery .shot .frame {
+    transition: transform 320ms cubic-bezier(0.2, 0.7, 0.3, 1),
+        box-shadow 320ms ease;
+}
+
+.gallery .shot:hover .frame {
+    transform: perspective(1600px) translateY(-4px) scale(1.012);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.08) inset,
+        0 26px 52px -26px rgba(0, 0, 0, 0.95),
+        0 0 0 1px rgba(108, 156, 240, 0.35);
+}
+
+/* ---- cards pick up the same depth ---- */
+
+.card {
+    position: relative;
+    transition: transform 220ms cubic-bezier(0.2, 0.7, 0.3, 1),
+        border-color 220ms ease, box-shadow 220ms ease;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+}
+
+.card:hover {
+    transform: translateY(-3px);
+    border-color: rgba(108, 156, 240, 0.45);
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.06) inset,
+        0 16px 30px -20px rgba(0, 0, 0, 0.9);
+}
+
+/* ---- buttons with a real edge ---- */
+
+.cta a {
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.07) inset,
+        0 6px 14px -10px rgba(0, 0, 0, 0.9);
+    transition: transform 140ms ease, border-color 140ms ease,
+        box-shadow 140ms ease, background-color 140ms ease;
+}
+
+.cta a:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.1) inset,
+        0 12px 22px -12px rgba(0, 0, 0, 0.95);
+}
+
+.cta a:active {
+    transform: translateY(0);
+}
+
+.cta a.primary {
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.28) inset,
+        0 10px 24px -12px rgba(108, 156, 240, 0.75);
+}
+
+.pill {
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+/* ---- arriving on scroll ---- */
+
+/* Hidden only once haven.js has said it is able to show them again. A
+   `.reveal` that starts at opacity 0 in the stylesheet is content that
+   disappears when a script fails to load, which is a steep price for a fade. */
+html.haven-motion .reveal {
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity 600ms ease, transform 600ms cubic-bezier(0.2, 0.7, 0.3, 1);
+    will-change: opacity, transform;
+}
+
+html.haven-motion .reveal.shown {
+    opacity: 1;
+    transform: none;
+}
+
+/* Nothing above is load-bearing, so a reader who asked for stillness gets the
+   same page without any of it — including the resting tilt. */
+@media (prefers-reduced-motion: reduce) {
+    .hero img.mark,
+    .shot .frame,
+    .card,
+    .cta a,
+    .reveal {
+        transition: none !important;
+        animation: none !important;
+    }
+
+    .shot.angled .frame,
+    .shot .frame,
+    .gallery .shot:hover .frame,
+    .card:hover,
+    .cta a:hover,
+    .hero img.mark:hover {
+        transform: none !important;
+    }
+
+    html.haven-motion .reveal {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * 10. The hero screenshot breaks the text column
+ *
+ * A terminal with three panes in it has a lot to show, and the measure that
+ * suits prose starves it. Only where there is room to spare: below this the
+ * margins would eat the page padding.
+ * ------------------------------------------------------------------ */
+
+@media (min-width: 1180px) {
+    .shot.angled {
+        margin-inline: -4.5rem;
+    }
+
+    .shot.angled + .caption {
+        margin-inline: -4.5rem;
+        padding-top: 0.4rem;
+    }
+}
+
+@media (min-width: 1500px) {
+    .shot.angled,
+    .shot.angled + .caption {
+        margin-inline: -7rem;
+    }
+}
+
+.shot + .caption {
+    margin-top: 0.9rem;
+}
+
+/* ------------------------------------------------------------------ *
+ * 11. Wide tables
+ *
+ * The comparison table is seven columns of prose. Held to the measure that
+ * suits paragraphs it wraps every cell to three lines and becomes unreadable,
+ * which is the one thing a comparison table cannot afford. So: let the
+ * wrapper out of the text column where the window allows, and give the table
+ * a floor width it will scroll rather than shrink past.
+ * ------------------------------------------------------------------ */
+
+.content table {
+    min-width: 42rem;
+}
+
+@media (min-width: 1180px) {
+    .content .table-wrapper {
+        margin-inline: -4.5rem;
+    }
+}
+
+@media (min-width: 1500px) {
+    .content .table-wrapper {
+        margin-inline: -7rem;
+    }
+}
+
+/* Below the floor the wrapper scrolls, and a scrollable region needs to look
+   scrollable. */
+.content .table-wrapper {
+    scrollbar-width: thin;
+    overscroll-behavior-x: contain;
+}
+
+/* ------------------------------------------------------------------ *
+ * 12. The comparison table's own column
+ *
+ * The last column of `.compare` is Haven's, and it is the column a reader
+ * came to the page for. A tint and a left edge mark it without turning the
+ * table into a sales sheet — every other column keeps its ordinary weight.
+ * ------------------------------------------------------------------ */
+
+.compare table td:last-child,
+.compare table th:last-child {
+    background: color-mix(in srgb, var(--links) 10%, transparent);
+    border-left: 1px solid color-mix(in srgb, var(--links) 35%, transparent);
+}
+
+.compare table thead th:last-child {
     color: var(--links);
 }
 
-/* Terminal sketches are fenced code blocks of box-drawing characters; they must
-   not wrap, and they look wrong at the body text size. */
-.content pre > code {
-    font-size: 0.85em;
-    line-height: 1.45;
+/* The first column is the capability being compared, and it reads as a row
+   heading even though markdown gives no way to say so. */
+.compare table td:first-child {
+    font-weight: 600;
 }
 
-/* Keep inline code from breaking mid-identifier in prose. */
-.content :not(pre) > code {
-    white-space: nowrap;
+/* Single column on a phone: two cards at 11rem each wrap every heading. */
+@media (max-width: 480px) {
+    .cards,
+    .gallery {
+        grid-template-columns: 1fr;
+    }
 }
