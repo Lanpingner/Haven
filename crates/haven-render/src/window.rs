@@ -10,13 +10,15 @@ use std::sync::Arc;
 
 use haven_client::frame::{composite, FrameModel};
 use haven_client::frontend::{Frontend, PresentError};
-use haven_client::input::{InputEvent, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use haven_client::input::{
+    InputEvent, Key, KeyEvent, KeyState, Modifiers, MouseButton, MouseEvent, NamedKey,
+};
 use haven_client::{Client, Tick};
 use haven_core::term::CursorShape;
 use haven_core::Palette;
 use haven_proto::{CellSize, ClientCaps, ColorDepth, FrontendKind, KeyTier, SessionId, Transport};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamed};
 use winit::window::{Window, WindowId};
@@ -43,6 +45,11 @@ pub struct GpuFrontend {
     occluded: bool,
     /// State moved on while we were hidden, so a redraw is owed on return.
     needs_redraw: bool,
+    /// Where the pointer last was, in cells. The wheel carries no position
+    /// of its own, and which pane it scrolls is decided by where it is.
+    pointer: (u16, u16),
+    /// Fractions of a row left over from a touchpad's smooth scrolling.
+    wheel_residue: f32,
     pub palette: Palette,
     pub cursor_shape: CursorShape,
 }
@@ -54,6 +61,35 @@ impl GpuFrontend {
 
     pub fn push(&mut self, event: InputEvent) {
         self.queue.push_back(event);
+    }
+
+    /// Remember where the pointer is, in cells.
+    pub fn note_pointer(&mut self, x: f64, y: f64) {
+        let Some(renderer) = &self.renderer else { return };
+        let cell = renderer.cell_metrics();
+        self.pointer = (
+            (x.max(0.0) as u32 / cell.width.max(1)) as u16,
+            (y.max(0.0) as u32 / cell.height.max(1)) as u16,
+        );
+    }
+
+    /// A wheel notch at the pointer, or `None` when it did not move far
+    /// enough to count. Fractions accumulate so a touchpad is not lost.
+    pub fn wheel(&mut self, lines: f32) -> Option<InputEvent> {
+        self.wheel_residue += lines;
+        let whole = self.wheel_residue.trunc();
+        if whole == 0.0 {
+            return None;
+        }
+        self.wheel_residue -= whole;
+        let button = if whole > 0.0 { MouseButton::WheelUp } else { MouseButton::WheelDown };
+        Some(InputEvent::Mouse(MouseEvent {
+            button,
+            col: self.pointer.0,
+            row: self.pointer.1,
+            pressed: true,
+            mods: Modifiers::empty(),
+        }))
     }
 
     /// Visibility, as the compositor sees it.
@@ -133,7 +169,10 @@ impl Frontend for GpuFrontend {
         }
         self.needs_redraw = false;
         let (screen, cursor) = composite(frame);
-        renderer.render(&screen, cursor, &self.palette, self.cursor_shape);
+        // A pane can ask for no cursor at all — DECTCEM, or a view scrolled
+        // away from it — and a block drawn anyway points at the wrong row.
+        let shape = if frame.cursor_visible() { self.cursor_shape } else { CursorShape::Hidden };
+        renderer.render(&screen, cursor, &self.palette, shape);
         Ok(())
     }
 }
@@ -351,6 +390,22 @@ impl<T: Transport> ApplicationHandler<Wake> for App<T> {
             }
             WindowEvent::Focused(focused) => {
                 self.client.frontend.push(InputEvent::Focus(focused));
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.client.frontend.note_pointer(position.x, position.y);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // A line of a touchpad's smooth scroll is a fraction of a
+                // row; rounding each event to zero would make the touchpad
+                // do nothing at all, so the sign is what is carried and the
+                // client decides how far one notch goes.
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 16.0,
+                };
+                if let Some(event) = self.client.frontend.wheel(lines) {
+                    self.client.frontend.push(event);
+                }
             }
             WindowEvent::RedrawRequested if !self.client.frontend.is_occluded() => {
                 // Re-present what we already have: a redraw request is the

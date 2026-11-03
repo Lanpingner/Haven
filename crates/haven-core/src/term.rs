@@ -63,6 +63,8 @@ pub enum CursorShape {
     Block,
     Underline,
     Bar,
+    /// Not drawn at all: DECTCEM off, or a view scrolled away from it.
+    Hidden,
 }
 
 /// Terminal state for one pane.

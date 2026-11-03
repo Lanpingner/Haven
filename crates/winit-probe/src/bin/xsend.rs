@@ -78,6 +78,10 @@ fn main() {
             "Escape" | "Esc" => 0xff1b,
             "BackSpace" => 0xff08,
             "space" => 0x20,
+            "Prior" | "PageUp" => 0xff55,
+            "Next" | "PageDown" => 0xff56,
+            "Home" => 0xff50,
+            "End" => 0xff57,
             _ => match ch.chars().next() {
                 Some(c) => c as u32,
                 None => continue,

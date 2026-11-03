@@ -51,11 +51,20 @@ cargo run -p haven -- shell-info
 | `x` | close the pane |
 | `c` / `n` / `p` / `1`-`9` | new tab / next / previous / select |
 | `C` | new session, and move to it |
+| `PageUp` / `PageDown` | read back through the pane's history |
+| `Home` / `End` | the oldest row / back to the live screen |
 | `e` / `E` / `t` | even-horizontal / even-vertical / tiled layout |
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree: sessions, windows, panes |
 | `Ctrl+A` | send a literal `Ctrl+A` |
+
+Scrolling also works with the mouse wheel in `haven gpu`, over whichever pane
+the pointer is on — not necessarily the focused one. While a pane is scrolled
+the bar says so, its cursor is not drawn, and typing returns to the live
+screen. The offset is per client: two people on one session read at their own
+pace. The alternate screen keeps no history, so a full-screen program scrolls
+nothing.
 
 ### Command line
 
@@ -67,6 +76,7 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `split-h` / `split-v` | split into rows / columns |
 | `new-window` (`new-tab`), `next`, `prev` | tabs |
 | `new-session` (`new`) | a new session on this daemon, named `haven-<n>` |
+| `scroll-up`, `scroll-down`, `scroll-end` | as the paging keys do |
 | `select-window <n>` (`select-tab`) | go to tab *n* (numbered from 1) |
 | `kill-pane`, `zoom`, `detach` | as the keys do |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |

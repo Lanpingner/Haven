@@ -279,6 +279,137 @@ fn a_new_session_can_be_named() {
     );
 }
 
+/// A pane that prints numbered lines on demand, so history has content a
+/// test can recognise by eye.
+fn counting_spawner() -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
+    Box::new(|size| {
+        Pty::spawn(&PtyConfig {
+            program: Some("/bin/sh".into()),
+            args: vec![
+                "-c".into(),
+                "while read n; do i=1; while [ $i -le $n ]; do echo \"line$i\";                  i=$((i+1)); done; done"
+                    .into(),
+            ],
+            size,
+            ..Default::default()
+        })
+    })
+}
+
+#[test]
+fn scrolling_back_shows_rows_that_left_the_screen() {
+    let mut daemon = Daemon::detached(counting_spawner);
+    let mut client = attach(&mut daemon, 20, 6);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let pane = client.focus.expect("focus");
+
+    // Twenty lines through a five-row pane: most of them are history.
+    send_input(&mut client, pane, b"20\n");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame.pane_text(pane).contains("line20")
+        }),
+        "the pane never caught up:\n{}",
+        client.frame.pane_text(pane)
+    );
+    assert!(!client.frame.pane_text(pane).contains("line1\n"), "nothing scrolled off");
+
+    // Eight rows back from a five-row view: the oldest line on screen was
+    // line16, and line9 was gone.
+    client.transport.send(ClientMsg::Scroll { pane, delta: 8 }).expect("scroll");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame.pane_text(pane).contains("line9")
+        }),
+        "scrolling back showed nothing older:\n{}",
+        client.frame.pane_text(pane)
+    );
+
+    // And the bar is told, so it can say the screen is not live.
+    assert_eq!(client.frame.scroll().map(|(o, _)| o), Some(8));
+    assert!(!client.frame.cursor_visible(), "a cursor was drawn below the view");
+
+    // Back to the bottom, however far it is asked to go.
+    client.transport.send(ClientMsg::Scroll { pane, delta: i32::MIN }).expect("scroll");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame.pane_text(pane).contains("line20")
+        }),
+        "could not get back to the live screen"
+    );
+    assert_eq!(client.frame.scroll(), None, "still reported as scrolled");
+    assert!(client.frame.cursor_visible(), "the cursor never came back");
+}
+
+#[test]
+fn scrolling_cannot_go_past_the_oldest_row() {
+    let mut daemon = Daemon::detached(counting_spawner);
+    let mut client = attach(&mut daemon, 20, 6);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let pane = client.focus.expect("focus");
+    send_input(&mut client, pane, b"20\n");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.pane_text(pane).contains("line20"));
+
+    client.transport.send(ClientMsg::Scroll { pane, delta: i32::MAX }).expect("scroll");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.scroll().is_some());
+    let (offset, total) = client.frame.scroll().expect("scrolled");
+    assert_eq!(offset, total, "the top of the history is as far as it goes");
+    let text = client.frame.pane_text(pane);
+    assert!(text.contains("line1\n") || text.contains("$"), "not at the top:\n{text}");
+}
+
+#[test]
+fn typing_returns_to_the_live_screen() {
+    // Reading history and then pressing a key means you are done reading;
+    // watching your own keystrokes land off-screen would be worse than
+    // losing your place.
+    let mut daemon = Daemon::detached(counting_spawner);
+    let mut client = attach(&mut daemon, 20, 6);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let pane = client.focus.expect("focus");
+    send_input(&mut client, pane, b"20\n");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.pane_text(pane).contains("line20"));
+
+    client.transport.send(ClientMsg::Scroll { pane, delta: 8 }).expect("scroll");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.scroll().is_some());
+    assert!(client.frame.scroll().is_some());
+
+    send_input(&mut client, pane, b"1\n");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| c[0].frame.scroll().is_none()),
+        "typing left the view in the history"
+    );
+}
+
+#[test]
+fn two_clients_scroll_independently() {
+    // The offset is per client. Two people on one session read at their own
+    // pace, which a session-wide offset could never allow.
+    let mut daemon = Daemon::detached(counting_spawner);
+    let mut reader = attach(&mut daemon, 20, 6);
+    let mut watcher = attach(&mut daemon, 20, 6);
+    settle(&mut daemon, &mut [&mut reader, &mut watcher], |c| {
+        c[0].focus.is_some() && c[1].focus.is_some()
+    });
+    let pane = reader.focus.expect("focus");
+    send_input(&mut reader, pane, b"20\n");
+    settle(&mut daemon, &mut [&mut reader, &mut watcher], |c| {
+        c[0].frame.pane_text(pane).contains("line20")
+            && c[1].frame.pane_text(pane).contains("line20")
+    });
+
+    reader.transport.send(ClientMsg::Scroll { pane, delta: 8 }).expect("scroll");
+    assert!(settle(&mut daemon, &mut [&mut reader, &mut watcher], |c| {
+        c[0].frame.pane_text(pane).contains("line9")
+    }));
+    assert!(
+        watcher.frame.pane_text(pane).contains("line20"),
+        "one client's scrolling moved the other's screen:\n{}",
+        watcher.frame.pane_text(pane)
+    );
+    assert_eq!(watcher.frame.scroll(), None);
+}
+
 #[test]
 fn colours_survive_the_round_trip_through_the_protocol() {
     use haven_core::{Color, Rgb};

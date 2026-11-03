@@ -19,9 +19,19 @@ pub struct PaneSync {
     pub clusters_sent: u16,
     pub cursor: Option<haven_core::Cursor>,
     pub title: Option<String>,
-    pub modes: Option<(bool, bool)>,
+    pub modes: Option<(bool, bool, bool)>,
     /// False until the client has had a full snapshot.
     pub snapshotted: bool,
+    /// How far back this client is reading, in rows above the live bottom.
+    pub offset: usize,
+    /// Rows of history when the view was last sent. Row revisions are
+    /// per-row counters, so two different rows can share one: comparing them
+    /// by index is only sound while the view sits still. When history grows
+    /// under a scrolled view, every index means a different row, so the
+    /// whole thing is resent rather than diffed.
+    pub anchor: usize,
+    /// What the client was last told its position is.
+    pub reported: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Default)]

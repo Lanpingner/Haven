@@ -226,6 +226,32 @@ impl Grid {
         self.scrollback.iter()
     }
 
+    /// How far back a view may be scrolled: one row per row of history.
+    pub fn max_scroll(&self) -> usize {
+        self.scrollback.len()
+    }
+
+    /// A screenful ending `offset` rows above the live bottom.
+    ///
+    /// The history is `scrollback` followed by the live rows, and a view is a
+    /// window of `num_rows()` onto it. At offset 0 that is exactly the live
+    /// rows, which is why nothing else in the daemon needs to care whether a
+    /// client is scrolled.
+    pub fn view(&self, offset: usize) -> Vec<&Row> {
+        let offset = offset.min(self.max_scroll());
+        if offset == 0 {
+            return self.rows.iter().collect();
+        }
+        let n = self.num_rows();
+        let start = self.scrollback.len() - offset;
+        (start..start + n)
+            .map(|i| match self.scrollback.get(i) {
+                Some(row) => row,
+                None => &self.rows[i - self.scrollback.len()],
+            })
+            .collect()
+    }
+
     fn push_scrollback(&mut self, row: Row) {
         if self.is_alt || self.max_scrollback_bytes == 0 {
             return;
@@ -976,6 +1002,41 @@ mod tests {
         g.combine('\u{0301}');
         g.resize(2, 2);
         assert!(g.dump_all().contains('\u{0301}'), "cluster lost in reflow: {:?}", g.dump_all());
+    }
+
+    #[test]
+    fn a_view_at_rest_is_the_live_screen() {
+        let mut g = Grid::new(4, 2);
+        write_str(&mut g, "a\nb");
+        assert_eq!(g.view(0).len(), 2);
+        assert_eq!(g.view(0)[0].cells[0].c, 'a');
+    }
+
+    #[test]
+    fn a_view_reaches_back_into_the_scrollback() {
+        let mut g = Grid::new(4, 2);
+        // Four lines through a two-row screen: two fall into history.
+        write_str(&mut g, "1\n2\n3\n4");
+        assert_eq!(g.max_scroll(), 2, "history: {}", g.max_scroll());
+
+        let view = g.view(1);
+        assert_eq!(view.len(), 2, "a view is always a screenful");
+        assert_eq!(view[0].cells[0].c, '2');
+        assert_eq!(view[1].cells[0].c, '3');
+
+        let view = g.view(2);
+        assert_eq!(view[0].cells[0].c, '1');
+        assert_eq!(view[1].cells[0].c, '2');
+    }
+
+    #[test]
+    fn a_view_cannot_be_scrolled_past_the_oldest_row() {
+        let mut g = Grid::new(4, 2);
+        write_str(&mut g, "1\n2\n3\n4");
+        assert_eq!(
+            g.view(99).iter().map(|r| r.cells[0].c).collect::<String>(),
+            g.view(g.max_scroll()).iter().map(|r| r.cells[0].c).collect::<String>()
+        );
     }
 
     #[test]

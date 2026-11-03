@@ -1147,7 +1147,23 @@ is the new tab) and typed as `new-session`. It is a client-side action like
 detaching, because the daemon needs this client's size and only the frontend
 knows it.
 
+Scrollback was kept but could not be read. The grid has held rows that
+scrolled off since M2; nothing exposed them. `Grid::view(offset)` is a
+screenful taken from `scrollback ++ live`, so at offset 0 it is exactly the
+live rows and the rest of the daemon does not have to know whether anyone is
+scrolled. The offset lives in `PaneSync`, per client and per pane, because two
+clients on one session must read at their own pace.
+
+Row revisions cannot diff a moving view: `rev` is a per-row counter, so two
+unrelated rows can share one, and comparing by index is only sound while the
+view sits still. The view is therefore resent whole whenever the offset moves
+or history grows underneath it, which is cheap — a client that is reading is
+not a client watching a build scroll past.
+
 **Bugs this work surfaced, worth remembering:**
+- `haven server run -- prog -x` dropped `-x`. Every other subcommand does
+  `cfg.args.extend(args.rest)`; the daemon's spawner never did, so the program
+  ran with no arguments at all and looked like it had simply ignored them.
 - Panes stacked one above another had nothing between them. The layout
   reserves a cell between neighbours in both directions (`SEPARATOR`), but
   the client's compositor only ever drew the vertical rule, so a row split

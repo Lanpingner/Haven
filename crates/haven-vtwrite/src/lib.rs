@@ -68,11 +68,21 @@ pub struct Serializer {
     /// The pen and cursor position we believe the destination is in.
     pen: Style,
     pos: Option<(usize, usize)>,
+    /// Whether the destination currently shows a cursor, so DECTCEM is only
+    /// written when it changes rather than on every frame.
+    cursor_shown: bool,
 }
 
 impl Serializer {
     pub fn new(caps: Caps) -> Self {
-        Self { caps, palette: Palette::default(), prev: None, pen: Style::default(), pos: None }
+        Self {
+            caps,
+            palette: Palette::default(),
+            prev: None,
+            pen: Style::default(),
+            pos: None,
+            cursor_shown: true,
+        }
     }
 
     /// Forget what we think the terminal shows. The next frame is a full
@@ -93,6 +103,17 @@ impl Serializer {
     /// frontend uses, because what it draws is several panes plus widgets, not
     /// one grid.
     pub fn frame_snapshot(&mut self, next: Snapshot, cursor: (usize, usize)) -> Vec<u8> {
+        self.frame_snapshot_with_cursor(next, cursor, true)
+    }
+
+    /// As [`Self::frame_snapshot`], but a pane may ask for no cursor at all —
+    /// DECTCEM off, or a view scrolled away from where typing would land.
+    pub fn frame_snapshot_with_cursor(
+        &mut self,
+        next: Snapshot,
+        cursor: (usize, usize),
+        show_cursor: bool,
+    ) -> Vec<u8> {
         let mut out = Vec::new();
 
         let dims_changed = self.prev.as_ref().is_none_or(|p| {
@@ -117,6 +138,10 @@ impl Serializer {
 
         // Leave the cursor where the application put it.
         self.move_to(cursor.0, cursor.1, &mut out);
+        if show_cursor != self.cursor_shown {
+            self.cursor_shown = show_cursor;
+            out.extend_from_slice(if show_cursor { b"\x1b[?25h" } else { b"\x1b[?25l" });
+        }
         if self.caps.synchronized_output {
             out.extend_from_slice(b"\x1b[?2026l");
         }

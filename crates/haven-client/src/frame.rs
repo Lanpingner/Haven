@@ -39,11 +39,23 @@ pub struct PaneFrame {
     /// Modes that change how this client must encode input.
     pub app_cursor_keys: bool,
     pub bracketed_paste: bool,
+    /// Drawn only when the pane says so: DECTCEM, and a view scrolled away
+    /// from the cursor.
+    pub cursor_visible: bool,
+    /// Where this client is reading: rows above the live bottom, and how
+    /// many there are to read.
+    pub scroll: (u32, u32),
 }
 
 impl PaneFrame {
     fn new(id: PaneId, rect: PaneRect) -> Self {
-        Self { id, rect, styles: vec![Style::default()], ..Default::default() }
+        Self {
+            id,
+            rect,
+            styles: vec![Style::default()],
+            cursor_visible: true,
+            ..Default::default()
+        }
     }
 
     fn style(&self, cell: &Cell) -> Style {
@@ -156,11 +168,35 @@ impl FrameModel {
         self.generation += 1;
     }
 
-    pub fn set_modes(&mut self, pane: PaneId, app_cursor_keys: bool, bracketed_paste: bool) {
+    pub fn set_modes(
+        &mut self,
+        pane: PaneId,
+        app_cursor_keys: bool,
+        bracketed_paste: bool,
+        cursor_visible: bool,
+    ) {
         if let Some(entry) = self.panes.get_mut(&pane.0) {
             entry.app_cursor_keys = app_cursor_keys;
             entry.bracketed_paste = bracketed_paste;
+            entry.cursor_visible = cursor_visible;
         }
+    }
+
+    pub fn set_scroll(&mut self, pane: PaneId, offset: u32, total: u32) {
+        if let Some(entry) = self.panes.get_mut(&pane.0) {
+            entry.scroll = (offset, total);
+        }
+    }
+
+    /// Whether the focused pane's cursor should be drawn at all.
+    pub fn cursor_visible(&self) -> bool {
+        self.focus.and_then(|id| self.pane(id)).is_none_or(|p| p.cursor_visible)
+    }
+
+    /// How far the focused pane is scrolled back, when it is.
+    pub fn scroll(&self) -> Option<(u32, u32)> {
+        let (offset, total) = self.focus.and_then(|id| self.pane(id))?.scroll;
+        (offset > 0).then_some((offset, total))
     }
 
     pub fn apply_layout(&mut self, layout: &Layout) {

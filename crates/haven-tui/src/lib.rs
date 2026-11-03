@@ -117,7 +117,7 @@ impl TuiFrontend {
     /// The bytes this frame would write, without writing them.
     pub fn render(&mut self, frame: &FrameModel) -> Vec<u8> {
         let (snapshot, cursor) = composite(frame);
-        self.serializer.frame_snapshot(snapshot, cursor)
+        self.serializer.frame_snapshot_with_cursor(snapshot, cursor, frame.cursor_visible())
     }
 
     fn poll_stdin(&mut self) -> io::Result<()> {

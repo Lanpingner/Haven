@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -174,6 +174,13 @@ pub enum ClientMsg {
     },
     /// A resolved mux action, from the client's key table.
     Action(Action),
+    /// Move this client's view of a pane through its scrollback. Positive is
+    /// backwards, into history. Per client, not per session: two people on
+    /// one session read at their own pace.
+    Scroll {
+        pane: PaneId,
+        delta: i32,
+    },
     /// Control-mode queries, which the CLI is built on: anything `haven ls`
     /// can do, a script can do (`docs/PLAN.md` §14.2).
     ListSessions,
@@ -248,6 +255,19 @@ pub enum ServerMsg {
         pane: PaneId,
         app_cursor_keys: bool,
         bracketed_paste: bool,
+        /// DECTCEM, and false besides while this client's view is scrolled
+        /// away from the cursor: a block parked at the bottom of a page of
+        /// history is not where anything is about to be typed.
+        cursor_visible: bool,
+    },
+    /// Where this client's view of a pane sits in its history. Sent whenever
+    /// it moves, including back to the bottom, so the bar can say so.
+    Scrolled {
+        pane: PaneId,
+        /// Rows above the live bottom. Zero is the live screen.
+        offset: u32,
+        /// Rows of history there are to scroll through.
+        total: u32,
     },
     /// A pane asked for the clipboard via `OSC 52`; the client decides.
     Clipboard {

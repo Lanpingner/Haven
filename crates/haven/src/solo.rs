@@ -196,7 +196,9 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
         | Action::SendPrefix
         | Action::EnterCommand
         | Action::Choose
-        | Action::NewSession => {}
+        | Action::NewSession
+        // Standalone mode draws straight from the grid, with no view to move.
+        | Action::Scroll(_) => {}
     }
     Ok(false)
 }

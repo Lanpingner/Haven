@@ -292,3 +292,61 @@ fn the_matching_protocol_is_not_refused() {
     assert_ne!(client.tick().unwrap(), Tick::Finished);
     assert!(client.fatal().is_none());
 }
+
+#[test]
+fn the_wheel_scrolls_the_pane_under_the_pointer() {
+    use haven_client::{MouseButton, MouseEvent};
+
+    let server = ScriptedTransport::new([ServerMsg::Layout(layout(
+        &[(1, 0, 0, 10, 4), (2, 11, 0, 10, 4)],
+        1,
+    ))]);
+    let wheel = |col: u16| {
+        InputEvent::Mouse(MouseEvent {
+            button: MouseButton::WheelUp,
+            col,
+            row: 1,
+            pressed: true,
+            mods: Modifiers::empty(),
+        })
+    };
+    let frontend = ScriptedFrontend::new(size(21, 4), []);
+    let mut client = Client::new(frontend, server);
+    client.tick().unwrap(); // layout
+
+    // Over the right-hand pane, which does not have focus: the wheel follows
+    // the pointer, because reading one pane while typing in another is the
+    // ordinary case.
+    client.frontend = ScriptedFrontend::new(size(21, 4), [wheel(15)]);
+    client.tick().unwrap();
+    assert_eq!(
+        client.transport.sent.last(),
+        Some(&ClientMsg::Scroll { pane: PaneId(2), delta: 3 })
+    );
+
+    client.frontend = ScriptedFrontend::new(size(21, 4), [wheel(2)]);
+    client.tick().unwrap();
+    assert_eq!(
+        client.transport.sent.last(),
+        Some(&ClientMsg::Scroll { pane: PaneId(1), delta: 3 })
+    );
+}
+
+#[test]
+fn a_scrolled_pane_says_so_and_hides_its_cursor() {
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 10, 2)], 1)),
+        ServerMsg::Modes {
+            pane: PaneId(1),
+            app_cursor_keys: false,
+            bracketed_paste: false,
+            cursor_visible: false,
+        },
+        ServerMsg::Scrolled { pane: PaneId(1), offset: 7, total: 40 },
+    ]);
+    let frontend = ScriptedFrontend::new(size(10, 2), []);
+    let mut client = Client::new(frontend, server);
+    client.tick().unwrap();
+    assert_eq!(client.frame.scroll(), Some((7, 40)));
+    assert!(!client.frame.cursor_visible(), "a cursor below the view would be drawn");
+}

@@ -318,6 +318,15 @@ impl Daemon {
                 self.join(index, id, caps);
             }
             ClientMsg::Input { pane, bytes } => {
+                // Typing returns to the live screen. Reading history and then
+                // pressing a key means you are done reading, and watching
+                // your own keystrokes land somewhere off-screen is worse than
+                // losing your place.
+                let state = self.clients[index].sync.pane(pane);
+                if state.offset != 0 {
+                    state.offset = 0;
+                    state.snapshotted = false;
+                }
                 if let Some(host) = self.host_of(index) {
                     host.runtime.send_to(pane, &bytes)?;
                 }
@@ -329,6 +338,7 @@ impl Daemon {
                 self.clients[index].sync.invalidate();
             }
             ClientMsg::Action(action) => self.act(index, action)?,
+            ClientMsg::Scroll { pane, delta } => self.scroll(index, pane, delta),
             ClientMsg::ListSessions => {
                 let sessions = self.session_infos();
                 let _ = self.clients[index].framed.queue(&ServerMsg::Sessions {
@@ -417,6 +427,25 @@ impl Daemon {
             session: SessionId(id),
             build: haven_proto::build_stamp(),
         });
+    }
+
+    /// Move one client's view of one pane. Clamped here rather than in the
+    /// client, because only the daemon knows how much history there is.
+    fn scroll(&mut self, index: usize, pane: PaneId, delta: i32) {
+        let Some(id) = self.clients.get(index).and_then(|c| c.session) else { return };
+        let Some(host) = self.sessions.get(&id) else { return };
+        let Some(max) = host.runtime.pane(pane).map(|p| p.grid().max_scroll()) else { return };
+        let client = &mut self.clients[index];
+        let state = client.sync.pane(pane);
+        let wanted = state.offset as i64 + delta as i64;
+        let next = wanted.clamp(0, max as i64) as usize;
+        if next == state.offset {
+            return;
+        }
+        state.offset = next;
+        // The view is about to be a different set of rows at the same
+        // indices, which row revisions cannot express.
+        state.snapshotted = false;
     }
 
     fn host_of(&mut self, index: usize) -> Option<&mut SessionHost> {
@@ -737,47 +766,76 @@ fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
             let _ = client.framed.queue(&ServerMsg::Tables(tables));
         }
 
-        let modes =
-            (pane.emulator.term.modes.app_cursor_keys, pane.emulator.term.modes.bracketed_paste);
+        // The view this client is reading. At rest it is the live screen, so
+        // nothing below has to ask whether anyone is scrolled.
+        let history = grid.max_scroll();
+        state.offset = state.offset.min(history);
+        let offset = state.offset;
+        let view = grid.view(offset);
+
+        // A cursor outside the view is not drawn: a block parked at the edge
+        // of a page of history says the wrong thing about where typing goes.
+        let cursor = scrolled_cursor(grid.cursor, offset, grid.num_rows());
+        let modes = (
+            pane.emulator.term.modes.app_cursor_keys,
+            pane.emulator.term.modes.bracketed_paste,
+            pane.emulator.term.modes.cursor_visible && cursor.is_some(),
+        );
         if state.modes != Some(modes) {
             state.modes = Some(modes);
             let _ = client.framed.queue(&ServerMsg::Modes {
                 pane: rect.pane,
                 app_cursor_keys: modes.0,
                 bracketed_paste: modes.1,
+                cursor_visible: modes.2,
             });
         }
 
-        if !state.snapshotted || state.rows.len() != grid.num_rows() {
-            state.rows = grid.rows().iter().map(|r| r.rev).collect();
+        let position = (offset as u32, history as u32);
+        if state.reported != Some(position) {
+            state.reported = Some(position);
+            let _ = client.framed.queue(&ServerMsg::Scrolled {
+                pane: rect.pane,
+                offset: position.0,
+                total: position.1,
+            });
+        }
+
+        let cursor = cursor.unwrap_or(grid.cursor);
+        // History growing under a scrolled view moves every row, and row
+        // revisions cannot detect that: they are per-row counters, so two
+        // unrelated rows may share one. The view is resent whole instead.
+        let shifted = offset > 0 && state.anchor != history;
+        if !state.snapshotted || state.rows.len() != view.len() || shifted {
+            state.rows = view.iter().map(|r| r.rev).collect();
             state.snapshotted = true;
-            state.cursor = Some(grid.cursor);
+            state.anchor = history;
+            state.cursor = Some(cursor);
             let _ = client.framed.queue(&ServerMsg::Snapshot {
                 pane: rect.pane,
-                rows: grid.rows().iter().map(encode_row).collect(),
-                cursor: grid.cursor,
-                rev: grid.rows().first().map(|r| r.rev).unwrap_or(0),
+                rows: view.iter().map(|r| encode_row(r)).collect(),
+                cursor,
+                rev: view.first().map(|r| r.rev).unwrap_or(0),
             });
         } else {
-            let changed: Vec<(u16, RowRle)> = grid
-                .rows()
+            let changed: Vec<(u16, RowRle)> = view
                 .iter()
                 .enumerate()
                 .filter(|(i, row)| state.rows.get(*i) != Some(&row.rev))
                 .map(|(i, row)| (i as u16, encode_row(row)))
                 .collect();
-            let cursor_moved = state.cursor != Some(grid.cursor);
+            let cursor_moved = state.cursor != Some(cursor);
             if !changed.is_empty() || cursor_moved {
                 for (i, _) in &changed {
                     if let Some(slot) = state.rows.get_mut(*i as usize) {
-                        *slot = grid.rows()[*i as usize].rev;
+                        *slot = view[*i as usize].rev;
                     }
                 }
-                state.cursor = Some(grid.cursor);
+                state.cursor = Some(cursor);
                 let _ = client.framed.queue(&ServerMsg::Delta {
                     pane: rect.pane,
                     rows: changed,
-                    cursor: grid.cursor,
+                    cursor,
                     rev: 0,
                 });
             }
@@ -791,6 +849,20 @@ fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
                 .queue(&ServerMsg::Title { pane: rect.pane, title: title.unwrap_or_default() });
         }
     }
+}
+
+/// Where the cursor sits in a scrolled view, or `None` when it is below it.
+///
+/// The view is `offset` rows above the live bottom, so the cursor moves down
+/// by that much and falls off the end once the view has gone back further
+/// than the cursor's own row.
+fn scrolled_cursor(
+    cursor: haven_core::Cursor,
+    offset: usize,
+    rows: usize,
+) -> Option<haven_core::Cursor> {
+    let row = cursor.row.checked_add(offset)?;
+    (row < rows).then_some(haven_core::Cursor { row, ..cursor })
 }
 
 fn encode_row(row: &Row) -> RowRle {

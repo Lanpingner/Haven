@@ -32,7 +32,14 @@ pub enum Action {
     EnterCommand,
     /// Open the session tree.
     Choose,
+    /// Move the view through the pane's history, in rows. Negative goes back
+    /// towards the live screen.
+    Scroll(i32),
 }
+
+/// How far `PageUp` moves. Not a pane height, which the key table has no way
+/// to know; the daemon clamps it to the history that exists.
+pub const PAGE_ROWS: i32 = 20;
 
 /// Ctrl+A, like screen and like most tmux configurations in the wild.
 pub const PREFIX: (char, Modifiers) = ('a', Modifiers::CTRL);
@@ -76,6 +83,12 @@ pub fn prefix_table(event: &KeyEvent) -> Option<Action> {
             Action::SelectWindow(c as usize - '1' as usize)
         }
         Key::Char(c) if c == PREFIX.0 && event.mods == PREFIX.1 => Action::SendPrefix,
+        // A page is nearly a screenful: PAGE_ROWS rather than the pane's own
+        // height, because the key table does not know how tall the pane is.
+        Key::Named(NamedKey::PageUp) => Action::Scroll(PAGE_ROWS),
+        Key::Named(NamedKey::PageDown) => Action::Scroll(-PAGE_ROWS),
+        Key::Named(NamedKey::Home) => Action::Scroll(i32::MAX),
+        Key::Named(NamedKey::End) => Action::Scroll(i32::MIN),
         Key::Named(NamedKey::Left) if shift => Action::Resize(Edge::Left),
         Key::Named(NamedKey::Right) if shift => Action::Resize(Edge::Right),
         Key::Named(NamedKey::Up) if shift => Action::Resize(Edge::Up),
@@ -97,6 +110,9 @@ pub const COMMANDS: &[&str] = &[
     "new-tab",
     "new-session",
     "detach",
+    "scroll-up",
+    "scroll-down",
+    "scroll-end",
     "even-horizontal",
     "even-vertical",
     "kill-pane",
@@ -162,6 +178,10 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         "kill-pane" | "killp" => Action::ClosePane,
         "zoom" => Action::ToggleZoom,
         "choose" | "choose-tree" => Action::Choose,
+        "scroll-up" | "page-up" => Action::Scroll(PAGE_ROWS),
+        "scroll-down" | "page-down" => Action::Scroll(-PAGE_ROWS),
+        // The live screen again, whatever the history.
+        "scroll-end" | "bottom" => Action::Scroll(i32::MIN),
         "detach" | "det" => Action::Detach,
         "even-horizontal" => Action::ApplyLayout(NamedLayout::EvenHorizontal),
         "even-vertical" => Action::ApplyLayout(NamedLayout::EvenVertical),
@@ -210,7 +230,8 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         | Action::SendPrefix
         | Action::EnterCommand
         | Action::Choose
-        | Action::NewSession => return None,
+        | Action::NewSession
+        | Action::Scroll(_) => return None,
     })
 }
 

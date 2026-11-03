@@ -24,6 +24,10 @@ pub use input::{
 
 use haven_proto::{Action, ClientMsg, PaneId, ServerMsg, Transport, TransportError};
 
+/// Rows one notch of the wheel moves. Three is what every other terminal
+/// does, and matching it is the whole point.
+const WHEEL_ROWS: i32 = 3;
+
 /// What a key filter decided about a keystroke.
 ///
 /// This is the seam the key table plugs into (`docs/PLAN.md` §11.2): the
@@ -47,6 +51,8 @@ pub enum Intercepted {
     /// reason it owns attaching: the daemon has to be told this client's
     /// size, and only the frontend knows it.
     NewSession,
+    /// Move the focused pane's view through its history, in rows.
+    Scroll(i32),
 }
 
 /// Decides what a keystroke means before it reaches a pane.
@@ -202,6 +208,18 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         self.chooser = Some(next);
     }
 
+    /// Which pane covers a screen cell, if any.
+    fn pane_at(&self, col: u16, row: u16) -> Option<PaneId> {
+        self.frame
+            .panes
+            .values()
+            .find(|p| {
+                let r = &p.rect;
+                col >= r.col && col < r.col + r.cols && row >= r.row && row < r.row + r.rows
+            })
+            .map(|p| p.id)
+    }
+
     /// Ask the daemon for a new session and move this client to it.
     ///
     /// The panes we hold belong to the session we are leaving, so they go
@@ -253,6 +271,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             &self.mode,
             now,
             &self.frame.theme,
+            self.frame.scroll(),
         ) {
             self.frame.widgets.push(bar);
         }
@@ -364,6 +383,12 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                         self.new_session(None)?;
                         return Ok(Tick::Redraw);
                     }
+                    Some(Intercepted::Scroll(delta)) => {
+                        if let Some(pane) = self.focus {
+                            self.transport.send(ClientMsg::Scroll { pane, delta })?;
+                        }
+                        return Ok(Tick::Idle);
+                    }
                     Some(Intercepted::Detach) => {
                         self.transport.send(ClientMsg::Detach)?;
                         return Ok(Tick::Finished);
@@ -385,7 +410,22 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 self.transport.send(ClientMsg::Input { pane, bytes: text.into_bytes() })?;
                 Ok(Tick::Idle)
             }
-            InputEvent::Mouse(_) | InputEvent::Focus(_) => Ok(Tick::Idle),
+            InputEvent::Mouse(mouse) => {
+                // A wheel over a pane scrolls that pane's history. Which
+                // pane is *under the pointer*, not which has focus: reading
+                // one pane while typing in another is the ordinary case.
+                let rows = match mouse.button {
+                    MouseButton::WheelUp => WHEEL_ROWS,
+                    MouseButton::WheelDown => -WHEEL_ROWS,
+                    _ => return Ok(Tick::Idle),
+                };
+                let Some(pane) = self.pane_at(mouse.col, mouse.row).or(self.focus) else {
+                    return Ok(Tick::Idle);
+                };
+                self.transport.send(ClientMsg::Scroll { pane, delta: rows })?;
+                Ok(Tick::Idle)
+            }
+            InputEvent::Focus(_) => Ok(Tick::Idle),
         }
     }
 
@@ -411,8 +451,8 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 self.frame.apply_tables(&tables);
                 false
             }
-            ServerMsg::Modes { pane, app_cursor_keys, bracketed_paste } => {
-                self.frame.set_modes(pane, app_cursor_keys, bracketed_paste);
+            ServerMsg::Modes { pane, app_cursor_keys, bracketed_paste, cursor_visible } => {
+                self.frame.set_modes(pane, app_cursor_keys, bracketed_paste, cursor_visible);
                 // Mirror DECCKM into the encoder: only the pane knows it, and
                 // without it arrow keys type letters.
                 if Some(pane) == self.focus {
@@ -444,6 +484,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             ServerMsg::PaneExited { pane, .. } => {
                 self.frame.remove_pane(pane);
                 true
+            }
+            ServerMsg::Scrolled { pane, offset, total } => {
+                self.frame.set_scroll(pane, offset, total);
+                Some(pane) == self.focus
             }
             ServerMsg::Theme(theme) => {
                 self.frame.theme = *theme;

@@ -328,12 +328,18 @@ fn server(args: Args) -> ExitCode {
             let login = args.login;
             let integrate = args.integrate;
             let program = args.program.clone();
+            // The program's own arguments, which every other subcommand
+            // already honours. Without this `server run -- prog -x` ran
+            // `prog` with nothing, silently.
+            let rest = args.rest.clone();
             let make_spawner = move || {
                 let program = program.clone();
+                let rest = rest.clone();
                 let spawner: Box<dyn FnMut(haven_pty::PtySize) -> std::io::Result<haven_pty::Pty>> =
                     Box::new(move |size| {
                         let (mut cfg, _, _) =
                             launch_config(program.as_deref(), login, integrate, &ctx(login));
+                        cfg.args.extend(rest.iter().cloned());
                         cfg.size = size;
                         haven_pty::Pty::spawn(&cfg)
                     });

@@ -116,6 +116,7 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
                     }
                     Some(Action::Choose) => Intercepted::OpenChooser,
                     Some(Action::NewSession) => Intercepted::NewSession,
+                    Some(Action::Scroll(rows)) => Intercepted::Scroll(rows),
                     Some(Action::Detach) => Intercepted::Detach,
                     Some(Action::SendPrefix) => Intercepted::Pass,
                     Some(action) => match keys::to_proto(action) {
@@ -149,6 +150,7 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::Detach) => Intercepted::Detach,
         Ok(Action::Choose) => Intercepted::OpenChooser,
         Ok(Action::NewSession) => Intercepted::NewSession,
+        Ok(Action::Scroll(rows)) => Intercepted::Scroll(rows),
         Ok(action) => match keys::to_proto(action) {
             Some(wire) => Intercepted::Act(wire),
             None => Intercepted::Consumed,
@@ -367,6 +369,23 @@ mod tests {
         let mut mode = Mode::command("new-session".into());
         let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
         assert_eq!(out, Intercepted::NewSession, "the typed form must match the binding");
+    }
+
+    #[test]
+    fn the_prefix_pages_through_the_scrollback() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode);
+        assert_eq!(
+            filter(&key(Key::Named(NamedKey::PageUp), Modifiers::empty()), &mut mode),
+            Intercepted::Scroll(keys::PAGE_ROWS)
+        );
+        filter(&ctrl_a(), &mut mode);
+        assert_eq!(
+            filter(&key(Key::Named(NamedKey::End), Modifiers::empty()), &mut mode),
+            Intercepted::Scroll(i32::MIN),
+            "End should go back to the live screen whatever the history"
+        );
     }
 
     #[test]
