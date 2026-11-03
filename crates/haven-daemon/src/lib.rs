@@ -609,6 +609,32 @@ impl Daemon {
                 runtime.session.active_window_mut().last_pane();
                 false
             }
+            Action::SwapPane(edge) => {
+                runtime.swap_pane(edge.map(edge_of))?;
+                false
+            }
+            Action::RotateWindow { backwards } => {
+                runtime.rotate_window(backwards)?;
+                false
+            }
+            Action::BreakPane => {
+                runtime.break_pane()?;
+                false
+            }
+            Action::JoinPane { window, columns } => {
+                let dir = if columns { Direction::Columns } else { Direction::Rows };
+                runtime.join_pane(window, dir)?;
+                false
+            }
+            Action::CloseWindow => runtime.close_window()?,
+            Action::RespawnPane => {
+                runtime.respawn_active()?;
+                false
+            }
+            Action::NextLayout => {
+                runtime.next_layout()?;
+                false
+            }
             Action::Rename { window, name } => {
                 let id = window.then(|| runtime.session.active_window().id);
                 runtime.session.rename(id, &name);
@@ -961,6 +987,16 @@ fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
                 .framed
                 .queue(&ServerMsg::Title { pane: rect.pane, title: title.unwrap_or_default() });
         }
+    }
+}
+
+/// The protocol's edge as the mux spells it.
+fn edge_of(edge: haven_proto::Edge) -> Edge {
+    match edge {
+        haven_proto::Edge::Left => Edge::Left,
+        haven_proto::Edge::Right => Edge::Right,
+        haven_proto::Edge::Up => Edge::Up,
+        haven_proto::Edge::Down => Edge::Down,
     }
 }
 

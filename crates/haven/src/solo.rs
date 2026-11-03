@@ -21,6 +21,7 @@ use rustix::event::{poll, PollFd, PollFlags, Timespec};
 
 use crate::keys::{self, Action};
 use haven_client::bindings::{Bindings, Table};
+use haven_mux::layout::Direction;
 
 /// One row at the bottom for the status line.
 const STATUS_ROWS: u16 = 1;
@@ -212,6 +213,24 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
         Action::LastPane => {
             mux.session.active_window_mut().last_pane();
         }
+        Action::SwapPane(edge) => {
+            mux.swap_pane(edge)?;
+        }
+        Action::RotateWindow { backwards } => {
+            mux.rotate_window(backwards)?;
+        }
+        Action::BreakPane => {
+            mux.break_pane()?;
+        }
+        Action::JoinPane { window, columns } => {
+            let dir = if columns { Direction::Columns } else { Direction::Rows };
+            mux.join_pane(window, dir)?;
+        }
+        Action::CloseWindow => return mux.close_window(),
+        Action::RespawnPane => {
+            mux.respawn_active()?;
+        }
+        Action::NextLayout => mux.next_layout()?,
         Action::Rename { window, name } => {
             let id = window.then(|| mux.session.active_window().id);
             mux.session.rename(id, &name);

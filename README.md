@@ -62,7 +62,12 @@ cargo run -p haven -- shell-info
 | `]` | paste the newest buffer |
 | `PageUp` / `PageDown` | read back through the pane's history |
 | `Home` / `End` | the oldest row / back to the live screen |
-| `e` / `E` / `t` | even-horizontal / even-vertical / tiled layout |
+| `e` / `E` / `t` / `Space` | even-horizontal / even-vertical / tiled / next layout |
+| `o` | swap this pane with the next |
+| `{` / `}` | rotate the panes round |
+| `!` | break this pane out into its own tab |
+| `&` | kill the whole tab |
+| `r` | respawn the pane's program |
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree: sessions, windows, panes |
@@ -147,7 +152,11 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `rename-window <name>`, `rename-session <name>` | an empty name gives a tab back to its command |
 | `command-prompt <text>` | open the command line with `text` on it |
 | `select-window <n>` (`select-tab`) | go to tab *n* (numbered from 1) |
-| `kill-pane`, `zoom`, `detach` | as the keys do |
+| `kill-pane`, `kill-window`, `zoom`, `detach` | as the keys do |
+| `swap-pane [-L\|-R\|-U\|-D]` | exchange panes; no direction means the next one |
+| `rotate [-D]` | move the panes round their places |
+| `break-pane`, `join-pane <tab> [-h]` | move a pane out of / into this tab |
+| `respawn-pane`, `next-layout` | restart the program / cycle the layout |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |
 
 `Tab` completes as far as the candidates agree. A box above the bar lists what

@@ -22,6 +22,18 @@ pub enum Action {
     NewSession,
     LastWindow,
     LastPane,
+    SwapPane(Option<Edge>),
+    RotateWindow {
+        backwards: bool,
+    },
+    BreakPane,
+    JoinPane {
+        window: u32,
+        columns: bool,
+    },
+    CloseWindow,
+    RespawnPane,
+    NextLayout,
     /// Rename the active window, or the session.
     Rename {
         window: bool,
@@ -71,6 +83,9 @@ pub const COMMANDS: &[&str] = &[
     "new-tab",
     "new-session",
     "rename-session",
+    "respawn-pane",
+    "rotate",
+    "swap-pane",
     "rename-window",
     "detach",
     "copy-mode",
@@ -81,7 +96,11 @@ pub const COMMANDS: &[&str] = &[
     "scroll-top",
     "even-horizontal",
     "even-vertical",
+    "break-pane",
+    "join-pane",
     "kill-pane",
+    "kill-window",
+    "next-layout",
     "last",
     "last-pane",
     "new-window",
@@ -129,6 +148,15 @@ pub fn common_prefix(candidates: &[&str]) -> String {
 /// The names are the long forms of the prefix keys rather than a new
 /// vocabulary: anything a binding can do, a typed command can do, because
 /// both resolve to the same [`Action`] (`docs/PLAN.md` §11.2).
+fn wire_edge(edge: Edge) -> haven_proto::Edge {
+    match edge {
+        Edge::Left => haven_proto::Edge::Left,
+        Edge::Right => haven_proto::Edge::Right,
+        Edge::Up => haven_proto::Edge::Up,
+        Edge::Down => haven_proto::Edge::Down,
+    }
+}
+
 /// Everything after the verb, kept whole: a name is not a list of words.
 fn rest_of(line: &str, verb: &str) -> String {
     line.trim().strip_prefix(verb).map(|rest| rest.trim().to_string()).unwrap_or_default()
@@ -149,6 +177,29 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         "next" | "next-window" | "next-tab" => Action::NextWindow,
         "last" | "last-window" | "last-tab" => Action::LastWindow,
         "last-pane" => Action::LastPane,
+        "swap-pane" => Action::SwapPane(match arg {
+            Some("-L") | Some("left") => Some(Edge::Left),
+            Some("-R") | Some("right") => Some(Edge::Right),
+            Some("-U") | Some("up") => Some(Edge::Up),
+            Some("-D") | Some("down") => Some(Edge::Down),
+            _ => None,
+        }),
+        "rotate" | "rotate-window" => {
+            Action::RotateWindow { backwards: matches!(arg, Some("-D") | Some("back")) }
+        }
+        "break-pane" | "breakp" => Action::BreakPane,
+        "join-pane" | "joinp" => {
+            let window: u32 = arg
+                .ok_or_else(|| "join-pane needs a tab number".to_string())?
+                .parse()
+                .map_err(|_| "join-pane needs a tab number".to_string())?;
+            // The third word, when there is one, picks the axis.
+            let columns = !line.split_whitespace().any(|w| w == "-h" || w == "rows");
+            Action::JoinPane { window, columns }
+        }
+        "kill-window" | "killw" | "kill-tab" => Action::CloseWindow,
+        "respawn-pane" | "respawnp" => Action::RespawnPane,
+        "next-layout" | "layout" => Action::NextLayout,
         "rename-window" | "rename-tab" => {
             Action::Rename { window: true, name: rest_of(line, verb) }
         }
@@ -217,6 +268,13 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::SelectWindow(n) => P::SelectWindow(n as u16),
         Action::LastWindow => P::LastWindow,
         Action::LastPane => P::LastPane,
+        Action::SwapPane(edge) => P::SwapPane(edge.map(wire_edge)),
+        Action::RotateWindow { backwards } => P::RotateWindow { backwards },
+        Action::BreakPane => P::BreakPane,
+        Action::JoinPane { window, columns } => P::JoinPane { window, columns },
+        Action::CloseWindow => P::CloseWindow,
+        Action::RespawnPane => P::RespawnPane,
+        Action::NextLayout => P::NextLayout,
         Action::Rename { window, name } => P::Rename { window, name },
         Action::ApplyLayout(NamedLayout::EvenHorizontal) => P::EvenHorizontal,
         Action::ApplyLayout(NamedLayout::EvenVertical) => P::EvenVertical,
@@ -351,8 +409,12 @@ mod tests {
         // A completion that suggests something `parse_command` rejects would
         // be worse than no completion at all.
         for name in COMMANDS {
-            let line = if *name == "select-window" { "select-window 1" } else { name };
-            assert!(parse_command(line).is_ok(), "{name} is offered but does not parse");
+            // Two take a number, and the rest stand alone.
+            let line = match *name {
+                "select-window" | "join-pane" => format!("{name} 1"),
+                other => other.to_string(),
+            };
+            assert!(parse_command(&line).is_ok(), "{name} is offered but does not parse");
         }
     }
 }

@@ -180,6 +180,94 @@ impl Session {
         }
     }
 
+    /// Exchange the active pane with the one in a direction, or with the
+    /// next one in the tree when no direction is given.
+    pub fn swap_pane(&mut self, edge: Option<Edge>, size: CellSize) -> bool {
+        let window = self.active_window();
+        let active = window.active;
+        let other = match edge {
+            Some(edge) => crate::layout::neighbour(&window.rects(size), active, edge),
+            None => {
+                let panes = window.panes();
+                let at = panes.iter().position(|p| *p == active).unwrap_or(0);
+                panes.get((at + 1) % panes.len().max(1)).copied()
+            }
+        };
+        let Some(other) = other.filter(|p| *p != active) else { return false };
+        let window = self.active_window_mut();
+        if !window.root.swap(active, other) {
+            return false;
+        }
+        // Focus follows the pane, not the position: you asked to move *this*
+        // pane, so it is still the one you are typing into.
+        window.active = active;
+        true
+    }
+
+    pub fn rotate_window(&mut self, backwards: bool) -> bool {
+        self.active_window_mut().root.rotate(backwards)
+    }
+
+    /// Move the active pane into a window of its own. Returns the new window
+    /// and the pane, or `None` when the window has only this pane — breaking
+    /// the only pane out of a window would leave an empty one behind.
+    pub fn break_pane(&mut self) -> Option<(WindowId, PaneId)> {
+        let pane = self.active_pane();
+        if self.active_window().pane_count() <= 1 {
+            return None;
+        }
+        self.active_window_mut().close(pane);
+        let id = WindowId(self.next_window);
+        self.next_window += 1;
+        self.windows.push(Window::new(id, pane));
+        self.go_to(self.windows.len() - 1);
+        Some((id, pane))
+    }
+
+    /// Move the only pane of another window into this one, splitting the
+    /// active pane. Returns the window that emptied, for the caller to drop.
+    pub fn join_pane(&mut self, from: WindowId, dir: Direction) -> Option<WindowId> {
+        let index = self.windows.iter().position(|w| w.id == from)?;
+        if index == self.active {
+            return None;
+        }
+        let panes = self.windows[index].panes();
+        let [pane] = panes[..] else {
+            // Only a single-pane window can be joined whole; anything else
+            // would need to decide what happens to the rest of its tree.
+            return None;
+        };
+        if !self.active_window_mut().split(dir, pane, 0.5) {
+            return None;
+        }
+        self.windows.remove(index);
+        if self.active > index {
+            self.active -= 1;
+        }
+        if self.last_window == Some(from) {
+            self.last_window = None;
+        }
+        Some(from)
+    }
+
+    /// Close a whole window and everything in it. Returns its panes, so the
+    /// caller can hang them up, and whether the session is now empty.
+    pub fn close_window(&mut self, id: WindowId) -> (Vec<PaneId>, bool) {
+        let Some(index) = self.windows.iter().position(|w| w.id == id) else {
+            return (Vec::new(), false);
+        };
+        let panes = self.windows[index].panes();
+        self.windows.remove(index);
+        if self.last_window == Some(id) {
+            self.last_window = None;
+        }
+        if self.windows.is_empty() {
+            return (panes, true);
+        }
+        self.active = self.active.min(self.windows.len() - 1);
+        (panes, false)
+    }
+
     pub fn focus(&mut self, edge: Edge, size: CellSize) -> bool {
         self.active_window_mut().focus(edge, size)
     }
@@ -312,6 +400,97 @@ mod tests {
         panes.sort_unstable();
         assert_eq!(panes, vec![1, 2, 3]);
         assert_eq!(layout.active, Some(s.active_pane()));
+    }
+}
+
+#[cfg(test)]
+mod rearrange_tests {
+    use super::*;
+
+    fn session() -> Session {
+        Session::new(SessionId(1), "work").0
+    }
+
+    #[test]
+    fn breaking_a_pane_out_makes_a_window_and_moves_to_it() {
+        let mut s = session();
+        s.split_active(Direction::Columns, 0.5);
+        let moved = s.active_pane();
+        let (id, pane) = s.break_pane().expect("two panes, so one can leave");
+        assert_eq!(pane, moved);
+        assert_eq!(s.windows.len(), 2);
+        assert_eq!(s.active_window().id, id, "should follow the pane out");
+        assert_eq!(s.windows[0].pane_count(), 1, "the pane did not leave its old window");
+    }
+
+    #[test]
+    fn the_only_pane_of_a_window_cannot_be_broken_out() {
+        // It would leave an empty window behind, which the type cannot hold.
+        let mut s = session();
+        assert!(s.break_pane().is_none());
+        assert_eq!(s.windows.len(), 1);
+    }
+
+    #[test]
+    fn joining_brings_a_window_in_and_removes_it() {
+        let mut s = session();
+        let (id, _, _) = s.new_window();
+        s.select_window(0);
+        assert_eq!(s.join_pane(id, Direction::Columns), Some(id));
+        assert_eq!(s.windows.len(), 1, "the emptied window should be gone");
+        assert_eq!(s.active_window().pane_count(), 2);
+    }
+
+    #[test]
+    fn a_window_cannot_be_joined_into_itself() {
+        let mut s = session();
+        let id = s.active_window().id;
+        assert_eq!(s.join_pane(id, Direction::Columns), None);
+    }
+
+    #[test]
+    fn a_window_with_several_panes_cannot_be_joined_whole() {
+        // What would happen to the rest of its tree is not obvious, so it is
+        // refused rather than guessed at.
+        let mut s = session();
+        let (id, _, _) = s.new_window();
+        s.split_active(Direction::Columns, 0.5);
+        s.select_window(0);
+        assert_eq!(s.join_pane(id, Direction::Columns), None);
+    }
+
+    #[test]
+    fn closing_a_window_returns_its_panes_for_hangup() {
+        let mut s = session();
+        s.new_window();
+        s.split_active(Direction::Rows, 0.5);
+        let id = s.active_window().id;
+        let (panes, ended) = s.close_window(id);
+        assert_eq!(panes.len(), 2, "both panes must be handed back to be hung up");
+        assert!(!ended);
+        assert_eq!(s.windows.len(), 1);
+    }
+
+    #[test]
+    fn closing_the_last_window_ends_the_session() {
+        let mut s = session();
+        let id = s.active_window().id;
+        let (_, ended) = s.close_window(id);
+        assert!(ended);
+    }
+
+    #[test]
+    fn swapping_keeps_focus_on_the_pane_that_moved() {
+        // You asked to move *this* pane; it is still the one you are typing
+        // into, which is the opposite of what focusing a position would do.
+        let mut s = session();
+        s.split_active(Direction::Columns, 0.5);
+        let moved = s.active_pane();
+        assert!(
+            s.swap_pane(Some(Edge::Left), CellSize { cols: 80, rows: 24, ..Default::default() })
+        );
+        assert_eq!(s.active_pane(), moved);
+        assert_eq!(s.active_window().panes()[0], moved, "it did not change places");
     }
 }
 

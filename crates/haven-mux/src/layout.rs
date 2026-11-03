@@ -79,6 +79,47 @@ impl PaneNode {
         self.panes().contains(&pane)
     }
 
+    /// Exchange two panes' places in the tree, keeping both weights where
+    /// they are: swapping is about *position*, so the layout must not move.
+    pub fn swap(&mut self, a: PaneId, b: PaneId) -> bool {
+        if a == b || !self.contains(a) || !self.contains(b) {
+            return false;
+        }
+        self.relabel(a, b);
+        true
+    }
+
+    fn relabel(&mut self, a: PaneId, b: PaneId) {
+        match self {
+            Self::Leaf(id) if *id == a => *id = b,
+            Self::Leaf(id) if *id == b => *id = a,
+            Self::Leaf(_) => {}
+            Self::Split { children, .. } => {
+                for child in children.iter_mut() {
+                    child.node.relabel(a, b);
+                }
+            }
+        }
+    }
+
+    /// Turn the tree inside out one level: the children of the outermost
+    /// split move round by one. tmux calls it `rotate-window`.
+    pub fn rotate(&mut self, backwards: bool) -> bool {
+        let Self::Split { children, .. } = self else { return false };
+        if children.len() < 2 {
+            return false;
+        }
+        // The weights stay with their *positions*, not with their panes, so
+        // rotating a wide-left layout keeps the wide slot on the left.
+        let nodes: Vec<PaneNode> = children.iter().map(|c| c.node.clone()).collect();
+        let n = nodes.len();
+        for (i, child) in children.iter_mut().enumerate() {
+            let from = if backwards { (i + 1) % n } else { (i + n - 1) % n };
+            child.node = nodes[from].clone();
+        }
+        true
+    }
+
     /// Solve the tree into cell rectangles.
     ///
     /// Rounding remainder is distributed deterministically from the first child
@@ -522,5 +563,88 @@ mod tests {
         let rects = node.solve(area(5, 2));
         assert!(rects.iter().all(|r| r.cols >= 1), "{rects:?}");
         assert!(rects.iter().all(|r| r.col + r.cols <= 5));
+    }
+}
+
+#[cfg(test)]
+mod rearrange_tests {
+    use super::*;
+
+    fn tree() -> PaneNode {
+        // Three in a row, with the middle one twice the width.
+        PaneNode::Split {
+            dir: Direction::Columns,
+            children: vec![
+                Child { node: PaneNode::leaf(1), weight: 1.0 },
+                Child { node: PaneNode::leaf(2), weight: 2.0 },
+                Child { node: PaneNode::leaf(3), weight: 1.0 },
+            ],
+        }
+    }
+
+    fn weights(node: &PaneNode) -> Vec<(u32, f32)> {
+        let PaneNode::Split { children, .. } = node else { panic!("not a split") };
+        children
+            .iter()
+            .map(|c| match &c.node {
+                PaneNode::Leaf(id) => (id.0, c.weight),
+                _ => (0, c.weight),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn swapping_moves_the_panes_and_leaves_the_sizes_alone() {
+        // The property that makes swap useful: you are moving a pane into a
+        // *place*, so the places must not move with it.
+        let mut node = tree();
+        assert!(node.swap(PaneId(1), PaneId(2)));
+        assert_eq!(weights(&node), vec![(2, 1.0), (1, 2.0), (3, 1.0)]);
+    }
+
+    #[test]
+    fn swapping_a_pane_with_itself_or_a_stranger_does_nothing() {
+        let mut node = tree();
+        assert!(!node.swap(PaneId(1), PaneId(1)));
+        assert!(!node.swap(PaneId(1), PaneId(9)));
+        assert_eq!(weights(&node), weights(&tree()));
+    }
+
+    #[test]
+    fn swapping_works_across_nesting() {
+        let mut node = PaneNode::Split {
+            dir: Direction::Columns,
+            children: vec![
+                Child { node: PaneNode::leaf(1), weight: 1.0 },
+                Child {
+                    node: PaneNode::Split {
+                        dir: Direction::Rows,
+                        children: vec![
+                            Child { node: PaneNode::leaf(2), weight: 1.0 },
+                            Child { node: PaneNode::leaf(3), weight: 1.0 },
+                        ],
+                    },
+                    weight: 1.0,
+                },
+            ],
+        };
+        assert!(node.swap(PaneId(1), PaneId(3)));
+        assert_eq!(node.panes(), vec![PaneId(3), PaneId(2), PaneId(1)]);
+    }
+
+    #[test]
+    fn rotating_moves_panes_round_the_positions() {
+        let mut node = tree();
+        assert!(node.rotate(false));
+        // Each pane moves one place along; the weights stay with the places.
+        assert_eq!(weights(&node), vec![(3, 1.0), (1, 2.0), (2, 1.0)]);
+        assert!(node.rotate(true));
+        assert_eq!(weights(&node), weights(&tree()), "rotating back should undo it");
+    }
+
+    #[test]
+    fn a_single_pane_cannot_be_rotated() {
+        let mut node = PaneNode::leaf(1);
+        assert!(!node.rotate(false));
     }
 }

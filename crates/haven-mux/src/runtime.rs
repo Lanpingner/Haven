@@ -70,6 +70,8 @@ pub struct MuxRuntime<F> {
     panes: BTreeMap<u32, PaneRuntime>,
     size: CellSize,
     spawn: F,
+    /// Where `next-layout` has got to.
+    layout_index: usize,
 }
 
 impl<F> std::fmt::Debug for MuxRuntime<F> {
@@ -128,7 +130,7 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
             pixel_height: size.pixel_height,
         };
         panes.insert(first.0, make_pane(&mut spawn, pane_size)?);
-        let mut runtime = Self { session, panes, size, spawn };
+        let mut runtime = Self { session, panes, size, spawn, layout_index: 0 };
         runtime.sync_sizes()?;
         Ok(runtime)
     }
@@ -297,6 +299,83 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
     pub fn close_active(&mut self) -> io::Result<bool> {
         let active = self.session.active_pane();
         self.close(active)
+    }
+
+    /// Close the active window and everything in it. Returns whether the
+    /// session is over.
+    pub fn close_window(&mut self) -> io::Result<bool> {
+        let id = self.session.active_window().id;
+        let (panes, ended) = self.session.close_window(id);
+        for pane in panes {
+            if let Some(mut runtime) = self.panes.remove(&pane.0) {
+                if runtime.exited.is_none() {
+                    let _ = runtime.pty.hangup(Duration::from_millis(100));
+                }
+            }
+        }
+        if !ended {
+            self.sync_sizes()?;
+        }
+        Ok(ended)
+    }
+
+    /// The next named layout, cycling. There is no "current layout" to read
+    /// back — a layout is applied and then edited — so this keeps its own
+    /// place in the cycle.
+    pub fn next_layout(&mut self) -> io::Result<()> {
+        const CYCLE: [NamedLayout; 3] =
+            [NamedLayout::EvenHorizontal, NamedLayout::EvenVertical, NamedLayout::Tiled];
+        self.layout_index = (self.layout_index + 1) % CYCLE.len();
+        self.apply_named_layout(CYCLE[self.layout_index])
+    }
+
+    pub fn swap_pane(&mut self, edge: Option<Edge>) -> io::Result<bool> {
+        let ok = self.session.swap_pane(edge, self.size);
+        if ok {
+            self.sync_sizes()?;
+        }
+        Ok(ok)
+    }
+
+    pub fn rotate_window(&mut self, backwards: bool) -> io::Result<bool> {
+        let ok = self.session.rotate_window(backwards);
+        if ok {
+            self.sync_sizes()?;
+        }
+        Ok(ok)
+    }
+
+    pub fn break_pane(&mut self) -> io::Result<bool> {
+        let ok = self.session.break_pane().is_some();
+        if ok {
+            self.sync_sizes()?;
+        }
+        Ok(ok)
+    }
+
+    /// Join another window's only pane into this one.
+    pub fn join_pane(&mut self, from: u32, dir: Direction) -> io::Result<bool> {
+        let id = haven_proto::WindowId(from);
+        let ok = self.session.join_pane(id, dir).is_some();
+        if ok {
+            self.sync_sizes()?;
+        }
+        Ok(ok)
+    }
+
+    /// Start a fresh program in the active pane, keeping its place in the
+    /// layout. The old child is hung up first, so a wedged one really goes.
+    pub fn respawn_active(&mut self) -> io::Result<bool> {
+        let pane = self.session.active_pane();
+        let Some(old) = self.panes.get_mut(&pane.0) else { return Ok(false) };
+        let size = old.pty.size();
+        if old.exited.is_none() {
+            let _ = old.pty.hangup(Duration::from_millis(100));
+        }
+        let fresh = make_pane(&mut self.spawn, size)?;
+        self.panes.insert(pane.0, fresh);
+        self.sync_sizes()?;
+        Ok(true)
     }
 
     pub fn focus(&mut self, edge: Edge) -> io::Result<bool> {

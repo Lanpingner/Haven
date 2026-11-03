@@ -300,6 +300,15 @@ pub enum ClientMsg {
 
 /// Mux actions a client can ask for. The same enum the key table resolves to,
 /// so anything a binding can do, `haven -C` and a plugin can do too.
+/// Which way a pane sits from another.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum Edge {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Action {
     SplitColumns,
@@ -326,6 +335,25 @@ pub enum Action {
     /// The window, or the pane, focus was on before this one.
     LastWindow,
     LastPane,
+    /// Exchange the active pane with its neighbour, or with the next pane in
+    /// the tree when no direction is given.
+    SwapPane(Option<Edge>),
+    RotateWindow {
+        backwards: bool,
+    },
+    /// Move the active pane into a window of its own.
+    BreakPane,
+    /// Move another window's only pane into this one.
+    JoinPane {
+        window: u32,
+        columns: bool,
+    },
+    /// Close the active window and everything in it.
+    CloseWindow,
+    /// Start a fresh program in the active pane.
+    RespawnPane,
+    /// The next named layout, cycling.
+    NextLayout,
     /// Rename the active window, or the session when `window` is false. An
     /// empty name gives a window back to the command it is running.
     Rename {
