@@ -57,6 +57,8 @@ struct Client {
     /// The theme this client has been sent, so a reload only pushes to
     /// clients that do not already have it.
     theme_sent: Option<haven_proto::theme::Theme>,
+    /// The key table this client has, for the same reason.
+    keys_sent: Option<haven_proto::KeyTable>,
     caps: ClientCaps,
     session: Option<u32>,
     sync: SyncState,
@@ -176,6 +178,7 @@ impl Daemon {
             session: None,
             sync: SyncState::default(),
             theme_sent: None,
+            keys_sent: None,
             last_status: None,
         });
         Ok(())
@@ -218,6 +221,7 @@ impl Daemon {
         if self.config.poll() {
             for client in &mut self.clients {
                 client.theme_sent = None;
+                client.keys_sent = None;
             }
             if let Some(problem) = &self.config.problem {
                 eprintln!("haven: config: {problem}");
@@ -441,6 +445,7 @@ impl Daemon {
         // The theme is sent once per session; a client that moved to another
         // one has to be told again.
         client.theme_sent = None;
+        client.keys_sent = None;
         client.last_status = None;
         let _ = client.framed.queue(&ServerMsg::Hello {
             protocol: PROTOCOL_VERSION,
@@ -631,10 +636,15 @@ impl Daemon {
             }
         }
         let theme = self.config.theme();
+        let keys = self.config.keys();
         for client in &mut self.clients {
             if client.theme_sent.as_ref() != Some(theme) {
                 let _ = client.framed.queue(&ServerMsg::Theme(Box::new(theme.clone())));
                 client.theme_sent = Some(theme.clone());
+            }
+            if client.keys_sent.as_ref() != Some(keys) {
+                let _ = client.framed.queue(&ServerMsg::Keys(Box::new(keys.clone())));
+                client.keys_sent = Some(keys.clone());
             }
             let Some(id) = client.session else { continue };
             let Some(host) = self.sessions.get(&id) else { continue };

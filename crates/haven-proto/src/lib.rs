@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -146,6 +146,21 @@ impl RowRle {
     pub fn is_empty(&self) -> bool {
         self.runs.is_empty()
     }
+}
+
+/// A key table, as the daemon's config describes it.
+///
+/// Specs and commands stay strings on the wire. The protocol has no business
+/// knowing what a key or a command *is*: the client parses the spec, the
+/// composition root parses the command, and the vocabulary stays the one a
+/// person types on the command line.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct KeyTable {
+    pub prefix: String,
+    /// Consulted while the prefix is armed.
+    pub prefix_table: Vec<(String, String)>,
+    /// Consulted with no prefix at all.
+    pub root: Vec<(String, String)>,
 }
 
 /// What a pane has asked to hear about the mouse: DEC modes 1000/1002/1003
@@ -328,6 +343,9 @@ pub enum ServerMsg {
         pane: PaneId,
         row: Option<u32>,
     },
+    /// The key table. Sent on attach and whenever the config changes, for
+    /// the same reason the theme is.
+    Keys(Box<KeyTable>),
     /// Where this client's view of a pane sits in its history. Sent whenever
     /// it moves, including back to the bottom, so the bar can say so.
     Scrolled {

@@ -73,6 +73,24 @@ screen. The offset is per client: two people on one session read at their own
 pace. The alternate screen keeps no history, so a full-screen program scrolls
 nothing.
 
+### Configuration
+
+`$XDG_CONFIG_HOME/haven/config.toml` on the daemon. It is re-read when its
+timestamp moves, so an edit reaches every attached client without a reattach.
+
+```toml
+theme = "gruvbox"          # a built-in, a file in themes/, or an inline table
+
+[keys]
+prefix = "C-b"             # default C-a
+bind = { "|" = "split-v", "-" = "split-h", "x" = "" }   # empty unbinds
+root = { "C-t" = "new-window" }                          # no prefix needed
+```
+
+Key specs are `C-`, `S-`, `A-`/`M-`, `D-` in any order, then a character or a
+name (`Up`, `PageUp`, `Enter`, `Space`, `F5`, …). The commands are the ones
+the command line takes, so nothing is bindable that cannot be typed.
+
 ### Mouse
 
 A pane that asked for mouse reporting (1000/1002/1003, SGR or the original

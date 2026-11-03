@@ -9,6 +9,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use haven_client::bindings::{Bindings, Table};
 use haven_client::input::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use haven_client::status_bar::Mode;
 use haven_client::{Client, Intercepted, Tick};
@@ -55,8 +56,8 @@ pub fn connect_or_start(socket: &Path) -> io::Result<SocketTransport> {
 /// The mode is the client's, not this closure's, because the status line
 /// shows it. Everything resolves to the same [`keys::Action`], so a typed
 /// command and a bound key cannot drift apart.
-fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
-    move |event: &KeyEvent, mode: &mut Mode| {
+fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode, &Bindings) -> Intercepted {
+    move |event: &KeyEvent, mode: &mut Mode, bindings: &Bindings| {
         // Only presses drive the mode machine. A terminal transmits nothing
         // on key-up — the encoder drops releases outright — but the GPU
         // window delivers them, and letting them through meant the release
@@ -128,22 +129,18 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
             }
             Mode::Prefix => {
                 *mode = Mode::Normal;
-                return match keys::prefix_table(event) {
-                    Some(Action::EnterCommand) => {
-                        *mode = Mode::command(String::new());
-                        Intercepted::Consumed
+                return match bindings.command(Table::Prefix, event) {
+                    Some(command) => {
+                        let out = run_command(command);
+                        if let Intercepted::Consumed = out {
+                            // `command-prompt` is the one binding that opens
+                            // a mode rather than doing something.
+                            if keys::parse_command(command) == Ok(Action::EnterCommand) {
+                                *mode = Mode::command(String::new());
+                            }
+                        }
+                        out
                     }
-                    Some(Action::Choose) => Intercepted::OpenChooser,
-                    Some(Action::NewSession) => Intercepted::NewSession,
-                    Some(Action::Scroll(rows)) => Intercepted::Scroll(rows),
-                    Some(Action::Copy) => Intercepted::EnterCopy,
-                    Some(Action::Paste) => Intercepted::Paste,
-                    Some(Action::Detach) => Intercepted::Detach,
-                    Some(Action::SendPrefix) => Intercepted::Pass,
-                    Some(action) => match keys::to_proto(action) {
-                        Some(wire) => Intercepted::Act(wire),
-                        None => Intercepted::Consumed,
-                    },
                     // An unbound key after the prefix does nothing rather
                     // than leaking into the pane.
                     None => Intercepted::Consumed,
@@ -151,9 +148,12 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
             }
             Mode::Normal => {}
         }
-        if keys::is_prefix(event) {
+        if bindings.is_prefix(event) {
             *mode = Mode::Prefix;
             return Intercepted::Consumed;
+        }
+        if let Some(command) = bindings.command(Table::Root, event) {
+            return run_command(command);
         }
         Intercepted::Pass
     }
@@ -174,6 +174,9 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::Scroll(rows)) => Intercepted::Scroll(rows),
         Ok(Action::Copy) => Intercepted::EnterCopy,
         Ok(Action::Paste) => Intercepted::Paste,
+        // A literal prefix key goes to the pane, which is what `send-prefix`
+        // means and the only way to drive a nested session.
+        Ok(Action::SendPrefix) => Intercepted::Pass,
         Ok(action) => match keys::to_proto(action) {
             Some(wire) => Intercepted::Act(wire),
             None => Intercepted::Consumed,
@@ -321,6 +324,13 @@ mod tests {
         KeyEvent { key: k, mods, state: KeyState::Release }
     }
 
+    /// The default table, which is what the tests are about: a binding that
+    /// behaved differently from the one the config produces would be two
+    /// implementations of the same thing.
+    fn keys() -> Bindings {
+        Bindings::default()
+    }
+
     fn ctrl_a() -> KeyEvent {
         key(Key::Char('a'), Modifiers::CTRL)
     }
@@ -330,10 +340,10 @@ mod tests {
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
 
-        assert_eq!(filter(&ctrl_a(), &mut mode), Intercepted::Consumed);
+        assert_eq!(filter(&ctrl_a(), &mut mode, &keys()), Intercepted::Consumed);
         assert_eq!(mode, Mode::Prefix, "the status line would show nothing");
 
-        let act = filter(&key(Key::Char('%'), Modifiers::empty()), &mut mode);
+        let act = filter(&key(Key::Char('%'), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(act, Intercepted::Act(Wire::SplitColumns));
         assert_eq!(mode, Mode::Normal, "the prefix stayed armed");
     }
@@ -345,15 +355,15 @@ mod tests {
         // prefix immediately, so no binding in the window did anything.
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
-        filter(&ctrl_a(), &mut mode);
+        filter(&ctrl_a(), &mut mode, &keys());
         assert_eq!(
-            filter(&release(Key::Char('a'), Modifiers::CTRL), &mut mode),
+            filter(&release(Key::Char('a'), Modifiers::CTRL), &mut mode, &keys()),
             Intercepted::Consumed
         );
         assert_eq!(mode, Mode::Prefix, "the release disarmed the prefix");
 
         assert_eq!(
-            filter(&key(Key::Char('%'), Modifiers::SHIFT), &mut mode),
+            filter(&key(Key::Char('%'), Modifiers::SHIFT), &mut mode, &keys()),
             Intercepted::Act(Wire::SplitColumns)
         );
     }
@@ -362,8 +372,8 @@ mod tests {
     fn a_release_does_not_type_into_a_command() {
         let mut filter = key_filter();
         let mut mode = Mode::command(String::new());
-        filter(&key(Key::Char('z'), Modifiers::empty()), &mut mode);
-        filter(&release(Key::Char('z'), Modifiers::empty()), &mut mode);
+        filter(&key(Key::Char('z'), Modifiers::empty()), &mut mode, &keys());
+        filter(&release(Key::Char('z'), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(mode.command_text(), Some("z"), "the release typed a second character");
     }
 
@@ -373,15 +383,15 @@ mod tests {
         // and binding both to the same thing would be silent.
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
-        filter(&ctrl_a(), &mut mode);
+        filter(&ctrl_a(), &mut mode, &keys());
         assert_eq!(
-            filter(&key(Key::Char('C'), Modifiers::SHIFT), &mut mode),
+            filter(&key(Key::Char('C'), Modifiers::SHIFT), &mut mode, &keys()),
             Intercepted::NewSession
         );
 
-        filter(&ctrl_a(), &mut mode);
+        filter(&ctrl_a(), &mut mode, &keys());
         assert_eq!(
-            filter(&key(Key::Char('c'), Modifiers::empty()), &mut mode),
+            filter(&key(Key::Char('c'), Modifiers::empty()), &mut mode, &keys()),
             Intercepted::Act(Wire::NewWindow)
         );
     }
@@ -390,7 +400,7 @@ mod tests {
     fn new_session_is_typeable_as_well_as_bound() {
         let mut filter = key_filter();
         let mut mode = Mode::command("new-session".into());
-        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
+        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(out, Intercepted::NewSession, "the typed form must match the binding");
     }
 
@@ -398,24 +408,84 @@ mod tests {
     fn the_prefix_pages_through_the_scrollback() {
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
-        filter(&ctrl_a(), &mut mode);
+        filter(&ctrl_a(), &mut mode, &keys());
         assert_eq!(
-            filter(&key(Key::Named(NamedKey::PageUp), Modifiers::empty()), &mut mode),
+            filter(&key(Key::Named(NamedKey::PageUp), Modifiers::empty()), &mut mode, &keys()),
             Intercepted::Scroll(keys::PAGE_ROWS)
         );
-        filter(&ctrl_a(), &mut mode);
+        filter(&ctrl_a(), &mut mode, &keys());
         assert_eq!(
-            filter(&key(Key::Named(NamedKey::End), Modifiers::empty()), &mut mode),
+            filter(&key(Key::Named(NamedKey::End), Modifiers::empty()), &mut mode, &keys()),
             Intercepted::Scroll(i32::MIN),
             "End should go back to the live screen whatever the history"
         );
     }
 
     #[test]
+    fn a_configured_binding_replaces_the_built_in_one() {
+        // The point of the table: `c` is the new tab by default, and a config
+        // that says otherwise must win without a code change.
+        let bindings = Bindings::default().with(
+            Some("C-b"),
+            &[("c".into(), "split-v".into()), ("%".into(), String::new())],
+            false,
+        );
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+
+        // The old prefix is now an ordinary key.
+        assert_eq!(filter(&ctrl_a(), &mut mode, &bindings), Intercepted::Pass);
+        assert_eq!(
+            filter(&key(Key::Char('b'), Modifiers::CTRL), &mut mode, &bindings),
+            Intercepted::Consumed
+        );
+        assert_eq!(mode, Mode::Prefix);
+        assert_eq!(
+            filter(&key(Key::Char('c'), Modifiers::empty()), &mut mode, &bindings),
+            Intercepted::Act(Wire::SplitColumns)
+        );
+
+        // And an unbound key does nothing rather than reaching the pane.
+        filter(&key(Key::Char('b'), Modifiers::CTRL), &mut mode, &bindings);
+        assert_eq!(
+            filter(&key(Key::Char('%'), Modifiers::SHIFT), &mut mode, &bindings),
+            Intercepted::Consumed
+        );
+    }
+
+    #[test]
+    fn a_root_binding_acts_without_the_prefix() {
+        let bindings = Bindings::default().with(None, &[("C-t".into(), "new-window".into())], true);
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        assert_eq!(
+            filter(&key(Key::Char('t'), Modifiers::CTRL), &mut mode, &bindings),
+            Intercepted::Act(Wire::NewWindow)
+        );
+        assert_eq!(mode, Mode::Normal, "a root binding must not arm anything");
+    }
+
+    #[test]
+    fn every_default_binding_names_a_command_that_exists() {
+        // The table is data, so a typo in it is a key that silently does
+        // nothing instead of a compile error.
+        use haven_client::bindings::DEFAULT_BINDINGS;
+        for (spec, command) in DEFAULT_BINDINGS {
+            assert!(
+                keys::parse_command(command).is_ok(),
+                "{spec:?} is bound to {command:?}, which is not a command"
+            );
+        }
+    }
+
+    #[test]
     fn an_ordinary_key_reaches_the_pane() {
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
-        assert_eq!(filter(&key(Key::Char('x'), Modifiers::empty()), &mut mode), Intercepted::Pass);
+        assert_eq!(
+            filter(&key(Key::Char('x'), Modifiers::empty()), &mut mode, &keys()),
+            Intercepted::Pass
+        );
         assert_eq!(mode, Mode::Normal);
     }
 
@@ -423,27 +493,27 @@ mod tests {
     fn the_prefix_twice_sends_a_literal_one() {
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
-        filter(&ctrl_a(), &mut mode);
-        assert_eq!(filter(&ctrl_a(), &mut mode), Intercepted::Pass);
+        filter(&ctrl_a(), &mut mode, &keys());
+        assert_eq!(filter(&ctrl_a(), &mut mode, &keys()), Intercepted::Pass);
     }
 
     #[test]
     fn a_typed_command_runs_and_matches_its_binding() {
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
-        filter(&ctrl_a(), &mut mode);
+        filter(&ctrl_a(), &mut mode, &keys());
         assert_eq!(
-            filter(&key(Key::Char(':'), Modifiers::empty()), &mut mode),
+            filter(&key(Key::Char(':'), Modifiers::empty()), &mut mode, &keys()),
             Intercepted::Consumed
         );
         assert_eq!(mode.command_text(), Some(""));
 
         for c in "split-v".chars() {
-            filter(&key(Key::Char(c), Modifiers::empty()), &mut mode);
+            filter(&key(Key::Char(c), Modifiers::empty()), &mut mode, &keys());
         }
         assert_eq!(mode.command_text(), Some("split-v"), "the line was not collected");
 
-        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
+        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode, &keys());
         // The same action the `%` binding produces: one vocabulary, two ways in.
         assert_eq!(out, Intercepted::Act(Wire::SplitColumns));
         assert_eq!(mode, Mode::Normal);
@@ -453,9 +523,9 @@ mod tests {
     fn the_arrows_walk_the_completions_and_put_one_on_the_line() {
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
-        filter(&ctrl_a(), &mut mode);
-        filter(&key(Key::Char(':'), Modifiers::empty()), &mut mode);
-        filter(&key(Key::Char('s'), Modifiers::empty()), &mut mode);
+        filter(&ctrl_a(), &mut mode, &keys());
+        filter(&key(Key::Char(':'), Modifiers::empty()), &mut mode, &keys());
+        filter(&key(Key::Char('s'), Modifiers::empty()), &mut mode, &keys());
 
         let listed = match &mode {
             Mode::Command { suggestions, .. } => suggestions.clone(),
@@ -464,9 +534,9 @@ mod tests {
         assert!(listed.len() > 2, "not enough candidates to walk: {listed:?}");
 
         let down = key(Key::Named(NamedKey::Down), Modifiers::empty());
-        filter(&down, &mut mode);
+        filter(&down, &mut mode, &keys());
         assert_eq!(mode.command_text(), Some(listed[1].as_str()), "Down did not take the next one");
-        filter(&down, &mut mode);
+        filter(&down, &mut mode, &keys());
         assert_eq!(mode.command_text(), Some(listed[2].as_str()));
 
         // The list must not narrow as the selection moves, or the box would
@@ -481,9 +551,9 @@ mod tests {
 
         // Up wraps back round the top.
         let up = key(Key::Named(NamedKey::Up), Modifiers::empty());
-        filter(&up, &mut mode);
-        filter(&up, &mut mode);
-        filter(&up, &mut mode);
+        filter(&up, &mut mode, &keys());
+        filter(&up, &mut mode, &keys());
+        filter(&up, &mut mode, &keys());
         assert_eq!(mode.command_text(), Some(listed[listed.len() - 1].as_str()), "Up did not wrap");
     }
 
@@ -492,12 +562,12 @@ mod tests {
         let mut filter = key_filter();
         let mut mode = Mode::command(String::new());
         for c in "split-".chars() {
-            filter(&key(Key::Char(c), Modifiers::empty()), &mut mode);
+            filter(&key(Key::Char(c), Modifiers::empty()), &mut mode, &keys());
         }
         // split-h and split-v, in that order.
-        filter(&key(Key::Named(NamedKey::Down), Modifiers::empty()), &mut mode);
+        filter(&key(Key::Named(NamedKey::Down), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(mode.command_text(), Some("split-v"));
-        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
+        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(out, Intercepted::Act(Wire::SplitColumns));
     }
 
@@ -507,9 +577,9 @@ mod tests {
         // the new, narrower list.
         let mut filter = key_filter();
         let mut mode = Mode::command(String::new());
-        filter(&key(Key::Char('s'), Modifiers::empty()), &mut mode);
-        filter(&key(Key::Named(NamedKey::Down), Modifiers::empty()), &mut mode);
-        filter(&key(Key::Char('x'), Modifiers::empty()), &mut mode);
+        filter(&key(Key::Char('s'), Modifiers::empty()), &mut mode, &keys());
+        filter(&key(Key::Named(NamedKey::Down), Modifiers::empty()), &mut mode, &keys());
+        filter(&key(Key::Char('x'), Modifiers::empty()), &mut mode, &keys());
         match &mode {
             Mode::Command { selected, .. } => assert_eq!(*selected, 0),
             other => panic!("{other:?}"),
@@ -520,15 +590,15 @@ mod tests {
     fn escape_abandons_a_command_and_backspace_backs_out_of_an_empty_one() {
         let mut filter = key_filter();
         let mut mode = Mode::command("zoo".into());
-        filter(&key(Key::Named(NamedKey::Backspace), Modifiers::empty()), &mut mode);
+        filter(&key(Key::Named(NamedKey::Backspace), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(mode.command_text(), Some("zo"));
 
         mode = Mode::command("x".into());
-        filter(&key(Key::Named(NamedKey::Escape), Modifiers::empty()), &mut mode);
+        filter(&key(Key::Named(NamedKey::Escape), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(mode, Mode::Normal);
 
         mode = Mode::command(String::new());
-        filter(&key(Key::Named(NamedKey::Backspace), Modifiers::empty()), &mut mode);
+        filter(&key(Key::Named(NamedKey::Backspace), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(mode, Mode::Normal, "backspace on an empty line should leave the mode");
     }
 
@@ -536,7 +606,7 @@ mod tests {
     fn an_unknown_command_is_swallowed_rather_than_typed_into_the_pane() {
         let mut filter = key_filter();
         let mut mode = Mode::command("nonsense".into());
-        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
+        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(out, Intercepted::Consumed);
         assert_eq!(mode, Mode::Normal);
     }

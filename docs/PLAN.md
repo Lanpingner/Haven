@@ -1186,6 +1186,16 @@ The terminal client also had to learn to *decode* mouse reports — `raw.rs` has
 been asking hosts for 1002 and 1006 all along, and the replies were falling
 through the key path.
 
+Key bindings are data now, and come from the same config the theme does. The
+built-in table is the default *value* of that data rather than a `match`, so
+a configured binding and a built-in one go through one path — the alternative
+is a table config can only partly override, which is how bindings end up with
+two behaviours. That forced the command vocabulary to cover every bound key:
+there were no names for focus, resize or the literal prefix, so the claim that
+"anything a binding can do, a typed command can do" was not true until now.
+A test walks the default table and parses every command in it, because a typo
+in data is a key that silently does nothing rather than a compile error.
+
 **Bugs this work surfaced, worth remembering:**
 - `OSC 52` payloads were kept base64-encoded and handed to the client as if
   they were text, so honouring one would have put `aGVsbG8=` on the clipboard.

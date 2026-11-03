@@ -8,8 +8,11 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use std::collections::BTreeMap;
+
 use haven_core::Color;
 use haven_proto::theme::{parse_color, Glyphs, Pair, Theme};
+use haven_proto::KeyTable;
 use serde::Deserialize;
 
 /// A theme as written in a file.
@@ -141,10 +144,43 @@ impl Default for ThemeSpec {
     }
 }
 
+/// `[keys]` in the config.
+///
+/// Entries are `"<spec>" = "<command>"`, with the same command names the
+/// command line takes — a binding that could do something a typed command
+/// could not would be a second vocabulary to learn.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct KeysFile {
+    /// What arms the prefix. `C-a` unless this says otherwise.
+    pub prefix: Option<String>,
+    /// Bound after the prefix. An empty command unbinds.
+    #[serde(default)]
+    pub bind: BTreeMap<String, String>,
+    /// Bound with no prefix at all, which is how someone who dislikes the
+    /// prefix gets `C-t` for a new tab.
+    #[serde(default)]
+    pub root: BTreeMap<String, String>,
+}
+
+impl KeysFile {
+    pub fn table(&self) -> KeyTable {
+        KeyTable {
+            // Empty means "whatever the client's default is". The daemon has
+            // no business holding a copy of that: it would be a second place
+            // for it to be wrong.
+            prefix: self.prefix.clone().unwrap_or_default(),
+            prefix_table: self.bind.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            root: self.root.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub theme: ThemeSpec,
+    pub keys: KeysFile,
 }
 
 impl Config {
@@ -201,6 +237,7 @@ pub struct ConfigWatcher {
     stamps: (Option<SystemTime>, Option<SystemTime>),
     config: Config,
     theme: Theme,
+    keys: KeyTable,
     pub problem: Option<String>,
 }
 
@@ -217,6 +254,7 @@ impl ConfigWatcher {
             stamps: (None, None),
             config: Config::default(),
             theme: Theme::default(),
+            keys: KeyTable::default(),
             problem: None,
         };
         w.reload();
@@ -227,6 +265,10 @@ impl ConfigWatcher {
         &self.theme
     }
 
+    pub fn keys(&self) -> &KeyTable {
+        &self.keys
+    }
+
     /// Re-read if anything moved. Returns whether the theme changed, so the
     /// daemon only pushes when there is something to push.
     pub fn poll(&mut self) -> bool {
@@ -234,9 +276,9 @@ impl ConfigWatcher {
         if now == self.stamps {
             return false;
         }
-        let before = self.theme.clone();
+        let before = (self.theme.clone(), self.keys.clone());
         self.reload();
-        self.theme != before
+        (self.theme.clone(), self.keys.clone()) != before
     }
 
     fn reload(&mut self) {
@@ -266,6 +308,7 @@ impl ConfigWatcher {
 
         let (theme, problem) = self.config.theme(&self.dir);
         self.theme = theme;
+        self.keys = self.config.keys.table();
         if self.problem.is_none() {
             self.problem = problem;
         }
@@ -312,6 +355,46 @@ mod tests {
         let (theme, problem) = config.theme(Path::new("/nonexistent"));
         assert_eq!(theme, Theme::default(), "a broken theme should still paint");
         assert!(problem.is_some(), "and should say why");
+    }
+
+    #[test]
+    fn keys_come_out_of_the_config_as_a_table() {
+        let config = Config::from_toml(
+            r#"
+            [keys]
+            prefix = "C-b"
+            bind = { "|" = "split-v", "x" = "" }
+            root = { "C-t" = "new-window" }
+            "#,
+        )
+        .expect("parse");
+        let table = config.keys.table();
+        assert_eq!(table.prefix, "C-b");
+        assert!(table.prefix_table.contains(&("|".into(), "split-v".into())));
+        assert!(table.prefix_table.contains(&("x".into(), String::new())), "unbind was dropped");
+        assert_eq!(table.root, vec![("C-t".into(), "new-window".into())]);
+    }
+
+    #[test]
+    fn no_keys_section_leaves_the_prefix_to_the_client() {
+        // An empty prefix means "whatever the default is". The daemon holding
+        // its own copy of that would be a second place for it to be wrong.
+        let config = Config::from_toml("").expect("parse");
+        assert_eq!(config.keys.table().prefix, "");
+    }
+
+    #[test]
+    fn editing_a_binding_is_noticed() {
+        let dir = tmp("keys");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[keys]\nbind = { v = \"split-v\" }\n").unwrap();
+        let mut w = ConfigWatcher::new(path.clone(), dir.clone());
+        assert_eq!(w.keys().prefix_table, vec![("v".to_string(), "split-v".to_string())]);
+
+        std::fs::write(&path, "[keys]\nbind = { v = \"split-h\" }\n").unwrap();
+        filetime_bump(&path);
+        assert!(w.poll(), "a changed binding must reach attached clients");
+        assert_eq!(w.keys().prefix_table, vec![("v".to_string(), "split-h".to_string())]);
     }
 
     #[test]

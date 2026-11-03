@@ -6,6 +6,7 @@
 //! escape sequences. Neither can reach into mux state, and neither can drive
 //! the other's code path.
 
+pub mod bindings;
 pub mod chooser;
 pub mod copy;
 pub mod frame;
@@ -69,7 +70,8 @@ pub enum Intercepted {
 /// The mode is passed in rather than captured, because it is not private to
 /// the filter: the status line has to show whether the prefix is armed and
 /// what is being typed, and two copies of that state would drift.
-pub type KeyFilter = Box<dyn FnMut(&KeyEvent, &mut status_bar::Mode) -> Intercepted>;
+pub type KeyFilter =
+    Box<dyn FnMut(&KeyEvent, &mut status_bar::Mode, &bindings::Bindings) -> Intercepted>;
 
 /// What the client decided to do with one iteration, so a frontend's main loop
 /// (winit's, or a termios read loop) can act without re-deriving it.
@@ -103,6 +105,8 @@ pub struct Client<F, T> {
     pub chooser: Option<chooser::Chooser>,
     /// Copy mode, while it is up. Modal: it owns the keyboard.
     pub copy: Option<copy::CopyMode>,
+    /// The key table, as the daemon's config describes it.
+    pub bindings: bindings::Bindings,
     /// The rule being dragged, and whether it runs vertically.
     dragging: Option<(PaneId, bool)>,
     /// Copied text, newest first. tmux calls these paste buffers; the name
@@ -144,6 +148,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             chooser: None,
             copy: None,
             buffers: Vec::new(),
+            bindings: bindings::Bindings::default(),
             dragging: None,
             fatal: None,
             sessions: Vec::new(),
@@ -616,7 +621,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 // Taken out and put back so the filter can borrow the mode
                 // mutably without borrowing the whole client.
                 let mut filter = self.key_filter.take();
-                let verdict = filter.as_mut().map(|f| f(&key, &mut self.mode));
+                let verdict = filter.as_mut().map(|f| f(&key, &mut self.mode, &self.bindings));
                 self.key_filter = filter;
                 match verdict {
                     Some(Intercepted::Consumed) => return Ok(Tick::Redraw),
@@ -749,6 +754,12 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     None => self.frame.notice = Some("not found".into()),
                 }
                 true
+            }
+            ServerMsg::Keys(table) => {
+                self.bindings = bindings::Bindings::default()
+                    .with(Some(&table.prefix), &table.prefix_table, false)
+                    .with(None, &table.root, true);
+                false
             }
             ServerMsg::Theme(theme) => {
                 self.frame.theme = *theme;
