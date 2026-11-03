@@ -227,8 +227,20 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
             id: 1,
             name: "shell".into(),
             panes: vec![
-                PaneInfo { id: 7, title: String::new(), command: String::new(), running: false },
-                PaneInfo { id: 8, title: String::new(), command: String::new(), running: false },
+                PaneInfo {
+                    id: 7,
+                    rect: Default::default(),
+                    title: String::new(),
+                    command: String::new(),
+                    running: false,
+                },
+                PaneInfo {
+                    id: 8,
+                    rect: Default::default(),
+                    title: String::new(),
+                    command: String::new(),
+                    running: false,
+                },
             ],
             active_pane: 8,
             zoomed: false,
@@ -422,4 +434,52 @@ fn the_wheel_still_scrolls_a_pane_that_does_not_want_the_mouse() {
     );
     client.tick().unwrap();
     assert!(matches!(client.transport.sent.last(), Some(ClientMsg::Scroll { .. })));
+}
+
+#[test]
+fn find_window_goes_to_the_tab_whose_name_matches() {
+    use haven_proto::{PaneInfo, SessionStatus, WindowInfo};
+
+    let window = |id: u32, name: &str| WindowInfo {
+        id,
+        synchronized: false,
+        bell: false,
+        name: name.into(),
+        panes: vec![PaneInfo {
+            id,
+            rect: Default::default(),
+            title: String::new(),
+            command: String::new(),
+            running: false,
+        }],
+        active_pane: id,
+        zoomed: false,
+    };
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 10, 2)], 1)),
+        ServerMsg::Status(SessionStatus {
+            session: SessionId(1),
+            name: "s".into(),
+            windows: vec![window(1, "fish"), window(2, "cargo build"), window(3, "vim")],
+            active_window: 1,
+            started_unix: 0,
+            clients: 1,
+        }),
+    ]);
+    let frontend = ScriptedFrontend::new(size(10, 2), []);
+    let mut client = Client::new(frontend, server);
+    client.tick().unwrap();
+
+    client.find_window_for_test("CARGO").expect("search");
+    assert_eq!(
+        client.transport.sent.last(),
+        Some(&ClientMsg::Action(haven_proto::Action::SelectWindow(1))),
+        "case should not matter, and the index is zero-based"
+    );
+
+    client.find_window_for_test("nothing like this").expect("search");
+    assert!(
+        client.frame.notice.as_deref().is_some_and(|n| n.contains("no tab")),
+        "a search that found nothing must say so"
+    );
 }

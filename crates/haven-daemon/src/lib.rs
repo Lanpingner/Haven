@@ -373,6 +373,21 @@ impl Daemon {
                 // a different width now.
                 self.clients[index].sync.invalidate();
             }
+            // Detaching others needs every client, not one session, so it is
+            // settled here rather than in the per-session action table.
+            ClientMsg::Action(Action::DetachOthers) => {
+                let Some(id) = self.clients.get(index).and_then(|c| c.session) else {
+                    return Ok(());
+                };
+                for (i, client) in self.clients.iter_mut().enumerate() {
+                    if i != index && client.session == Some(id) {
+                        let _ = client.framed.queue(&ServerMsg::Refused {
+                            reason: "detached by another client".into(),
+                        });
+                        client.session = None;
+                    }
+                }
+            }
             ClientMsg::Action(action) => self.act(index, action)?,
             ClientMsg::Scroll { pane, delta } => self.scroll(index, pane, delta),
             ClientMsg::ScrollTo { pane, row } => self.scroll_to(index, pane, row),
@@ -643,6 +658,8 @@ impl Daemon {
                 runtime.send_to(target, &bytes)?;
                 false
             }
+            // Handled before the dispatch, where every client is reachable.
+            Action::DetachOthers => false,
             Action::SynchronizePanes { on } => {
                 let window = runtime.session.active_window_mut();
                 window.synchronized = on.unwrap_or(!window.synchronized);
@@ -828,6 +845,10 @@ impl SessionHost {
     /// pane's title, which is what a shell sets and what a user recognises.
     fn status(&self, clients: u16) -> haven_proto::SessionStatus {
         let session = &self.runtime.session;
+        // Solved once rather than per pane: a client labelling panes needs
+        // their geometry, and working it out again would be a second answer
+        // to a question the layout has already settled.
+        let rects = self.runtime.session.layout(self.runtime.size()).panes;
         let windows = session
             .windows
             .iter()
@@ -854,12 +875,14 @@ impl SessionHost {
                     .into_iter()
                     .map(|p| {
                         let pane = self.runtime.pane(p);
+                        let rect = rects.iter().find(|r| r.pane == p).copied().unwrap_or_default();
                         let (command, running) = pane
                             .and_then(|r| r.command())
                             .map(|(c, running)| (short_command(c), running))
                             .unwrap_or_default();
                         haven_proto::PaneInfo {
                             id: p.0,
+                            rect,
                             title: pane
                                 .and_then(|r| r.title())
                                 .map(short_title)

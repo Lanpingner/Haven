@@ -61,6 +61,10 @@ pub enum Intercepted {
     Scroll(i32),
     /// Enter copy mode on the focused pane.
     EnterCopy,
+    /// Number every pane until the next keystroke.
+    DisplayPanes,
+    /// Go to the tab whose name contains this.
+    FindWindow(String),
     /// Send the newest paste buffer to the focused pane.
     Paste,
 }
@@ -107,6 +111,8 @@ pub struct Client<F, T> {
     pub copy: Option<copy::CopyMode>,
     /// The session's environment, when it has been asked for.
     pub environment: Vec<(String, String)>,
+    /// Pane numbers are on screen until the next keystroke.
+    showing_panes: bool,
     /// The key table, as the daemon's config describes it.
     pub bindings: bindings::Bindings,
     /// The rule being dragged, and whether it runs vertically.
@@ -150,6 +156,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             chooser: None,
             copy: None,
             buffers: Vec::new(),
+            showing_panes: false,
             environment: Vec::new(),
             bindings: bindings::Bindings::default(),
             dragging: None,
@@ -462,6 +469,34 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         Ok(Tick::Idle)
     }
 
+    /// Go to the first tab whose name contains `text`, case-insensitively.
+    ///
+    /// The client searches rather than the daemon because the client already
+    /// holds the listing the bar is drawn from; asking would be a round trip
+    /// for an answer already in hand.
+    #[doc(hidden)]
+    pub fn find_window_for_test(&mut self, text: &str) -> Result<(), TransportError> {
+        self.find_window(text)
+    }
+
+    fn find_window(&mut self, text: &str) -> Result<(), TransportError> {
+        let text = text.trim().to_lowercase();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let Some(status) = self.frame.status.as_ref() else { return Ok(()) };
+        let found = status.windows.iter().position(|w| w.name.to_lowercase().contains(&text));
+        match found {
+            Some(index) => {
+                self.transport.send(ClientMsg::Action(Action::SelectWindow(index as u16)))
+            }
+            None => {
+                self.frame.notice = Some(format!("no tab matching {text:?}"));
+                Ok(())
+            }
+        }
+    }
+
     /// Which pane covers a screen cell, if any.
     fn pane_at(&self, col: u16, row: u16) -> Option<PaneId> {
         self.frame
@@ -544,6 +579,13 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         {
             self.frame.widgets.push(box_);
         }
+        if self.showing_panes {
+            self.frame.widgets.extend(status_bar::pane_numbers(
+                self.frame.status.as_ref(),
+                self.focus,
+                &self.frame.theme,
+            ));
+        }
         // After the bar, so it draws on top of it.
         if let Some(widget) =
             self.chooser.as_ref().and_then(|c| c.widget(self.frame.size, &self.frame.theme))
@@ -623,6 +665,15 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 self.transport.send(ClientMsg::Resize { caps })?;
                 Ok(Tick::Redraw)
             }
+            // Any key dismisses the numbers, and then does nothing else: an
+            // overlay that swallowed the key *and* acted on it would be two
+            // things happening for one press. Releases are not keystrokes —
+            // the release of the key that *opened* the overlay arrives a
+            // millisecond later and would close it again.
+            InputEvent::Key(key) if self.showing_panes && key.state == input::KeyState::Press => {
+                self.showing_panes = false;
+                Ok(Tick::Redraw)
+            }
             InputEvent::Key(key) => {
                 // The chooser and copy mode are modal and own the keyboard
                 // while they are up, so they are consulted before the key
@@ -654,6 +705,14 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     }
                     Some(Intercepted::EnterCopy) => {
                         self.enter_copy();
+                        return Ok(Tick::Redraw);
+                    }
+                    Some(Intercepted::DisplayPanes) => {
+                        self.showing_panes = true;
+                        return Ok(Tick::Redraw);
+                    }
+                    Some(Intercepted::FindWindow(text)) => {
+                        self.find_window(&text)?;
                         return Ok(Tick::Redraw);
                     }
                     Some(Intercepted::Paste) => {

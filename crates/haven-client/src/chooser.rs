@@ -325,12 +325,14 @@ mod tests {
                 panes: vec![
                     PaneInfo {
                         id: 10,
+                        rect: Default::default(),
                         title: "fish".into(),
                         command: "cargo test".into(),
                         running: true,
                     },
                     PaneInfo {
                         id: 11,
+                        rect: Default::default(),
                         title: "vim".into(),
                         command: String::new(),
                         running: false,

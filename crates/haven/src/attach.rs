@@ -172,6 +172,8 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::NewSession) => Intercepted::NewSession,
         Ok(Action::Scroll(rows)) => Intercepted::Scroll(rows),
         Ok(Action::Copy) => Intercepted::EnterCopy,
+        Ok(Action::DisplayPanes) => Intercepted::DisplayPanes,
+        Ok(Action::FindWindow(text)) => Intercepted::FindWindow(text),
         Ok(Action::Paste) => Intercepted::Paste,
         // A literal prefix key goes to the pane, which is what `send-prefix`
         // means and the only way to drive a nested session.

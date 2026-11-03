@@ -362,6 +362,9 @@ pub enum Action {
     SynchronizePanes {
         on: Option<bool>,
     },
+    /// Detach every *other* client from this session, for when a phone or a
+    /// dead ssh session is still holding it to a size nothing wants.
+    DetachOthers,
     /// Start a fresh program in the active pane.
     RespawnPane,
     /// The next named layout, cycling.
@@ -528,6 +531,9 @@ pub struct WindowInfo {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct PaneInfo {
     pub id: u32,
+    /// Where this pane is on screen, so a client can label it without
+    /// solving the layout itself.
+    pub rect: PaneRect,
     /// Whatever the program running in it last called itself.
     pub title: String,
     /// What the shell last reported running, from `OSC 133`. Empty when the

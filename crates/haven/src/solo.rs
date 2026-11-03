@@ -234,6 +234,8 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
             let target = pane.map(haven_proto::PaneId).unwrap_or_else(|| mux.session.active_pane());
             mux.send_to(target, &bytes)?;
         }
+        // Standalone has one client and no overlay of its own.
+        Action::DetachOthers | Action::DisplayPanes | Action::FindWindow(_) => {}
         Action::SynchronizePanes { on } => {
             let window = mux.session.active_window_mut();
             window.synchronized = on.unwrap_or(!window.synchronized);

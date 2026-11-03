@@ -128,6 +128,48 @@ pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget>
     })
 }
 
+/// A number over each pane, as `display-panes` does.
+///
+/// One widget per pane rather than one big one, so each sits over its own
+/// pane wherever the layout put it.
+pub fn pane_numbers(
+    status: Option<&SessionStatus>,
+    focus: Option<haven_proto::PaneId>,
+    theme: &Theme,
+) -> Vec<Widget> {
+    let Some(status) = status else { return Vec::new() };
+    let Some(window) = status.windows.iter().find(|w| w.id == status.active_window) else {
+        return Vec::new();
+    };
+    window
+        .panes
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.rect.cols > 0 && p.rect.rows > 0)
+        .map(|(i, pane)| {
+            let label = format!(" {} ", i + 1);
+            let style = if focus == Some(haven_proto::PaneId(pane.id)) {
+                theme.selection.style()
+            } else {
+                theme.panel_title.style()
+            };
+            Widget {
+                kind: WidgetKind::Overlay,
+                rect: PaneRect {
+                    pane: haven_proto::PaneId(u32::MAX - 3),
+                    // Top-left of the pane, which is the one corner every
+                    // layout has free.
+                    col: pane.rect.col,
+                    row: pane.rect.row,
+                    cols: (label.chars().count() as u16).min(pane.rect.cols),
+                    rows: 1,
+                },
+                rows: vec![FrameRow { spans: vec![Span { col: 0, text: label, style }], rev: 0 }],
+            }
+        })
+        .collect()
+}
+
 /// A top or bottom border, with an optional title set into it.
 pub(crate) fn border_row(
     g: &crate::theme::Glyphs,
@@ -337,7 +379,13 @@ mod tests {
     use haven_proto::{PaneInfo, SessionId, WindowInfo};
 
     fn pane(id: u32) -> PaneInfo {
-        PaneInfo { id, title: format!("pane{id}"), command: String::new(), running: false }
+        PaneInfo {
+            id,
+            rect: Default::default(),
+            title: format!("pane{id}"),
+            command: String::new(),
+            running: false,
+        }
     }
 
     fn size(cols: u16, rows: u16) -> CellSize {
@@ -536,6 +584,76 @@ mod suggestion_tests {
             suggestions: names.iter().map(|s| s.to_string()).collect(),
             selected,
         }
+    }
+
+    #[test]
+    fn pane_numbers_sit_over_their_own_panes() {
+        use haven_proto::{PaneInfo, PaneRect, SessionId, WindowInfo};
+        let at = |id, col, row, cols, rows| PaneInfo {
+            id,
+            rect: PaneRect { pane: haven_proto::PaneId(id), col, row, cols, rows },
+            title: String::new(),
+            command: String::new(),
+            running: false,
+        };
+        let status = SessionStatus {
+            session: SessionId(1),
+            name: "s".into(),
+            windows: vec![WindowInfo {
+                id: 1,
+                synchronized: false,
+                bell: false,
+                name: "w".into(),
+                panes: vec![at(1, 0, 0, 10, 5), at(2, 11, 0, 10, 5)],
+                active_pane: 2,
+                zoomed: false,
+            }],
+            active_window: 1,
+            started_unix: 0,
+            clients: 1,
+        };
+        let widgets = pane_numbers(Some(&status), Some(haven_proto::PaneId(2)), &Theme::haven());
+        assert_eq!(widgets.len(), 2);
+        assert_eq!((widgets[0].rect.col, widgets[0].rect.row), (0, 0));
+        assert_eq!((widgets[1].rect.col, widgets[1].rect.row), (11, 0));
+        assert_eq!(widgets[0].rows[0].spans[0].text.trim(), "1");
+        // The focused one is painted differently, or the numbers say nothing
+        // about where you already are.
+        assert_ne!(widgets[0].rows[0].spans[0].style, widgets[1].rows[0].spans[0].style);
+    }
+
+    #[test]
+    fn a_pane_with_no_room_gets_no_number() {
+        use haven_proto::{PaneInfo, PaneRect, SessionId, WindowInfo};
+        let status = SessionStatus {
+            session: SessionId(1),
+            name: "s".into(),
+            windows: vec![WindowInfo {
+                id: 1,
+                synchronized: false,
+                bell: false,
+                name: "w".into(),
+                panes: vec![PaneInfo {
+                    id: 1,
+                    rect: PaneRect {
+                        pane: haven_proto::PaneId(1),
+                        col: 0,
+                        row: 0,
+                        cols: 0,
+                        rows: 0,
+                    },
+                    title: String::new(),
+                    command: String::new(),
+                    running: false,
+                }],
+                active_pane: 1,
+                zoomed: false,
+            }],
+            active_window: 1,
+            started_unix: 0,
+            clients: 1,
+        };
+        assert!(pane_numbers(Some(&status), None, &Theme::haven()).is_empty());
     }
 
     #[test]

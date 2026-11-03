@@ -40,6 +40,11 @@ pub enum Action {
     SynchronizePanes {
         on: Option<bool>,
     },
+    DetachOthers,
+    /// Number every pane on screen until a key is pressed.
+    DisplayPanes,
+    /// Go to the tab whose name contains this.
+    FindWindow(String),
     NextLayout,
     /// Rename the active window, or the session.
     Rename {
@@ -97,6 +102,9 @@ pub const COMMANDS: &[&str] = &[
     "synchronize-panes",
     "rename-window",
     "detach",
+    "detach-others",
+    "display-panes",
+    "find-window",
     "copy-mode",
     "paste-buffer",
     "scroll-up",
@@ -254,6 +262,9 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
             // a newline without having to put a literal one in its argument.
             bytes: unescape(&rest_of(line, verb)),
         },
+        "detach-others" | "detach-clients" => Action::DetachOthers,
+        "display-panes" | "displayp" => Action::DisplayPanes,
+        "find-window" | "findw" => Action::FindWindow(rest_of(line, verb)),
         "synchronize-panes" | "sync" => Action::SynchronizePanes {
             on: match arg {
                 Some("on") => Some(true),
@@ -338,6 +349,10 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::RespawnPane => P::RespawnPane,
         Action::SendKeys { pane, bytes } => P::SendKeys { pane, bytes },
         Action::SynchronizePanes { on } => P::SynchronizePanes { on },
+        Action::DetachOthers => P::DetachOthers,
+        // Both are the client's: one draws an overlay, the other searches a
+        // listing the client already holds.
+        Action::DisplayPanes | Action::FindWindow(_) => return None,
         Action::NextLayout => P::NextLayout,
         Action::Rename { window, name } => P::Rename { window, name },
         Action::ApplyLayout(NamedLayout::EvenHorizontal) => P::EvenHorizontal,

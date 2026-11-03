@@ -69,6 +69,9 @@ cargo run -p haven -- shell-info
 | `&` | kill the whole tab |
 | `r` | respawn the pane's program |
 | `S` | synchronize: type into every pane of the tab at once |
+| `q` | number the panes until the next key |
+| `f` | find a tab by name |
+| `D` | detach every other client |
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree: sessions, windows, panes |
@@ -174,6 +177,7 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `respawn-pane`, `next-layout` | restart the program / cycle the layout |
 | `send-keys <text>` | type into the pane; `\n` `\t` `\e` `\xNN` are decoded |
 | `synchronize-panes [on\|off]` | type into every pane at once |
+| `display-panes`, `find-window <text>`, `detach-others` | as the keys do |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |
 
 `Tab` completes as far as the candidates agree. A box above the bar lists what
