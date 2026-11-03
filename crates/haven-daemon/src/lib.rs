@@ -353,7 +353,18 @@ impl Daemon {
                     state.snapshotted = false;
                 }
                 if let Some(host) = self.host_of(index) {
-                    host.runtime.send_to(pane, &bytes)?;
+                    // Synchronized windows send everything typed in one pane
+                    // to all of them, which is the whole point of the mode.
+                    let targets = if host.runtime.session.active_window().synchronized
+                        && host.runtime.session.active_pane() == pane
+                    {
+                        host.runtime.input_targets()
+                    } else {
+                        vec![pane]
+                    };
+                    for target in targets {
+                        host.runtime.send_to(target, &bytes)?;
+                    }
                 }
             }
             ClientMsg::Resize { caps } => {
@@ -627,6 +638,16 @@ impl Daemon {
                 false
             }
             Action::CloseWindow => runtime.close_window()?,
+            Action::SendKeys { pane, bytes } => {
+                let target = pane.map(PaneId).unwrap_or_else(|| runtime.session.active_pane());
+                runtime.send_to(target, &bytes)?;
+                false
+            }
+            Action::SynchronizePanes { on } => {
+                let window = runtime.session.active_window_mut();
+                window.synchronized = on.unwrap_or(!window.synchronized);
+                false
+            }
             Action::RespawnPane => {
                 runtime.respawn_active()?;
                 false
@@ -665,6 +686,11 @@ impl Daemon {
             }
         }
         for (session, pane) in bells {
+            // Mark the window so the bar can show it after the sound has
+            // gone: a bell you were not looking at is the one worth seeing.
+            if let Some(host) = self.sessions.get_mut(&session) {
+                host.runtime.session.note_bell(pane);
+            }
             for client in self.clients.iter_mut().filter(|c| c.session == Some(session)) {
                 let _ = client.framed.queue(&ServerMsg::Bell { pane });
             }
@@ -807,6 +833,8 @@ impl SessionHost {
             .iter()
             .map(|w| haven_proto::WindowInfo {
                 id: w.id.0,
+                synchronized: w.synchronized,
+                bell: w.bell,
                 // What the tab is *doing* names it best. An explicit name
                 // wins, then the command the shell reported through OSC 133,
                 // then the title — which is usually a path — and only then

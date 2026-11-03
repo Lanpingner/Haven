@@ -15,11 +15,25 @@ pub struct Window {
     pub zoomed: Option<PaneId>,
     /// The pane focus was on before this one, for `last-pane`.
     last: Option<PaneId>,
+    /// Everything typed here goes to every pane in this window.
+    pub synchronized: bool,
+    /// A pane here rang while the window was not the active one. Cleared on
+    /// arrival, which is what makes it mean "since you last looked".
+    pub bell: bool,
 }
 
 impl Window {
     pub fn new(id: WindowId, pane: PaneId) -> Self {
-        Self { id, title: None, root: PaneNode::Leaf(pane), active: pane, zoomed: None, last: None }
+        Self {
+            id,
+            title: None,
+            root: PaneNode::Leaf(pane),
+            active: pane,
+            zoomed: None,
+            last: None,
+            synchronized: false,
+            bell: false,
+        }
     }
 
     pub fn panes(&self) -> Vec<PaneId> {

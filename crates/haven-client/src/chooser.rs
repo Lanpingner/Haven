@@ -338,6 +338,8 @@ mod tests {
                 ],
                 active_pane: 11,
                 zoomed: false,
+                synchronized: false,
+                bell: false,
             }],
             active_window: 1,
             started_unix: 0,

@@ -232,6 +232,8 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
             ],
             active_pane: 8,
             zoomed: false,
+            synchronized: false,
+            bell: false,
         }],
         active_window: 1,
         started_unix: 0,

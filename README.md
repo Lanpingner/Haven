@@ -68,6 +68,7 @@ cargo run -p haven -- shell-info
 | `!` | break this pane out into its own tab |
 | `&` | kill the whole tab |
 | `r` | respawn the pane's program |
+| `S` | synchronize: type into every pane of the tab at once |
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree: sessions, windows, panes |
@@ -97,6 +98,20 @@ root = { "C-t" = "new-window" }                          # no prefix needed
 Key specs are `C-`, `S-`, `A-`/`M-`, `D-` in any order, then a character or a
 name (`Up`, `PageUp`, `Enter`, `Space`, `F5`, …). The commands are the ones
 the command line takes, so nothing is bindable that cannot be typed.
+
+### Scripting
+
+```sh
+haven run -- split-v
+haven run -- send-keys 'cargo test\n'
+haven run -t 2 -- select-window 3
+```
+
+Anything a key can do, `haven run` can do: both resolve to the same action,
+so there is no second vocabulary for scripts. A synchronized tab is marked
+`≡` on the bar and a tab that rang while you were elsewhere is marked `●`
+and painted — an invisible mode that multiplies every keystroke is a trap,
+and a bell you did not see is the one worth seeing.
 
 ### Environment
 
@@ -157,6 +172,8 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `rotate [-D]` | move the panes round their places |
 | `break-pane`, `join-pane <tab> [-h]` | move a pane out of / into this tab |
 | `respawn-pane`, `next-layout` | restart the program / cycle the layout |
+| `send-keys <text>` | type into the pane; `\n` `\t` `\e` `\xNN` are decoded |
+| `synchronize-panes [on\|off]` | type into every pane at once |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |
 
 `Tab` completes as far as the candidates agree. A box above the bar lists what

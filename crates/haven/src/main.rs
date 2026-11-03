@@ -19,6 +19,7 @@ usage:
   haven attach [options]            attach to the daemon (starts it if needed)
   haven ls                          list sessions
   haven show-env                    the session's environment, as exports
+  haven run '<command>'             run one command against a session
   haven kill-session -t <id>        end one session
   haven server run|stop             run or stop the daemon
   haven tui [options]               standalone: the mux with no daemon
@@ -209,6 +210,7 @@ fn main() -> ExitCode {
         "ls" => list(args),
         "kill-session" => kill_session(args),
         "show-env" | "show-environment" => show_env(args),
+        "run" | "cmd" => run_cmd(args),
         "server" => server(args),
         "tui" => tui(args),
         "dump" => dump(args),
@@ -297,6 +299,28 @@ fn list(args: Args) -> ExitCode {
             warn_if_daemon_is_stale(daemon_build);
             ExitCode::SUCCESS
         }
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// One command, from a script, against a running session.
+fn run_cmd(args: Args) -> ExitCode {
+    let line = args.rest.iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" ");
+    let line = if line.trim().is_empty() {
+        args.program.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+    } else {
+        format!("{} {line}", args.program.as_ref().map(|p| p.to_string_lossy()).unwrap_or_default())
+    };
+    if line.trim().is_empty() {
+        eprintln!("haven: run needs a command, as in `haven run -- split-v`");
+        return ExitCode::FAILURE;
+    }
+    let session = args.target.map(haven_proto::SessionId);
+    match haven::attach::run_command_on(&socket_of(&args), session, line.trim()) {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("haven: {e}");
             ExitCode::FAILURE

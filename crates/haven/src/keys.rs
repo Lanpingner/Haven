@@ -33,6 +33,13 @@ pub enum Action {
     },
     CloseWindow,
     RespawnPane,
+    SendKeys {
+        pane: Option<u32>,
+        bytes: Vec<u8>,
+    },
+    SynchronizePanes {
+        on: Option<bool>,
+    },
     NextLayout,
     /// Rename the active window, or the session.
     Rename {
@@ -85,7 +92,9 @@ pub const COMMANDS: &[&str] = &[
     "rename-session",
     "respawn-pane",
     "rotate",
+    "send-keys",
     "swap-pane",
+    "synchronize-panes",
     "rename-window",
     "detach",
     "copy-mode",
@@ -148,6 +157,46 @@ pub fn common_prefix(candidates: &[&str]) -> String {
 /// The names are the long forms of the prefix keys rather than a new
 /// vocabulary: anything a binding can do, a typed command can do, because
 /// both resolve to the same [`Action`] (`docs/PLAN.md` §11.2).
+/// Decode the escapes a script may write in a `send-keys` argument.
+pub fn unescape(text: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push(b'\n'),
+            Some('r') => out.push(b'\r'),
+            Some('t') => out.push(b'\t'),
+            Some('e') => out.push(0x1b),
+            Some('\\') => out.push(b'\\'),
+            Some('x') => {
+                let hex: String = chars.by_ref().take(2).collect();
+                match u8::from_str_radix(&hex, 16) {
+                    Ok(byte) => out.push(byte),
+                    // Not hex after all: keep what was written rather than
+                    // silently dropping two characters.
+                    Err(_) => {
+                        out.push(b'\\');
+                        out.push(b'x');
+                        out.extend_from_slice(hex.as_bytes());
+                    }
+                }
+            }
+            Some(other) => {
+                out.push(b'\\');
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+            }
+            None => out.push(b'\\'),
+        }
+    }
+    out
+}
+
 fn wire_edge(edge: Edge) -> haven_proto::Edge {
     match edge {
         Edge::Left => haven_proto::Edge::Left,
@@ -199,6 +248,19 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         }
         "kill-window" | "killw" | "kill-tab" => Action::CloseWindow,
         "respawn-pane" | "respawnp" => Action::RespawnPane,
+        "send-keys" | "send" => Action::SendKeys {
+            pane: None,
+            // `\n`, `\t`, `\e` and `\xNN` are decoded, so a script can send
+            // a newline without having to put a literal one in its argument.
+            bytes: unescape(&rest_of(line, verb)),
+        },
+        "synchronize-panes" | "sync" => Action::SynchronizePanes {
+            on: match arg {
+                Some("on") => Some(true),
+                Some("off") => Some(false),
+                _ => None,
+            },
+        },
         "next-layout" | "layout" => Action::NextLayout,
         "rename-window" | "rename-tab" => {
             Action::Rename { window: true, name: rest_of(line, verb) }
@@ -274,6 +336,8 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::JoinPane { window, columns } => P::JoinPane { window, columns },
         Action::CloseWindow => P::CloseWindow,
         Action::RespawnPane => P::RespawnPane,
+        Action::SendKeys { pane, bytes } => P::SendKeys { pane, bytes },
+        Action::SynchronizePanes { on } => P::SynchronizePanes { on },
         Action::NextLayout => P::NextLayout,
         Action::Rename { window, name } => P::Rename { window, name },
         Action::ApplyLayout(NamedLayout::EvenHorizontal) => P::EvenHorizontal,
@@ -343,6 +407,48 @@ mod tests {
     #[test]
     fn an_unbound_key_resolves_to_nothing_rather_than_a_default() {
         assert_eq!(bound(&key('Q')), None);
+    }
+
+    #[test]
+    fn send_keys_decodes_the_escapes_a_script_would_write() {
+        // A script cannot put a literal newline in an argument, so the
+        // escapes are the whole point of the command.
+        assert_eq!(unescape("ls\\n"), b"ls\n".to_vec());
+        assert_eq!(unescape("\\t\\r\\e"), vec![b'\t', b'\r', 0x1b]);
+        assert_eq!(unescape("\\x03"), vec![3]);
+        assert_eq!(unescape("a\\\\b"), b"a\\b".to_vec());
+    }
+
+    #[test]
+    fn a_bad_escape_keeps_what_was_written() {
+        // Dropping characters silently is how a script sends the wrong thing
+        // and nobody finds out.
+        assert_eq!(unescape("\\xzz"), b"\\xzz".to_vec());
+        assert_eq!(unescape("\\q"), b"\\q".to_vec());
+        assert_eq!(unescape("trailing\\"), b"trailing\\".to_vec());
+    }
+
+    #[test]
+    fn send_keys_keeps_its_whole_argument() {
+        match parse_command("send-keys echo hello world\\n") {
+            Ok(Action::SendKeys { bytes, .. }) => {
+                assert_eq!(bytes, b"echo hello world\n".to_vec());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn synchronize_panes_takes_on_off_or_a_toggle() {
+        assert_eq!(
+            parse_command("synchronize-panes on"),
+            Ok(Action::SynchronizePanes { on: Some(true) })
+        );
+        assert_eq!(
+            parse_command("synchronize-panes off"),
+            Ok(Action::SynchronizePanes { on: Some(false) })
+        );
+        assert_eq!(parse_command("sync"), Ok(Action::SynchronizePanes { on: None }));
     }
 
     #[test]

@@ -162,6 +162,21 @@ impl Session {
         }
         self.last_window = self.windows.get(self.active).map(|w| w.id);
         self.active = index;
+        // Arriving is what clears the bell: it means "rang since you last
+        // looked", and you are looking.
+        if let Some(window) = self.windows.get_mut(index) {
+            window.bell = false;
+        }
+    }
+
+    /// Mark the window holding a pane as having rung.
+    pub fn note_bell(&mut self, pane: PaneId) {
+        let active = self.active;
+        for (i, window) in self.windows.iter_mut().enumerate() {
+            if window.root.contains(pane) {
+                window.bell = i != active;
+            }
+        }
     }
 
     /// Rename a window, or the session itself when `window` is `None`.

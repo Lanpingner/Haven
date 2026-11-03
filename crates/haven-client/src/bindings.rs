@@ -175,6 +175,7 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("!", "break-pane"),
     ("&", "kill-window"),
     ("r", "respawn-pane"),
+    ("S", "synchronize-panes"),
     ("h", "focus-left"),
     ("j", "focus-down"),
     ("k", "focus-up"),

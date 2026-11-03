@@ -202,8 +202,16 @@ pub fn build(
         for w in &s.windows {
             let active = w.id == s.active_window;
             let zoom = if w.zoomed { " \u{25a3}" } else { "" };
-            let label = format!(" {}:{}{} ", w.id, w.name, zoom);
-            spans.push(&label, if active { theme.tab_active.style() } else { theme.tab.style() });
+            let sync = if w.synchronized { " \u{2261}" } else { "" };
+            let bell = if w.bell { " \u{25cf}" } else { "" };
+            let label = format!(" {}:{}{}{}{} ", w.id, w.name, zoom, sync, bell);
+            let style = match (active, w.bell) {
+                (true, _) => theme.tab_active.style(),
+                // A rung tab stands out, or the mark is no better than none.
+                (false, true) => theme.bar_alert.style(),
+                (false, false) => theme.tab.style(),
+            };
+            spans.push(&label, style);
             spans.push(" ", theme.bar.style());
         }
     }
@@ -347,6 +355,8 @@ mod tests {
                     panes: vec![pane(1), pane(2)],
                     active_pane: 1,
                     zoomed: false,
+                    synchronized: false,
+                    bell: false,
                 },
                 WindowInfo {
                     id: 2,
@@ -354,6 +364,8 @@ mod tests {
                     panes: vec![pane(3)],
                     active_pane: 3,
                     zoomed: false,
+                    synchronized: false,
+                    bell: false,
                 },
             ],
             active_window: 1,

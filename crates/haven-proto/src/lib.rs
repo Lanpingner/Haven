@@ -350,6 +350,18 @@ pub enum Action {
     },
     /// Close the active window and everything in it.
     CloseWindow,
+    /// Type into a pane, or into the active one. Separate from `Input`
+    /// because it comes from a script rather than from a keyboard: the bytes
+    /// are already decided and must not be re-encoded.
+    SendKeys {
+        pane: Option<u32>,
+        bytes: Vec<u8>,
+    },
+    /// Send everything typed in one pane to every pane of its window.
+    /// `None` toggles: only the daemon knows the current state.
+    SynchronizePanes {
+        on: Option<bool>,
+    },
     /// Start a fresh program in the active pane.
     RespawnPane,
     /// The next named layout, cycling.
@@ -500,6 +512,11 @@ pub struct SessionStatus {
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct WindowInfo {
     pub id: u32,
+    /// Everything typed goes to every pane in it. On the status bar because
+    /// an invisible mode that multiplies every keystroke is a trap.
+    pub synchronized: bool,
+    /// A pane in this window rang while you were somewhere else.
+    pub bell: bool,
     pub name: String,
     /// The panes themselves, not a count: a chooser has to list them, and a
     /// count cannot be navigated.

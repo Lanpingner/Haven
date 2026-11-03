@@ -242,9 +242,10 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
 
     /// Send bytes to the focused pane.
     pub fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let active = self.session.active_pane();
-        if let Some(pane) = self.panes.get_mut(&active.0) {
-            pane.pty.write_all(bytes)?;
+        for target in self.input_targets() {
+            if let Some(pane) = self.panes.get_mut(&target.0) {
+                pane.pty.write_all(bytes)?;
+            }
         }
         Ok(())
     }
@@ -327,6 +328,20 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
             [NamedLayout::EvenHorizontal, NamedLayout::EvenVertical, NamedLayout::Tiled];
         self.layout_index = (self.layout_index + 1) % CYCLE.len();
         self.apply_named_layout(CYCLE[self.layout_index])
+    }
+
+    /// Where input typed into the active pane actually goes.
+    ///
+    /// Normally just that pane. With the window synchronized it goes to
+    /// every pane in it, which is what makes the same command run on eight
+    /// machines at once.
+    pub fn input_targets(&self) -> Vec<PaneId> {
+        let window = self.session.active_window();
+        if window.synchronized {
+            window.panes()
+        } else {
+            vec![window.active]
+        }
     }
 
     pub fn swap_pane(&mut self, edge: Option<Edge>) -> io::Result<bool> {

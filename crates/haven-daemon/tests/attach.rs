@@ -565,6 +565,73 @@ fn the_session_environment_can_be_asked_for() {
 }
 
 #[test]
+fn synchronized_panes_type_into_every_pane_at_once() {
+    let mut daemon = daemon();
+    let mut client = attach(&mut daemon, 40, 8);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    send_action(&mut client, Action::SplitColumns).expect("split");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.panes.len() == 2);
+    let panes: Vec<PaneId> = client.frame.panes.values().map(|p| p.id).collect();
+
+    send_action(&mut client, Action::SynchronizePanes { on: Some(true) }).expect("sync");
+    settle(&mut daemon, &mut [&mut client], |_| false);
+    let active = client.focus.expect("focus");
+    send_input(&mut client, active, b"hello\n");
+
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            panes.iter().all(|p| c[0].frame.pane_text(*p).contains("got:hello"))
+        }),
+        "only one pane heard it:\n{}",
+        panes.iter().map(|p| client.frame.pane_text(*p)).collect::<Vec<_>>().join("---\n")
+    );
+}
+
+#[test]
+fn a_bell_marks_the_tab_you_were_not_looking_at() {
+    let mut daemon = daemon();
+    let mut client = attach(&mut daemon, 40, 8);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    // A second tab, then back to the first, so the bell rings out of sight.
+    send_action(&mut client, Action::NewWindow).expect("new window");
+    settle(&mut daemon, &mut [&mut client], |c| {
+        c[0].frame.status.as_ref().is_some_and(|s| s.windows.len() == 2)
+    });
+    let second = client.frame.status.as_ref().unwrap().active_window;
+    send_action(&mut client, Action::SelectWindow(0)).expect("select");
+    settle(&mut daemon, &mut [&mut client], |c| {
+        c[0].frame.status.as_ref().is_some_and(|s| s.active_window != second)
+    });
+
+    // The test shell echoes what it is told, so a BEL comes back as output.
+    let panes: Vec<PaneId> = client.frame.panes.values().map(|p| p.id).collect();
+    let away = panes[0];
+    client
+        .transport
+        .send(ClientMsg::Action(Action::SendKeys {
+            pane: Some(away.0 + 1),
+            bytes: b"\x07\n".to_vec(),
+        }))
+        .expect("send");
+
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame.status.as_ref().is_some_and(|s| s.windows.iter().any(|w| w.bell))
+        }),
+        "a bell in another tab left no mark"
+    );
+
+    // And visiting it clears the mark.
+    send_action(&mut client, Action::SelectWindow(1)).expect("select");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame.status.as_ref().is_some_and(|s| s.windows.iter().all(|w| !w.bell))
+        }),
+        "the mark survived a visit"
+    );
+}
+
+#[test]
 fn colours_survive_the_round_trip_through_the_protocol() {
     use haven_core::{Color, Rgb};
 

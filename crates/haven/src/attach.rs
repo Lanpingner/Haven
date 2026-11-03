@@ -280,6 +280,36 @@ pub fn kill_session(
     wait_for_sessions(&mut transport)
 }
 
+/// Run one command against a session without attaching.
+///
+/// This is the whole of control mode for now, and it is what makes Haven
+/// scriptable at all: anything a key can do, a shell script can do, because
+/// both resolve to the same [`crate::keys::Action`].
+pub fn run_command_on(socket: &Path, session: Option<SessionId>, line: &str) -> io::Result<()> {
+    let action = crate::keys::parse_command(line.trim())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let Some(wire) = crate::keys::to_proto(action) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{line:?} only means something inside a client"),
+        ));
+    };
+    let mut transport = SocketTransport::connect(socket)?;
+    transport
+        .send(ClientMsg::Attach {
+            session,
+            caps: haven_proto::ClientCaps::null(haven_proto::CellSize::default()),
+            // A script is not a viewer: it must not resize the session or
+            // take over its environment on the way past.
+            env: Vec::new(),
+        })
+        .map_err(to_io)?;
+    transport.send(ClientMsg::Action(wire)).map_err(to_io)?;
+    // The daemon acts on reads, so give it one before dropping the socket.
+    std::thread::sleep(Duration::from_millis(50));
+    Ok(())
+}
+
 /// The session's environment, as `export` lines a shell can evaluate.
 ///
 /// The only way to fix a shell that was started before the latest attach:

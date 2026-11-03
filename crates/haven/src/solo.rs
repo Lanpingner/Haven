@@ -230,6 +230,14 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
         Action::RespawnPane => {
             mux.respawn_active()?;
         }
+        Action::SendKeys { pane, bytes } => {
+            let target = pane.map(haven_proto::PaneId).unwrap_or_else(|| mux.session.active_pane());
+            mux.send_to(target, &bytes)?;
+        }
+        Action::SynchronizePanes { on } => {
+            let window = mux.session.active_window_mut();
+            window.synchronized = on.unwrap_or(!window.synchronized);
+        }
         Action::NextLayout => mux.next_layout()?,
         Action::Rename { window, name } => {
             let id = window.then(|| mux.session.active_window().id);
