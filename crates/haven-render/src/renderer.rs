@@ -666,7 +666,10 @@ impl Renderer {
     fn push_text(&mut self, cell: &haven_core::ScreenCell, col: usize, row: usize, fg: Rgb) {
         let alpha = if cell.style.attrs.contains(Attrs::DIM) { 0.55 } else { 1.0 };
         let colour = linear(fg, alpha);
-        let bold = cell.style.attrs.contains(Attrs::BOLD);
+        let style = crate::font::FaceStyle::of(
+            cell.style.attrs.contains(Attrs::BOLD),
+            cell.style.attrs.contains(Attrs::ITALIC),
+        );
 
         // Every char in the cluster is drawn at the same pen position: that is
         // what makes a base character plus combining marks land on each other
@@ -690,14 +693,21 @@ impl Renderer {
                 }
                 continue;
             }
-            let Some((face, glyph)) = self.fonts.face_for(ch) else { continue };
-            let key = GlyphKey::new(face, glyph, self.fonts.size_px());
+            let Some(styled) = self.fonts.styled_face_for(ch, style) else { continue };
+            let key = GlyphKey::new(styled.face, styled.glyph, self.fonts.size_px())
+                .slanted(styled.synth_italic);
             let entry = match self.atlas.get(&key) {
                 Some(entry) => entry,
-                None => match self.fonts.rasterize(face, glyph) {
-                    Some(raster) => self.atlas.insert(key, &raster),
-                    None => continue,
-                },
+                None => {
+                    match self.fonts.rasterize_slanted(
+                        styled.face,
+                        styled.glyph,
+                        styled.synth_italic,
+                    ) {
+                        Some(raster) => self.atlas.insert(key, &raster),
+                        None => continue,
+                    }
+                }
             };
             if entry.is_empty() {
                 continue;
@@ -721,9 +731,10 @@ impl Renderer {
                 uv: entry.uv,
                 color: colour,
             });
-            if bold {
-                // Synthetic bold: a second pass one pixel over. Crude next to
-                // a real bold face, and honest about it.
+            if styled.synth_bold {
+                // Synthetic bold: a second pass one pixel over, only where
+                // the family has no bold cut to use instead. Crude next to a
+                // real bold face, and honest about it.
                 self.glyphs.push(Quad {
                     pos: [x + 1.0, y],
                     size: [entry.width as f32, entry.height as f32],

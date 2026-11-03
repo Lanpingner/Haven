@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
-use swash::zeno::{Format, Vector};
-use swash::{Attributes, CacheKey, Charmap, FontRef, GlyphId};
+use swash::zeno::{Format, Transform, Vector};
+use swash::{CacheKey, Charmap, FontRef, GlyphId};
 
 /// A loaded face, kept alive because `FontRef` borrows its data.
 /// Font bytes, either read into memory or mapped.
@@ -95,8 +95,50 @@ pub struct CellMetrics {
     pub underline_thickness: u32,
 }
 
+/// Which cut of the primary family a cell wants.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum FaceStyle {
+    #[default]
+    Regular,
+    Bold,
+    Italic,
+    BoldItalic,
+}
+
+impl FaceStyle {
+    pub fn of(bold: bool, italic: bool) -> Self {
+        match (bold, italic) {
+            (false, false) => Self::Regular,
+            (true, false) => Self::Bold,
+            (false, true) => Self::Italic,
+            (true, true) => Self::BoldItalic,
+        }
+    }
+
+    fn slot(self) -> Option<usize> {
+        match self {
+            Self::Regular => None,
+            Self::Bold => Some(0),
+            Self::Italic => Some(1),
+            Self::BoldItalic => Some(2),
+        }
+    }
+
+    fn is_italic(self) -> bool {
+        matches!(self, Self::Italic | Self::BoldItalic)
+    }
+
+    fn is_bold(self) -> bool {
+        matches!(self, Self::Bold | Self::BoldItalic)
+    }
+}
+
 pub struct FontStack {
     faces: Vec<Face>,
+    /// Bold, italic and bold-italic of the primary family, where the system
+    /// has them. `None` means the family has no such cut and the renderer
+    /// falls back to synthesising one.
+    styled: [Option<FaceId>; 3],
     /// Kept for the last-resort scan: a curated chain cannot cover every
     /// script, and a terminal that renders nothing for CJK is broken even if
     /// the font list looks reasonable.
@@ -163,6 +205,40 @@ impl FontStack {
                 ids.push(id);
             }
         }
+        // Bold, italic and bold-italic of whichever family won, found by
+        // asking for the same family with different attributes. They go
+        // *after* the regular face in the chain so plain text still measures
+        // and draws from the regular one, and they are remembered by slot so
+        // a styled cell can ask for its own.
+        let regular_family = ids
+            .first()
+            .and_then(|id| db.face(*id))
+            .and_then(|f| f.families.first().map(|(name, _)| name.clone()));
+        let mut styled = [None; 3];
+        if let Some(family) = &regular_family {
+            for (slot, weight, style) in [
+                (0usize, fontdb::Weight::BOLD, fontdb::Style::Normal),
+                (1, fontdb::Weight::NORMAL, fontdb::Style::Italic),
+                (2, fontdb::Weight::BOLD, fontdb::Style::Italic),
+            ] {
+                let Some(id) = db.query(&fontdb::Query {
+                    families: &[fontdb::Family::Name(family)],
+                    weight,
+                    stretch: fontdb::Stretch::Normal,
+                    style,
+                }) else {
+                    continue;
+                };
+                // `query` falls back to the regular face when a family has no
+                // such variant, so a match that *is* the regular face means
+                // the variant does not exist.
+                if Some(id) == ids.first().copied() {
+                    continue;
+                }
+                styled[slot] = Some(ids.len());
+                ids.push(id);
+            }
+        }
         // A curated chain covering the scripts and symbol blocks a terminal
         // actually meets: box drawing from a mono face, CJK and symbols from
         // Noto, and a generic sans at the end.
@@ -225,8 +301,12 @@ impl FontStack {
         }
 
         let metrics = measure(faces[0].as_ref(), size_px);
+        // A styled face whose load failed must not leave an index pointing
+        // at the wrong font.
+        let styled = styled.map(|slot| slot.filter(|i| *i < faces.len()).map(|i| FaceId(i as u16)));
         Ok(Self {
             faces,
+            styled,
             db,
             system: Vec::new(),
             scanned: false,
@@ -247,6 +327,46 @@ impl FontStack {
 
     pub fn face_count(&self) -> usize {
         self.faces.len()
+    }
+
+    /// The face that draws this character in the cut a cell asked for, and
+    /// whether the cut had to be faked.
+    ///
+    /// A styled face is only consulted for characters the primary family
+    /// covers. Falling through to it for, say, CJK would be asking a Latin
+    /// italic face for a glyph it has never had.
+    pub fn styled_face_for(&mut self, c: char, style: FaceStyle) -> Option<StyledGlyph> {
+        let (id, glyph) = self.face_for(c)?;
+        let Some(slot) = style.slot() else {
+            return Some(StyledGlyph { face: id, glyph, synth_bold: false, synth_italic: false });
+        };
+        // Only the primary face has cuts; anything from the fallback chain
+        // keeps its own shape and is slanted or doubled instead.
+        if id == FaceId(0) {
+            if let Some(face) = self.styled[slot] {
+                let styled_glyph = self.charmap(face).map(c);
+                if styled_glyph != 0 {
+                    return Some(StyledGlyph {
+                        face,
+                        glyph: styled_glyph,
+                        synth_bold: false,
+                        synth_italic: false,
+                    });
+                }
+            }
+        }
+        Some(StyledGlyph {
+            face: id,
+            glyph,
+            synth_bold: style.is_bold(),
+            synth_italic: style.is_italic(),
+        })
+    }
+
+    /// Whether the primary family really has this cut, for tests and for
+    /// anyone asking why their italics look sheared.
+    pub fn has_face(&self, style: FaceStyle) -> bool {
+        style.slot().is_none_or(|slot| self.styled[slot].is_some())
     }
 
     /// The face that can draw this character, searching the fallback chain
@@ -337,18 +457,39 @@ impl FontStack {
 
     /// Rasterize one glyph to an alpha mask.
     pub fn rasterize(&mut self, face: FaceId, glyph: GlyphId) -> Option<Raster> {
+        self.rasterize_slanted(face, glyph, false)
+    }
+
+    /// As [`Self::rasterize`], but optionally sheared.
+    ///
+    /// A family with no italic cut gets an oblique one: the glyph is slanted
+    /// as it is rasterized, which is what every terminal does and what the
+    /// alternative — drawing italic text upright — fails to do at all.
+    pub fn rasterize_slanted(
+        &mut self,
+        face: FaceId,
+        glyph: GlyphId,
+        slant: bool,
+    ) -> Option<Raster> {
         let font = self.faces.get(face.0 as usize)?.as_ref();
-        let mut scaler = self.scaler.builder(font).size(self.size_px).hint(true).build();
+        let mut builder = self.scaler.builder(font).size(self.size_px).hint(true).build();
+        let scaler = &mut builder;
         // Outline first, then an embedded bitmap or colour strike: that order
         // is what gives sharp text with emoji still working.
-        let image = Render::new(&[
+        let mut render = Render::new(&[
             Source::ColorOutline(0),
             Source::ColorBitmap(StrikeWith::BestFit),
             Source::Outline,
-        ])
-        .format(Format::Alpha)
-        .offset(Vector::new(0.0, 0.0))
-        .render(&mut scaler, glyph)?;
+        ]);
+        render.format(Format::Alpha).offset(Vector::new(0.0, 0.0));
+        if slant {
+            // About 12 degrees, which is the slope most italic faces use.
+            render.transform(Some(Transform::skew(
+                swash::zeno::Angle::from_degrees(-12.0),
+                swash::zeno::Angle::ZERO,
+            )));
+        }
+        let image = render.render(scaler, glyph)?;
 
         Some(Raster {
             width: image.placement.width,
@@ -412,11 +553,80 @@ fn unicode_width_of(c: char) -> usize {
     c.width().unwrap_or(1)
 }
 
-/// Keep the `Attributes` import meaningful: used when we start honouring
-/// bold/italic faces rather than synthesising them.
-#[allow(dead_code)]
-fn _attributes_anchor() -> Attributes {
-    Attributes::default()
+/// A glyph in the cut a cell asked for, plus what still has to be faked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StyledGlyph {
+    pub face: FaceId,
+    pub glyph: GlyphId,
+    /// No bold cut exists, so draw it twice a pixel apart.
+    pub synth_bold: bool,
+    /// No italic cut exists, so shear it.
+    pub synth_italic: bool,
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+
+    fn stack() -> Option<FontStack> {
+        FontStack::new(None, 16.0).ok()
+    }
+
+    #[test]
+    fn a_cut_is_asked_for_and_either_found_or_faked() {
+        let Some(mut fonts) = stack() else { return };
+        let regular = fonts.styled_face_for('a', FaceStyle::Regular).expect("no regular 'a'");
+        assert!(!regular.synth_bold && !regular.synth_italic);
+
+        for style in [FaceStyle::Bold, FaceStyle::Italic, FaceStyle::BoldItalic] {
+            let got = fonts.styled_face_for('a', style).expect("no glyph at all");
+            if fonts.has_face(style) {
+                // A real cut: a different face, and nothing to fake.
+                assert_ne!(got.face, regular.face, "{style:?} resolved to the regular face");
+                assert!(!got.synth_bold && !got.synth_italic, "{style:?} was faked anyway");
+            } else {
+                // No cut: the regular face, with the fakery flagged.
+                assert_eq!(got.face, regular.face);
+                assert_eq!(got.synth_bold, style.is_bold());
+                assert_eq!(got.synth_italic, style.is_italic());
+            }
+        }
+    }
+
+    #[test]
+    fn a_fallback_glyph_keeps_its_own_face_whatever_the_cut() {
+        // The primary family's italic has never had a CJK glyph; asking it
+        // for one would get nothing rather than a slanted character.
+        let Some(mut fonts) = stack() else { return };
+        let Some(plain) = fonts.styled_face_for('漢', FaceStyle::Regular) else { return };
+        if plain.face == FaceId(0) {
+            return; // The primary family covers it; nothing to prove here.
+        }
+        let italic = fonts.styled_face_for('漢', FaceStyle::Italic).expect("no glyph");
+        assert_eq!(italic.face, plain.face, "a fallback glyph changed face for a cut");
+        assert!(italic.synth_italic, "it should be slanted instead");
+    }
+
+    #[test]
+    fn slanting_produces_a_different_image_from_the_same_glyph() {
+        let Some(mut fonts) = stack() else { return };
+        let Some((face, glyph)) = fonts.face_for('H') else { return };
+        let upright = fonts.rasterize_slanted(face, glyph, false).expect("raster");
+        let slanted = fonts.rasterize_slanted(face, glyph, true).expect("raster");
+        assert_ne!(
+            (upright.width, upright.alpha.clone()),
+            (slanted.width, slanted.alpha.clone()),
+            "the shear did nothing"
+        );
+    }
+
+    #[test]
+    fn the_cache_key_separates_a_slanted_glyph_from_an_upright_one() {
+        // Sharing one entry would let whichever appeared first decide how
+        // every later use of that character looks.
+        let key = crate::atlas::GlyphKey::new(FaceId(0), 7, 16.0);
+        assert_ne!(key, key.slanted(true));
+    }
 }
 
 #[cfg(test)]

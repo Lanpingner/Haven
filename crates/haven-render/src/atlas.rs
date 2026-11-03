@@ -19,11 +19,21 @@ pub struct GlyphKey {
     pub glyph: u16,
     /// Pixel size, as bits so it can be hashed.
     pub size_bits: u32,
+    /// Sheared, for a family with no italic cut. Part of the key because the
+    /// same glyph from the same face at the same size is a *different image*
+    /// slanted, and sharing one cache entry would make the first use of a
+    /// character decide how every later one looks.
+    pub slanted: bool,
 }
 
 impl GlyphKey {
     pub fn new(face: FaceId, glyph: u16, size_px: f32) -> Self {
-        Self { face, glyph, size_bits: size_px.to_bits() }
+        Self { face, glyph, size_bits: size_px.to_bits(), slanted: false }
+    }
+
+    pub fn slanted(mut self, slanted: bool) -> Self {
+        self.slanted = slanted;
+        self
     }
 }
 
