@@ -7,6 +7,7 @@
 //! the other's code path.
 
 pub mod chooser;
+pub mod copy;
 pub mod frame;
 pub mod frontend;
 pub mod input;
@@ -23,6 +24,10 @@ pub use input::{
 };
 
 use haven_proto::{Action, ClientMsg, PaneId, ServerMsg, Transport, TransportError};
+
+/// How many paste buffers to keep. tmux keeps fifty; the difference only
+/// shows up for someone using `choose-buffer`, which does not exist yet.
+const BUFFERS: usize = 20;
 
 /// Rows one notch of the wheel moves. Three is what every other terminal
 /// does, and matching it is the whole point.
@@ -53,6 +58,10 @@ pub enum Intercepted {
     NewSession,
     /// Move the focused pane's view through its history, in rows.
     Scroll(i32),
+    /// Enter copy mode on the focused pane.
+    EnterCopy,
+    /// Send the newest paste buffer to the focused pane.
+    Paste,
 }
 
 /// Decides what a keystroke means before it reaches a pane.
@@ -92,6 +101,11 @@ pub struct Client<F, T> {
     pub mode: status_bar::Mode,
     /// The session tree, while it is open.
     pub chooser: Option<chooser::Chooser>,
+    /// Copy mode, while it is up. Modal: it owns the keyboard.
+    pub copy: Option<copy::CopyMode>,
+    /// Copied text, newest first. tmux calls these paste buffers; the name
+    /// is worth keeping because the behaviour is the same.
+    pub buffers: Vec<String>,
     /// Why the session is ending, when it is ending badly. A frontend reports
     /// this after it has given the terminal back.
     fatal: Option<String>,
@@ -126,6 +140,8 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             key_filter: None,
             mode: status_bar::Mode::Normal,
             chooser: None,
+            copy: None,
+            buffers: Vec::new(),
             fatal: None,
             sessions: Vec::new(),
             attached: false,
@@ -189,6 +205,112 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             _ => {}
         }
         Ok(Tick::Redraw)
+    }
+
+    /// Enter copy mode on the focused pane.
+    fn enter_copy(&mut self) {
+        let Some(pane) = self.focus else { return };
+        let Some(frame) = self.frame.pane(pane) else { return };
+        let (rows, cols) = (frame.rect.rows as usize, frame.rect.cols as usize);
+        let (offset, total) = frame.scroll;
+        self.copy = Some(copy::CopyMode::new(pane, rows, cols, offset, total));
+        self.sync_copy();
+    }
+
+    /// One keystroke while copy mode is up.
+    fn copy_key(&mut self, event: &input::KeyEvent) -> Result<Tick, TransportError> {
+        if event.state == input::KeyState::Release {
+            return Ok(Tick::Idle);
+        }
+        let Some(mut copy) = self.copy.take() else { return Ok(Tick::Idle) };
+        // Word motion needs the text of the row the cursor is on, which the
+        // mode does not keep: the frame already has it.
+        let line = self.copy_line(&copy);
+        let action = copy.key(event, &line);
+        let pane = copy.pane;
+        self.copy = Some(copy);
+
+        match action {
+            copy::CopyAction::None => {}
+            copy::CopyAction::Leave => {
+                self.copy = None;
+                // Reading is over, so go back to the live screen.
+                self.transport.send(ClientMsg::Scroll { pane, delta: i32::MIN })?;
+            }
+            copy::CopyAction::Scroll(delta) => {
+                self.transport.send(ClientMsg::Scroll { pane, delta })?;
+            }
+            copy::CopyAction::Copy(start, end) => {
+                self.copy = None;
+                self.transport.send(ClientMsg::Copy { pane, start, end })?;
+                self.transport.send(ClientMsg::Scroll { pane, delta: i32::MIN })?;
+            }
+            copy::CopyAction::Search { query, from, backwards } => {
+                self.frame.notice = None;
+                self.transport.send(ClientMsg::Search { pane, query, from, backwards })?;
+            }
+        }
+        self.sync_copy();
+        Ok(Tick::Redraw)
+    }
+
+    /// Mirror copy mode's cursor and selection into the frame, which is all
+    /// a frontend is given.
+    fn sync_copy(&mut self) {
+        match self.copy.as_ref() {
+            Some(copy) => {
+                self.frame.copy_cursor = Some((copy.pane, copy.row, copy.col));
+                self.frame.selection = copy.selection().map(|(a, b)| (copy.pane, a, b));
+            }
+            None => {
+                self.frame.copy_cursor = None;
+                self.frame.selection = None;
+            }
+        }
+    }
+
+    /// The text of the row the copy cursor is on.
+    fn copy_line(&self, copy: &copy::CopyMode) -> String {
+        let Some(frame) = self.frame.pane(copy.pane) else { return String::new() };
+        let Some(row) = frame.rows.get(copy.row) else { return String::new() };
+        let mut line = String::new();
+        for span in &row.spans {
+            while line.chars().count() < span.col as usize {
+                line.push(' ');
+            }
+            line.push_str(&span.text);
+        }
+        line
+    }
+
+    /// Keep copied text: in a buffer, and on the system clipboard if the
+    /// frontend has one.
+    fn take_copy(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        self.frontend.set_clipboard(&text);
+        self.clipboard = Some(text.clone());
+        self.buffers.insert(0, text);
+        self.buffers.truncate(BUFFERS);
+    }
+
+    /// Send the newest buffer to the focused pane, bracketed if it asked for
+    /// that — without the brackets an editor treats a paste as typing and
+    /// auto-indents every line of it.
+    fn paste(&mut self) -> Result<(), TransportError> {
+        let Some(pane) = self.focus else { return Ok(()) };
+        let Some(text) = self.buffers.first().cloned() else { return Ok(()) };
+        let bracketed = self.frame.pane(pane).is_some_and(|p| p.bracketed_paste);
+        let mut bytes = Vec::new();
+        if bracketed {
+            bytes.extend_from_slice(b"\x1b[200~");
+        }
+        bytes.extend_from_slice(text.as_bytes());
+        if bracketed {
+            bytes.extend_from_slice(b"\x1b[201~");
+        }
+        self.transport.send(ClientMsg::Input { pane, bytes })
     }
 
     /// Rebuild the chooser from newer data, keeping the selection where the
@@ -271,7 +393,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             &self.mode,
             now,
             &self.frame.theme,
-            self.frame.scroll(),
+            &status_bar::BarState {
+                scroll: self.frame.scroll(),
+                copy: self.copy.as_ref().map(|c| c.label()),
+            },
         ) {
             self.frame.widgets.push(bar);
         }
@@ -359,10 +484,14 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 Ok(Tick::Redraw)
             }
             InputEvent::Key(key) => {
-                // The chooser is modal and owns the keyboard while it is up,
-                // so it is consulted before the key table rather than after.
+                // The chooser and copy mode are modal and own the keyboard
+                // while they are up, so they are consulted before the key
+                // table rather than after.
                 if self.chooser.is_some() {
                     return self.chooser_key(&key);
+                }
+                if self.copy.is_some() {
+                    return self.copy_key(&key);
                 }
                 // Taken out and put back so the filter can borrow the mode
                 // mutably without borrowing the whole client.
@@ -382,6 +511,14 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     Some(Intercepted::NewSession) => {
                         self.new_session(None)?;
                         return Ok(Tick::Redraw);
+                    }
+                    Some(Intercepted::EnterCopy) => {
+                        self.enter_copy();
+                        return Ok(Tick::Redraw);
+                    }
+                    Some(Intercepted::Paste) => {
+                        self.paste()?;
+                        return Ok(Tick::Idle);
                     }
                     Some(Intercepted::Scroll(delta)) => {
                         if let Some(pane) = self.focus {
@@ -487,7 +624,25 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
             ServerMsg::Scrolled { pane, offset, total } => {
                 self.frame.set_scroll(pane, offset, total);
+                if let Some(copy) = self.copy.as_mut().filter(|c| c.pane == pane) {
+                    copy.scrolled(offset, total);
+                    self.sync_copy();
+                }
                 Some(pane) == self.focus
+            }
+            ServerMsg::Copied { text, .. } => {
+                self.take_copy(text);
+                true
+            }
+            ServerMsg::Found { pane, row } => {
+                match row {
+                    Some(row) => {
+                        let _ = self.transport.send(ClientMsg::ScrollTo { pane, row });
+                    }
+                    // Saying nothing would look like a key that did nothing.
+                    None => self.frame.notice = Some("not found".into()),
+                }
+                true
             }
             ServerMsg::Theme(theme) => {
                 self.frame.theme = *theme;

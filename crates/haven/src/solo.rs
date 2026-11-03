@@ -197,8 +197,11 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
         | Action::EnterCommand
         | Action::Choose
         | Action::NewSession
-        // Standalone mode draws straight from the grid, with no view to move.
-        | Action::Scroll(_) => {}
+        // Standalone mode draws straight from the grid, with no view to move
+        // and no client to hold a paste buffer.
+        | Action::Scroll(_)
+        | Action::Copy
+        | Action::Paste => {}
     }
     Ok(false)
 }

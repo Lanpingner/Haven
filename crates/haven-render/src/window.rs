@@ -31,7 +31,7 @@ pub struct Wake;
 
 /// The frontend half: a queue winit fills and the client drains, plus the
 /// renderer once the window exists.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct GpuFrontend {
     renderer: Option<Renderer>,
     window: Option<Arc<Window>>,
@@ -50,8 +50,25 @@ pub struct GpuFrontend {
     pointer: (u16, u16),
     /// Fractions of a row left over from a touchpad's smooth scrolling.
     wheel_residue: f32,
+    /// Opened on first use and then kept: on X11 the owner of a selection
+    /// has to stay alive to serve it, so dropping this between copies would
+    /// make the clipboard empty itself the moment it was filled.
+    clipboard: Option<arboard::Clipboard>,
     pub palette: Palette,
     pub cursor_shape: CursorShape,
+}
+
+// `arboard::Clipboard` has no `Debug`, and the workspace denies a missing
+// one, so this is written out rather than derived. Nothing about the
+// clipboard handle is worth printing anyway.
+impl std::fmt::Debug for GpuFrontend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuFrontend")
+            .field("size", &self.size)
+            .field("occluded", &self.occluded)
+            .field("pointer", &self.pointer)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GpuFrontend {
@@ -61,6 +78,20 @@ impl GpuFrontend {
 
     pub fn push(&mut self, event: InputEvent) {
         self.queue.push_back(event);
+    }
+
+    /// Put text on the desktop clipboard.
+    ///
+    /// A failure is not reported: the text is in a paste buffer either way,
+    /// and a terminal that refused to copy because no clipboard manager was
+    /// running would be worse than one that quietly did half the job.
+    fn put_on_clipboard(&mut self, text: &str) {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        if let Some(clipboard) = &mut self.clipboard {
+            let _ = clipboard.set_text(text.to_string());
+        }
     }
 
     /// Remember where the pointer is, in cells.
@@ -159,6 +190,10 @@ impl Frontend for GpuFrontend {
 
     fn next_input(&mut self) -> Option<InputEvent> {
         self.queue.pop_front()
+    }
+
+    fn set_clipboard(&mut self, text: &str) {
+        self.put_on_clipboard(text);
     }
 
     fn present(&mut self, frame: &FrameModel) -> Result<(), PresentError> {

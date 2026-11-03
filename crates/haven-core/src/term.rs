@@ -697,7 +697,14 @@ impl Perform for Terminal {
             // OSC 52: clipboard. The client decides whether to honour it.
             b"52" => {
                 if let Some(data) = params.get(2) {
-                    self.clipboard_write = Some(String::from_utf8_lossy(data).into_owned());
+                    // The payload is base64; handing a client the encoded
+                    // form would put that on the clipboard instead of the
+                    // text. Undecodable payloads are dropped rather than
+                    // pasted as gibberish.
+                    let text = String::from_utf8_lossy(data);
+                    if let Some(bytes) = crate::base64::decode(&text) {
+                        self.clipboard_write = Some(String::from_utf8_lossy(&bytes).into_owned());
+                    }
                 }
             }
             // OSC 7: cwd reporting, consumed by the mux for "split here".
@@ -1284,7 +1291,16 @@ mod tests {
     fn osc_52_captures_a_clipboard_write_for_the_client_to_judge() {
         let mut e = Emulator::new(10, 2);
         e.feed(b"\x1b]52;c;aGVsbG8=\x1b\\");
-        assert_eq!(e.term.clipboard_write.as_deref(), Some("aGVsbG8="));
+        // Decoded: handing the client the base64 would put that on the
+        // clipboard instead of what the program meant to copy.
+        assert_eq!(e.term.clipboard_write.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn an_osc_52_payload_that_is_not_base64_is_dropped() {
+        let mut e = Emulator::new(10, 2);
+        e.feed(b"\x1b]52;c;!!!not base64!!!\x1b\\");
+        assert_eq!(e.term.clipboard_write, None, "gibberish would have been pasted");
     }
 
     #[test]

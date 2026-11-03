@@ -19,6 +19,10 @@ pub trait Frontend: std::fmt::Debug {
     fn size(&self) -> CellSize {
         self.caps().size
     }
+    /// Put text on whatever the host calls a clipboard. A frontend with no
+    /// clipboard does nothing: the text is still kept in a paste buffer, so
+    /// copy mode works either way.
+    fn set_clipboard(&mut self, _text: &str) {}
 }
 
 #[derive(Debug)]

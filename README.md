@@ -16,6 +16,9 @@ interactive capability probe are not written yet. See
 [its status section](docs/PLAN.md#20-implementation-status) for exactly what
 exists.
 
+There is a project page at <https://berromaa.github.io/HavenTerminal/>, built
+from [site/](site/).
+
 ## Try it
 
 ```sh
@@ -51,6 +54,8 @@ cargo run -p haven -- shell-info
 | `x` | close the pane |
 | `c` / `n` / `p` / `1`-`9` | new tab / next / previous / select |
 | `C` | new session, and move to it |
+| `[` | copy mode |
+| `]` | paste the newest buffer |
 | `PageUp` / `PageDown` | read back through the pane's history |
 | `Home` / `End` | the oldest row / back to the live screen |
 | `e` / `E` / `t` | even-horizontal / even-vertical / tiled layout |
@@ -66,6 +71,29 @@ screen. The offset is per client: two people on one session read at their own
 pace. The alternate screen keeps no history, so a full-screen program scrolls
 nothing.
 
+### Copy mode
+
+`Ctrl+A` `[` puts a cursor on the pane's history. `Ctrl+A` `]` pastes the
+newest buffer back, bracketed if the pane asked for that.
+
+| Key | Does |
+| --- | --- |
+| `h` `j` `k` `l`, arrows | move; off the edge scrolls |
+| `w` / `b` / `0` / `$` | word and line motion |
+| `Ctrl+U` / `Ctrl+D`, `PageUp` / `PageDown` | half a screen, a screen |
+| `g` / `G` | oldest row / back to the live screen |
+| `v` or `Space` | start a selection; again to drop it |
+| `Enter` or `y` | copy it and leave |
+| `/` `?` then `Enter` | search forwards / backwards |
+| `n` / `N` | repeat the search, `N` the other way |
+| `q` or `Esc` | leave |
+
+The selection is anchored in the pane's *history*, not in what is on screen,
+so it survives the scrolling that making it needs. Copied text goes to a paste
+buffer and to the system clipboard — `OSC 52` from `haven attach`, so it works
+over ssh, and the desktop clipboard from `haven gpu`. Search folds case unless
+the query has a capital in it. A line that wrapped is copied as one line.
+
 ### Command line
 
 `Ctrl+A` `:` opens a command line on the status bar. Commands resolve to the
@@ -77,6 +105,7 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `new-window` (`new-tab`), `next`, `prev` | tabs |
 | `new-session` (`new`) | a new session on this daemon, named `haven-<n>` |
 | `scroll-up`, `scroll-down`, `scroll-end` | as the paging keys do |
+| `copy-mode`, `paste-buffer` | as `[` and `]` do |
 | `select-window <n>` (`select-tab`) | go to tab *n* (numbered from 1) |
 | `kill-pane`, `zoom`, `detach` | as the keys do |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |

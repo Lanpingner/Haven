@@ -1,0 +1,828 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Haven Terminal</title>
+<meta name="description" content="A GPU-accelerated, keyboard-first terminal emulator in Rust with multiplexing — sessions, tabs and splits — built into the core instead of layered on via tmux.">
+<meta property="og:title" content="Haven Terminal">
+<meta property="og:description" content="A GPU terminal with the multiplexer inside it. One codebase runs as a detachable server, a standalone terminal, and a TUI client inside any other terminal.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231b1e28'/%3E%3Cpath d='M7 11h6M10 11v10M19 11h6M22 11v10' stroke='%236c9cf0' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    /* Haven's own default theme palette, from crates/haven-proto/src/theme.rs */
+    --ink: #1b1e28;
+    --surface: #242836;
+    --raised: #2e3344;
+    --text: #c8d0e0;
+    --faint: #7a849c;
+    --accent: #6c9cf0;
+    --warm: #f0b46c;
+    --good: #8ed0a0;
+    --bad: #e07a7a;
+
+    --bg: var(--ink);
+    --bg-soft: var(--surface);
+    --bg-raised: var(--raised);
+    --fg: var(--text);
+    --fg-dim: var(--faint);
+    --line: #353b4d;
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+    --measure: 68ch;
+    --radius: 10px;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #fbfbfd;
+      --bg-soft: #f1f2f7;
+      --bg-raised: #e7e9f2;
+      --fg: #1b1e28;
+      --fg-dim: #5c6478;
+      --line: #d7dae6;
+      --accent: #2d62c4;
+      --warm: #9a6410;
+      --good: #1f7a46;
+      --bad: #ae2b2b;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfbfd;
+    --bg-soft: #f1f2f7;
+    --bg-raised: #e7e9f2;
+    --fg: #1b1e28;
+    --fg-dim: #5c6478;
+    --line: #d7dae6;
+    --accent: #2d62c4;
+    --warm: #9a6410;
+    --good: #1f7a46;
+    --bad: #ae2b2b;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 16px; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:hover { text-decoration-style: dotted; }
+  code, kbd, pre, .mono { font-family: var(--mono); }
+  code { font-size: .88em; background: var(--bg-soft); padding: .12em .38em; border-radius: 4px; }
+  pre { margin: 0; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  h1, h2, h3 { line-height: 1.2; letter-spacing: -0.01em; }
+  h2 { font-size: clamp(1.5rem, 1.1rem + 1.6vw, 2.1rem); margin: 0 0 .2em; }
+  h3 { font-size: 1.1rem; margin: 2em 0 .4em; }
+  p { max-width: var(--measure); }
+  .lede { color: var(--fg-dim); font-size: 1.05rem; max-width: var(--measure); margin: 0 0 2rem; }
+  section { padding: 4.5rem 0; border-top: 1px solid var(--line); }
+  section > .wrap > h2 + .lede { margin-top: .6rem; }
+
+  /* ---- top bar ---- */
+  header.bar {
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: blur(10px);
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+  .bar .wrap { display: flex; align-items: center; gap: 1.25rem; height: 56px; }
+  .brand { font-family: var(--mono); font-weight: 700; letter-spacing: -.02em; color: var(--fg); text-decoration: none; }
+  .brand span { color: var(--accent); }
+  .bar nav { margin-left: auto; display: flex; gap: 1.1rem; font-size: .9rem; flex-wrap: wrap; }
+  .bar nav a { color: var(--fg-dim); text-decoration: none; }
+  .bar nav a:hover { color: var(--fg); }
+  @media (max-width: 760px) { .bar nav a.hide-sm { display: none; } }
+
+  /* ---- hero ---- */
+  .hero { padding: 5rem 0 3.5rem; }
+  .hero h1 { font-size: clamp(2.3rem, 1.4rem + 4vw, 3.9rem); margin: 0 0 .35em; }
+  .hero h1 .dim { color: var(--fg-dim); font-weight: 400; }
+  .hero .tag { font-size: clamp(1.05rem, 1rem + .4vw, 1.3rem); color: var(--fg-dim); max-width: 60ch; }
+  .pills { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1.6rem 0 2rem; }
+  .pill {
+    font-family: var(--mono); font-size: .78rem; letter-spacing: .02em;
+    border: 1px solid var(--line); border-radius: 999px; padding: .28rem .7rem;
+    color: var(--fg-dim); background: var(--bg-soft);
+  }
+  .pill b { color: var(--fg); font-weight: 600; }
+  .cta { display: flex; flex-wrap: wrap; gap: .7rem; align-items: center; }
+  .btn {
+    display: inline-block; font-weight: 600; font-size: .95rem; text-decoration: none;
+    padding: .62rem 1.15rem; border-radius: 8px; border: 1px solid transparent;
+  }
+  .btn-primary { background: var(--accent); color: var(--ink); }
+  :root[data-theme="light"] .btn-primary, :root:not([data-theme="dark"]) .btn-primary { color: #fff; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn-primary { color: var(--ink); } }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-ghost { border-color: var(--line); color: var(--fg); background: var(--bg-soft); }
+  .btn-ghost:hover { border-color: var(--accent); }
+
+  /* ---- fake terminal ---- */
+  .term {
+    margin: 3rem 0 0;
+    background: var(--ink);
+    border: 1px solid #353b4d;
+    border-radius: var(--radius);
+    box-shadow: 0 24px 60px -30px rgba(0,0,0,.75);
+    overflow: hidden;
+    font-family: var(--mono);
+    font-size: clamp(10px, 8px + .62vw, 13.5px);
+    line-height: 1.5;
+    color: #c8d0e0;
+  }
+  .term-chrome {
+    display: flex; align-items: center; gap: .45rem;
+    padding: .5rem .75rem; background: #242836; border-bottom: 1px solid #353b4d;
+  }
+  .term-chrome i { width: 10px; height: 10px; border-radius: 50%; background: #3f465c; display: block; }
+  .term-chrome .t { margin-left: .5rem; font-size: .78em; color: #7a849c; }
+  .term pre { padding: .9rem 1rem; overflow-x: auto; margin: 0; }
+  .term .c-accent { color: #6c9cf0; }
+  .term .c-warm { color: #f0b46c; }
+  .term .c-good { color: #8ed0a0; }
+  .term .c-faint { color: #7a849c; }
+  .term .c-rule { color: #4a5268; }
+  .term .statusbar { display: block; background: #242836; color: #7a849c; padding: .35rem 1rem; }
+  .term .statusbar b { background: #6c9cf0; color: #1b1e28; padding: 0 .5em; font-weight: 700; }
+  .term .statusbar u { text-decoration: none; background: #c8d0e0; color: #1b1e28; padding: 0 .4em; }
+
+  /* ---- code blocks ---- */
+  .code {
+    background: var(--bg-soft); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 1rem 1.1rem; overflow-x: auto; font-size: .85rem; line-height: 1.75;
+    max-width: 100%;
+  }
+  .code .cm { color: var(--fg-dim); }
+  .code .op { color: var(--accent); }
+
+  /* ---- grids & cards ---- */
+  .grid { display: grid; gap: 1rem; margin-top: 2rem; }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .card {
+    background: var(--bg-soft); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 1.25rem 1.3rem;
+  }
+  .card h3 { margin: 0 0 .35rem; font-size: 1.02rem; display: flex; align-items: center; gap: .5rem; }
+  .card h3 .ix { font-family: var(--mono); color: var(--accent); font-size: .8rem; }
+  .card p { margin: 0; color: var(--fg-dim); font-size: .94rem; max-width: none; }
+  .card code { background: var(--bg-raised); }
+
+  /* ---- tables ---- */
+  .scroller { overflow-x: auto; margin-top: 2rem; border: 1px solid var(--line); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; font-size: .88rem; min-width: 760px; }
+  th, td { text-align: left; padding: .62rem .8rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th { background: var(--bg-soft); font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-dim); white-space: nowrap; }
+  thead th.me { color: var(--accent); }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody th { font-weight: 600; white-space: nowrap; }
+  td.me, th.me { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+  .yes { color: var(--good); font-weight: 600; }
+  .no { color: var(--bad); }
+  .partial { color: var(--warm); }
+  table.keys { min-width: 480px; }
+  table.keys td:first-child, table.compact td:first-child { font-family: var(--mono); white-space: nowrap; color: var(--accent); }
+  kbd {
+    font-size: .82em; border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 5px; padding: .05em .4em; background: var(--bg-soft);
+  }
+
+  /* ---- status lists ---- */
+  .cols { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); margin-top: 2rem; }
+  ul.ticks { list-style: none; padding: 0; margin: 0; font-size: .94rem; }
+  ul.ticks li { padding: .3rem 0 .3rem 1.6rem; position: relative; color: var(--fg-dim); border-bottom: 1px dashed var(--line); }
+  ul.ticks li:last-child { border-bottom: 0; }
+  ul.ticks li b { color: var(--fg); font-weight: 600; }
+  ul.ticks li::before { position: absolute; left: 0; font-family: var(--mono); }
+  ul.ticks.done li::before { content: "✓"; color: var(--good); }
+  ul.ticks.todo li::before { content: "·"; color: var(--warm); font-weight: 700; }
+  ul.ticks.warn li::before { content: "!"; color: var(--bad); font-weight: 700; }
+  .box-title { font-family: var(--mono); font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--fg-dim); margin: 0 0 .6rem; }
+
+  blockquote {
+    margin: 2rem 0 0; padding: .3rem 0 .3rem 1.2rem;
+    border-left: 2px solid var(--accent); color: var(--fg-dim); font-size: .95rem;
+  }
+  blockquote p { max-width: 62ch; }
+  blockquote p:first-child { margin-top: 0; }
+
+  footer { border-top: 1px solid var(--line); padding: 3rem 0 4rem; color: var(--fg-dim); font-size: .88rem; }
+  footer a { color: var(--fg-dim); }
+  .foot-row { display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: baseline; }
+  .foot-row p { margin: 0; }
+  #theme {
+    background: none; border: 1px solid var(--line); color: var(--fg-dim);
+    font-family: var(--mono); font-size: .75rem; border-radius: 6px; padding: .2rem .55rem; cursor: pointer;
+  }
+  #theme:hover { color: var(--fg); border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="#top">haven<span>·</span>terminal</a>
+    <nav>
+      <a href="#what">What it is</a>
+      <a href="#modes">Run modes</a>
+      <a href="#compare">Vs. others</a>
+      <a href="#keys" class="hide-sm">Keys</a>
+      <a href="#status">Status</a>
+      <a href="#build" class="hide-sm">Build</a>
+      <a href="https://github.com/berromaa/HavenTerminal">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============ HERO ============ -->
+  <div class="hero wrap">
+    <h1>A GPU terminal with <span class="dim">the multiplexer already inside it.</span></h1>
+    <p class="tag">
+      Haven is a keyboard-first terminal emulator in Rust. Sessions, window tabs and
+      recursive pane splits are part of the core — not a tmux process layered on top,
+      translating escape sequences twice.
+    </p>
+
+    <div class="pills">
+      <span class="pill"><b>Rust</b> · 12 crates · ~21k lines</span>
+      <span class="pill"><b>wgpu</b> Vulkan / Metal / DX12 / GL</span>
+      <span class="pill"><b>400</b> tests, zero clippy warnings</span>
+      <span class="pill"><b>MIT</b> OR Apache-2.0</span>
+      <span class="pill">v0.0.1 · <b>pre-release</b></span>
+    </div>
+
+    <div class="cta">
+      <a class="btn btn-primary" href="#build">Build it</a>
+      <a class="btn btn-ghost" href="#compare">How it compares</a>
+      <a class="btn btn-ghost" href="https://github.com/berromaa/HavenTerminal/blob/master/docs/PLAN.md">Read the design plan</a>
+    </div>
+
+    <div class="term">
+      <div class="term-chrome"><i></i><i></i><i></i><span class="t">haven gpu — attached to session <span class="c-accent">haven-0</span></span></div>
+<pre>
+<span class="c-good">~/src/haven</span> <span class="c-accent">❯</span> cargo test --workspace     <span class="c-rule">│</span> <span class="c-warm">htop</span> <span class="c-faint">— 8 cores, 2.4 GB</span>
+   Compiling haven-core v0.0.1          <span class="c-rule">│</span> <span class="c-good">1 [|||||     22%]</span>  <span class="c-good">5 [||  8%]</span>
+   Compiling haven-mux v0.0.1           <span class="c-rule">│</span> <span class="c-good">2 [||||      18%]</span>  <span class="c-good">6 [|   4%]</span>
+    Finished test profile                <span class="c-rule">│</span> <span class="c-good">3 [|||||||   41%]</span>  <span class="c-good">7 [||  9%]</span>
+<span class="c-good">test result: ok. 400 passed; 0 failed</span>  <span class="c-rule">│</span> <span class="c-good">4 [||        11%]</span>  <span class="c-good">8 [|   3%]</span>
+<span class="c-rule">─────────────────────────────────────┼──────────────────────────</span>
+<span class="c-faint">  1</span> <span class="c-accent">fn</span> main() -&gt; ExitCode {          <span class="c-rule">│</span> <span class="c-faint">$ haven ls</span>
+<span class="c-faint">  2</span>     <span class="c-accent">let</span> (cmd, args) = parse(..)?;  <span class="c-rule">│</span> haven-0: 3 windows (attached)
+<span class="c-faint">  3</span>     match cmd.as_str() {           <span class="c-rule">│</span> haven-1: 1 window
+<span class="c-faint">  4</span>         <span class="c-warm">"gpu"</span> =&gt; gpu(args),         <span class="c-rule">│</span> <span class="c-faint">daemon: 44631b5</span>
+</pre>
+      <span class="statusbar"><b>haven-0</b> <u>1:cargo*</u> 2:htop 3:vim &nbsp;·&nbsp; 4 panes &nbsp;·&nbsp; 2 clients &nbsp;·&nbsp; 3:12:07</span>
+    </div>
+    <p class="lede" style="margin-top:1rem;font-size:.85rem">
+      Illustration of the interface, not a screenshot. The pane rules, the status bar and
+      the command-named tabs are what Haven draws today.
+    </p>
+  </div>
+
+  <!-- ============ WHAT ============ -->
+  <section id="what">
+    <div class="wrap">
+      <h2>One codebase, one parser, one keymap</h2>
+      <p class="lede">
+        The usual stack is a GPU terminal that knows nothing about panes, with tmux inside it
+        re-parsing and re-emitting every byte. That costs a second VT translation layer, a
+        second keymap, a nested-escape-sequence tax, and two programs that disagree about what
+        a cell is. Haven removes the layer by owning both halves.
+      </p>
+
+      <div class="grid g3">
+        <div class="card">
+          <h3><span class="ix">01</span> The daemon owns the PTYs</h3>
+          <p>Shells survive client exit, GPU crashes, SSH drops and logout. Several clients can
+          watch one session at once, each with its own size policy and its own scroll position.</p>
+        </div>
+        <div class="card">
+          <h3><span class="ix">02</span> The GPU does the drawing</h3>
+          <p>Instanced cell quads, a shelf-packed glyph atlas, damage-driven redraws, vsync-paced
+          frames, sRGB-correct colour, and box drawing computed rather than looked up in a font.</p>
+        </div>
+        <div class="card">
+          <h3><span class="ix">03</span> The core is a pure state machine</h3>
+          <p><code>haven-core</code> is cells, styles, a grid and VT interpretation — no rendering,
+          no pty, no protocol. You drive it with byte slices, which is why it is testable at all.
+          CI fails the build if it ever links <code>wgpu</code> or <code>winit</code>.</p>
+        </div>
+        <div class="card">
+          <h3><span class="ix">04</span> The serializer is the parser, inverted</h3>
+          <p><code>haven-vtwrite</code> turns cells back into escape sequences: damage diffing, SGR
+          coalescing, a per-row cost model, scored scroll detection, synchronized output and
+          OKLab colour downsampling. That is what lets the same client draw into another terminal.</p>
+        </div>
+        <div class="card">
+          <h3><span class="ix">05</span> Themes are data, not code</h3>
+          <p>The daemon owns the config, so one session looks the same through a window and
+          through SSH, and an edit repaints every attached client without a reattach. Every colour
+          and drawing character comes from the theme; nothing below it hardcodes one.</p>
+        </div>
+        <div class="card">
+          <h3><span class="ix">06</span> Correctness measured by real programs</h3>
+          <p><code>mc</code>, <code>vim</code> and <code>less</code> are driven on real ptys in the
+          test suite — including mc under <code>LANG=C</code>, mc's <kbd>Ctrl+O</kbd> subshell
+          toggle, and <code>haven tui</code> running inside <code>haven</code>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ MODES ============ -->
+  <section id="modes">
+    <div class="wrap">
+      <h2>It runs three ways from one build</h2>
+      <p class="lede">
+        Two frontends over one mux core. Nothing is a degraded fallback: the TUI client is a full
+        client that happens to render with escape sequences instead of triangles.
+      </p>
+
+      <div class="grid g3">
+        <div class="card">
+          <h3>Server + GPU window</h3>
+          <p><code>haven gpu</code> attaches a desktop window to the daemon, starting it if needed.
+          Close the window; the session keeps running. Open two; they watch the same panes.</p>
+        </div>
+        <div class="card">
+          <h3>Server + TUI client</h3>
+          <p><code>haven attach</code> draws the same session into whatever terminal you are already
+          in — over SSH, in a Linux console, inside another emulator. This is the tmux-replacement mode.</p>
+        </div>
+        <div class="card">
+          <h3>Standalone, no daemon</h3>
+          <p><code>haven tui</code> runs the whole multiplexer in-process with no socket and nothing
+          to leave behind. Plus <code>haven dump</code> and <code>haven screenshot</code> for
+          headless rendering of a program's final screen.</p>
+        </div>
+      </div>
+
+      <h3>The three levels, named carefully</h3>
+      <p>The word <em>window</em> means two things in a GPU terminal, which tmux never had to deal with.
+      Haven's interface says <strong>tab</strong> for the thing that owns a pane tree, and keeps
+      tmux's <code>window</code> in the protocol and the commands, with <code>new-tab</code>
+      accepted everywhere <code>new-window</code> is.</p>
+
+      <div class="scroller">
+        <table class="compact">
+          <tbody>
+            <tr><td>desktop window</td><td>A <code>haven gpu</code> process. A <em>viewer</em>, not part of a session — several can watch one, and closing one leaves it running.</td></tr>
+            <tr><td>session</td><td>Lives in the daemon and outlives every viewer.</td></tr>
+            <tr><td>tab</td><td>Owns a tree of panes, and is named after the command running in its active pane.</td></tr>
+            <tr><td>pane</td><td>One shell, one pty.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ COMPARE ============ -->
+  <section id="compare">
+    <div class="wrap">
+      <h2>How it compares</h2>
+      <p class="lede">
+        Haven sits in the Alacritty/kitty class — a native, GPU-accelerated terminal, not an
+        Electron app and not a TUI toolkit — and takes the detachable-server model from tmux
+        rather than expecting you to run tmux inside it. The table below is Haven's own reading of
+        the alternatives; every one of them is a good program, and several are far more finished
+        than this one.
+      </p>
+
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr>
+              <th>Capability</th>
+              <th>Alacritty</th>
+              <th>kitty</th>
+              <th>WezTerm</th>
+              <th>Ghostty</th>
+              <th>tmux</th>
+              <th class="me">Haven</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>GPU rendering</th>
+              <td class="yes">yes (GL)</td>
+              <td class="yes">yes (GL)</td>
+              <td class="yes">yes (wgpu)</td>
+              <td class="yes">yes (Metal/GL)</td>
+              <td class="no">n/a</td>
+              <td class="me yes">yes (wgpu: Vulkan/Metal/DX12/GL)</td>
+            </tr>
+            <tr>
+              <th>Tabs &amp; splits</th>
+              <td class="no">no, by design</td>
+              <td class="yes">yes</td>
+              <td class="yes">yes</td>
+              <td class="yes">yes</td>
+              <td class="yes">yes</td>
+              <td class="me yes">yes, recursive n-ary trees</td>
+            </tr>
+            <tr>
+              <th>Detachable sessions</th>
+              <td class="no">no</td>
+              <td class="no">no</td>
+              <td class="yes">yes (mux server)</td>
+              <td class="no">no</td>
+              <td class="yes">yes</td>
+              <td class="me yes">yes — survives GPU crash, logout, SSH drop</td>
+            </tr>
+            <tr>
+              <th>Runs inside another terminal</th>
+              <td class="no">no</td>
+              <td class="no">no</td>
+              <td class="partial">CLI only; the mux client is the GUI</td>
+              <td class="no">no</td>
+              <td class="yes">yes, that is all it does</td>
+              <td class="me yes">yes — a full TUI frontend of the same client</td>
+            </tr>
+            <tr>
+              <th>Multiplexing without a second VT layer</th>
+              <td class="no">n/a</td>
+              <td class="partial">in-process, GUI-only</td>
+              <td class="yes">yes</td>
+              <td class="partial">in-process, GUI-only</td>
+              <td class="no">no — it re-parses and re-emits</td>
+              <td class="me yes">yes, one parser and one grid model</td>
+            </tr>
+            <tr>
+              <th>Extensions</th>
+              <td class="no">none</td>
+              <td class="partial">kittens: Python, in-process, unsandboxed</td>
+              <td class="partial">Lua config &amp; event hooks</td>
+              <td class="no">none yet</td>
+              <td class="partial">shell scripts</td>
+              <td class="me partial">designed: WASM components, capability-sandboxed — <em>not built yet</em></td>
+            </tr>
+            <tr>
+              <th>Config</th>
+              <td>TOML, reload</td>
+              <td>custom <code>conf</code>, reload</td>
+              <td>Lua</td>
+              <td>custom, reload</td>
+              <td><code>.tmux.conf</code></td>
+              <td class="me">TOML, live reload, server-side so SSH sees it too</td>
+            </tr>
+            <tr>
+              <th>Ligatures / images</th>
+              <td class="no">no / no</td>
+              <td class="yes">yes / kitty graphics</td>
+              <td class="yes">yes / sixel + kitty</td>
+              <td class="yes">yes / kitty graphics</td>
+              <td class="no">n/a</td>
+              <td class="me no">not yet / not yet (cell model reserves placements)</td>
+            </tr>
+            <tr>
+              <th>Maturity</th>
+              <td class="yes">stable, packaged</td>
+              <td class="yes">stable, packaged</td>
+              <td class="yes">stable, packaged</td>
+              <td class="yes">stable, packaged</td>
+              <td class="yes">ancient and bulletproof</td>
+              <td class="me no">v0.0.1, built from source, Linux/X11 tested</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>What Haven actually buys you</h3>
+      <div class="cols">
+        <div>
+          <p class="box-title">Over Alacritty / Ghostty</p>
+          <ul class="ticks done">
+            <li><b>Sessions that outlive the window.</b> No tmux needed to keep a build alive when the compositor restarts.</li>
+            <li><b>Tabs and splits without a second program</b> to configure, bind and keep in sync.</li>
+            <li><b>The same session over SSH.</b> Attach from your laptop's window, reattach from a console, get the same panes.</li>
+          </ul>
+        </div>
+        <div>
+          <p class="box-title">Over tmux (inside anything)</p>
+          <ul class="ticks done">
+            <li><b>No double translation.</b> One parser owns the bytes; nothing re-encodes a screen to be re-parsed.</li>
+            <li><b>One keymap, one config.</b> No disagreement between emulator and mux about what <kbd>Ctrl+Shift</kbd> meant.</li>
+            <li><b>Real key events</b> are the design target (kitty keyboard protocol both directions), not the 1978 control-code collapse.</li>
+            <li><b>GPU text and scrollback</b> in the same program that owns the panes.</li>
+          </ul>
+        </div>
+        <div>
+          <p class="box-title">Over kitty</p>
+          <ul class="ticks done">
+            <li><b>Sessions detach.</b> <code>kitty @</code> controls a live GUI; kill the GUI and the shells go with it.</li>
+            <li><b>Extensions are specified sandboxed.</b> WASM with declared capabilities rather than in-process Python — once they exist.</li>
+            <li><b>A TUI frontend</b> for the machine with no display.</li>
+          </ul>
+        </div>
+        <div>
+          <p class="box-title">Over WezTerm — the closest rival</p>
+          <ul class="ticks done">
+            <li><b>A real terminal frontend.</b> WezTerm's multiplexer is excellent, but attaching to it means running the GUI; Haven's TUI client draws the same session with escape sequences.</li>
+            <li><b>A much smaller core.</b> ~21k lines of Rust, no Lua runtime, no scripting VM in the hot path.</li>
+            <li><b>A layering gate in CI</b> that keeps the terminal core unable to link a frontend.</li>
+          </ul>
+          <p style="font-size:.9rem;margin-top:.8rem">Honestly: WezTerm wins today on polish, platforms, images, ligatures and packaging. Haven's bet is the smaller core and the terminal-side client.</p>
+        </div>
+      </div>
+
+      <h3>Where Haven loses, today</h3>
+      <ul class="ticks warn">
+        <li><b>It is v0.0.1.</b> No binaries, no packages — you build it with cargo.</li>
+        <li><b>Linux/X11 is the tested platform.</b> macOS runs the test suite in CI; the window has not been exercised there. Windows/ConPTY is unwritten.</li>
+        <li><b>No plugins, no configurable keybindings, no command palette.</b> The prefix table is fixed at <kbd>Ctrl+A</kbd>.</li>
+        <li><b>No italics, no ligatures, no colour emoji</b> in the GPU frontend yet.</li>
+        <li><b>No sixel, no kitty graphics protocol.</b> Post-1.0 by design, though the cell model reserves image placements so retrofitting them does not touch every file.</li>
+        <li><b>No tmux wire compatibility.</b> You get tmux's mental model, not its control protocol.</li>
+        <li><b>Mouse reporting is parsed but not yet encoded back</b> from a client to an application.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ KEYS ============ -->
+  <section id="keys">
+    <div class="wrap">
+      <h2>Keyboard first, and reachable two ways</h2>
+      <p class="lede">
+        <kbd>Ctrl+A</kbd> is the prefix. Every key resolves to the same declarative action the
+        command line does, so nothing is reachable one way and not the other.
+      </p>
+
+      <div class="cols">
+        <div>
+          <p class="box-title">Prefix keys</p>
+          <div class="scroller" style="margin-top:0">
+            <table class="keys">
+              <tbody>
+                <tr><td>% &nbsp;"</td><td>split into columns / rows</td></tr>
+                <tr><td>h j k l</td><td>move focus (arrows too)</td></tr>
+                <tr><td>H J K L</td><td>resize</td></tr>
+                <tr><td>z</td><td>zoom the active pane</td></tr>
+                <tr><td>x</td><td>close the pane</td></tr>
+                <tr><td>c n p 1-9</td><td>new tab / next / previous / select</td></tr>
+                <tr><td>C</td><td>new session, and move to it</td></tr>
+                <tr><td>PageUp / PageDown</td><td>read back through history</td></tr>
+                <tr><td>Home / End</td><td>oldest row / back to live</td></tr>
+                <tr><td>e E t</td><td>even-horizontal / even-vertical / tiled</td></tr>
+                <tr><td>d</td><td>detach</td></tr>
+                <tr><td>:</td><td>open the command line</td></tr>
+                <tr><td>s</td><td>the session tree</td></tr>
+                <tr><td>Ctrl+A</td><td>send a literal Ctrl+A</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <p class="box-title">The command line</p>
+          <p style="font-size:.94rem;color:var(--fg-dim)">
+            <kbd>Tab</kbd> completes as far as the candidates agree. A box above the bar lists what
+            matches as you type; <kbd>↑</kbd> and <kbd>↓</kbd> walk it and put the highlighted entry
+            on the line, so what <kbd>Enter</kbd> runs is always what is written there.
+          </p>
+          <pre class="code" style="margin-top:1rem">split-h  split-v
+new-window (new-tab)  next  prev
+new-session (new)
+select-window &lt;n&gt;
+scroll-up  scroll-down  scroll-end
+kill-pane  zoom  detach
+even-horizontal  even-vertical  tiled</pre>
+
+          <p class="box-title" style="margin-top:2rem">Scrollback</p>
+          <p style="font-size:.94rem;color:var(--fg-dim)">
+            The wheel scrolls whichever pane the pointer is over — not necessarily the focused one.
+            While a pane is scrolled the bar says so, its cursor is not drawn, and typing returns to
+            the live screen. <strong>The offset is per client</strong>, so two people on one session
+            read at their own pace.
+          </p>
+
+          <p class="box-title" style="margin-top:2rem">Tab names</p>
+          <p style="font-size:.94rem;color:var(--fg-dim)">
+            A tab is named after the command its active pane is running, which needs the shell's
+            <code>OSC 133;C</code> mark. fish reports it natively; bash and zsh do once Haven's
+            integration is installed, which is automatic unless <code>--no-integrate</code> is passed.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ THEMES ============ -->
+  <section id="themes">
+    <div class="wrap">
+      <h2>Themes the daemon owns</h2>
+      <p class="lede">
+        Because the configuration lives server-side, an edit reaches every attached client — the
+        window on your desk and the client on the other end of an SSH connection — without
+        reattaching. The file is re-read when its timestamp moves.
+      </p>
+      <div class="grid g2">
+        <div>
+<pre class="code"><span class="cm"># ~/.config/haven/config.toml</span>
+theme = <span class="op">"nord"</span>
+<span class="cm"># haven · nord · gruvbox · daylight
+# slate · ansi · plain</span></pre>
+        </div>
+        <div>
+<pre class="code"><span class="cm"># or your own, inline or as
+# ~/.config/haven/themes/mine.toml</span>
+[theme]
+base = <span class="op">"gruvbox"</span>
+name = <span class="op">"mine"</span>
+bar_session = { fg = <span class="op">"#1d2021"</span>, bg = <span class="op">"#83a598"</span>, bold = true }
+selection   = { fg = 0, bg = 12 }
+glyphs      = { here = <span class="op">"*"</span> }</pre>
+        </div>
+      </div>
+      <p style="margin-top:1.5rem">
+        Colours are <code>"#rrggbb"</code>, a palette index, or <code>"default"</code> to leave it to
+        the terminal. <code>plain</code> uses no colour and no box drawing, for a terminal that
+        cannot manage either. A broken theme is reported on the daemon's stderr and the interface
+        keeps the default rather than refusing to paint.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ STATUS ============ -->
+  <section id="status">
+    <div class="wrap">
+      <h2>Honest status</h2>
+      <p class="lede">
+        Usable, with plenty still ahead. <code>mc</code>, <code>vim</code> and <code>htop</code>
+        render correctly; sessions, splits, tabs, zoom, attach/detach, shell integration, themes and
+        a GPU window all work. The design plan tracks exactly what exists, milestone by milestone,
+        so the document cannot drift from the tree.
+      </p>
+
+      <div class="cols">
+        <div>
+          <p class="box-title">Working</p>
+          <ul class="ticks done">
+            <li><b>Terminal core</b> — byte-budgeted scrollback, reflow with cursor tracking, alternate screen, scroll regions, insert/delete, erase modes, tab stops, <code>REP</code>, <code>DECSCUSR</code>, <code>DECSTR</code>, DEC Special Graphics, grapheme clusters.</li>
+            <li><b>Full colour</b> — 16 / 256 / truecolor, both <code>;</code> and <code>:</code> SGR forms, OSC 4/10/11/12/104/110-112 set <em>and</em> query, OSC 7/52.</li>
+            <li><b>Mux core</b> — n-ary pane trees with fractional weights, a layout solver with proptest properties, named layouts, zoom-as-override, geometric focus movement.</li>
+            <li><b>Daemon and attach/detach</b> — framed postcard over a unix socket, per-client row-revision sync, <code>Smallest</code>/<code>Latest</code> resize policies, autostart, protocol-version check at the handshake.</li>
+            <li><b>GPU frontend</b> — wgpu pipelines, glyph atlas, font fallback, sRGB-correct colour, procedural box drawing, and <code>haven screenshot</code> so the renderer is reviewable with no display.</li>
+            <li><b>Shells</b> — bash, zsh, fish and generic behind one trait, with correct job control, signals, environment and <code>ZDOTDIR</code>/<code>--rcfile</code> shims.</li>
+            <li><b>Status bar, command line, completion, session tree, scrollback reading.</b></li>
+          </ul>
+        </div>
+        <div>
+          <p class="box-title">Not written yet</p>
+          <ul class="ticks todo">
+            <li><b>Plugins.</b> The WASM host and the WIT world are specified in §15 and nothing is built.</li>
+            <li><b>Copy mode</b> and the modal key table — in progress on <code>master</code>.</li>
+            <li><b>Configurable bindings</b> and a command palette.</li>
+            <li><b>The interactive capability probe.</b> Host detection is environment-based guessing today; the probe with timeouts and per-<code>TERM</code> caching is still owed.</li>
+            <li><b>Live daemon upgrade</b> — a new binary currently needs the daemon restarted.</li>
+            <li><b>Italic faces, ligatures, colour emoji</b> in the GPU window.</li>
+            <li><b>Sixel and the kitty graphics protocol</b> — post-1.0.</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>Notes from the bug log</h3>
+      <p>The plan keeps a record of what each piece of work actually broke, because the interesting
+      failures were never where they looked. Three worth repeating:</p>
+
+      <blockquote>
+        <p><strong>A line through every blank cell.</strong> <code>CSI &gt; 4 ; 1 m</code> is
+        XTMODKEYS, which fish sends before <em>every</em> prompt. Read as <code>SGR 4;1</code> it set
+        underline and bold on the pen and nothing ever reset them. A private parameter marker changes
+        what a final byte means; private sequences other than DA2 are now ignored rather than run as
+        their public namesakes.</p>
+
+        <p><strong>"Takes forever to render" had nothing to do with the GPU.</strong> The fallback
+        font scan set its "already scanned" flag only when it <em>found</em> a face, so a character no
+        font covers rescanned 3829 faces and 8.6 GB every time it appeared. A prompt with three emoji
+        took 5.69 s, of which 5.56 s was syscall time. Mapping the faces once brings it to 0.249 s.</p>
+
+        <p><strong>The window-manager freeze was not winit, vsync or the event loop.</strong> Measured
+        with a standalone probe: on a hybrid laptop, presenting across PRIME while the WM unmaps the
+        window blocks the X server itself — a bare <code>GetInputFocus</code> on an unrelated
+        connection took 2050 ms. A terminal has no use for a discrete GPU, so the integrated one is
+        now the default.</p>
+      </blockquote>
+    </div>
+  </section>
+
+  <!-- ============ ARCHITECTURE ============ -->
+  <section id="architecture">
+    <div class="wrap">
+      <h2>Architecture</h2>
+      <p class="lede">
+        Twelve crates, each with one job, arranged so the terminal core cannot reach a frontend and
+        the frontends cannot reach each other. CI enforces the top of that list.
+      </p>
+      <div class="scroller">
+        <table class="compact">
+          <tbody>
+            <tr><td>haven-core</td><td>Cells, styles, grid, VT interpretation. No rendering, pty or protocol — a pure state machine you drive with byte slices.</td></tr>
+            <tr><td>haven-pty</td><td>PTY allocation, child launch, job control, window sizing.</td></tr>
+            <tr><td>haven-shell</td><td>Shell detection and per-shell integration behind a <code>Shell</code> trait.</td></tr>
+            <tr><td>haven-vtwrite</td><td>Cells back to escape sequences: the inverse of the parser.</td></tr>
+            <tr><td>haven-mux</td><td>Sessions, windows, pane trees, the layout solver, the pane runtime.</td></tr>
+            <tr><td>haven-proto</td><td>Wire types, framing and transports.</td></tr>
+            <tr><td>haven-client</td><td>Frontend-agnostic client: frame model, input encoding, event loop.</td></tr>
+            <tr><td>haven-tui</td><td>The TUI frontend: ANSI output, raw mode, input decoding.</td></tr>
+            <tr><td>haven-render</td><td>The GPU frontend: wgpu pipelines, glyph atlas, procedural box drawing, the window.</td></tr>
+            <tr><td>haven-daemon</td><td>The mux server.</td></tr>
+            <tr><td>haven</td><td>Composition root: the CLI and the standalone mux.</td></tr>
+            <tr><td>winit-probe</td><td>A standalone winit/wgpu probe, kept because it is what found the X-server stall.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Deliberate deviations</h3>
+      <ul class="ticks done">
+        <li><b>The daemon uses a poll loop, not tokio.</b> The pane pump was already poll-based and nothing here benefits from task-per-pane concurrency.</li>
+        <li><b>The daemon was built before the plugin host</b>, because plugins are specified to run <em>in</em> the daemon — building the host first would have meant building it in the wrong place and then moving it.</li>
+        <li><b>The status line and tab bar are built-in</b> rather than plugins, but both are already pure functions of state, which is what makes inverting that cheap later.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ BUILD ============ -->
+  <section id="build">
+    <div class="wrap">
+      <h2>Build it</h2>
+      <p class="lede">
+        Rust 1.85 or newer, and a GPU backend wgpu can reach for the window. There are no packages
+        yet; this is a from-source project for now.
+      </p>
+
+<pre class="code">git clone https://github.com/berromaa/HavenTerminal
+cd HavenTerminal
+
+cargo test --workspace            <span class="cm"># 400 tests, incl. mc/vim/less driven on real ptys</span>
+
+<span class="cm"># A GPU window, attached to the daemon (which it starts if needed).</span>
+cargo run --release -p haven -- gpu
+
+<span class="cm"># The same session in your current terminal.</span>
+cargo run -p haven -- attach
+cargo run -p haven -- ls
+cargo run -p haven -- server stop
+
+<span class="cm"># Standalone: the whole mux, no daemon. Ctrl+A is the prefix.</span>
+cargo run -p haven -- tui
+
+<span class="cm"># Headless: print or render a program's final screen.</span>
+cargo run -p haven -- dump --cols 80 --rows 20 -- mc -u
+cargo run -p haven -- screenshot --out mc.ppm -- mc -u
+cargo run -p haven -- shell-info</pre>
+
+      <p style="margin-top:1.5rem">
+        Subcommands: <code>gpu</code>, <code>attach</code>, <code>tui</code>, <code>ls</code>,
+        <code>kill-session</code>, <code>server</code>, <code>dump</code>,
+        <code>screenshot</code>, <code>shell-info</code>.
+        CI runs fmt, clippy with <code>-D warnings</code>, and the full test suite on Linux and
+        macOS, plus a layering gate asserting that <code>haven-core</code> cannot link
+        <code>wgpu</code> or <code>winit</code>.
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap foot-row">
+    <p>Haven Terminal — MIT OR Apache-2.0.</p>
+    <p><a href="https://github.com/berromaa/HavenTerminal">Source</a> · <a href="https://github.com/berromaa/HavenTerminal/blob/master/docs/PLAN.md">Design &amp; implementation plan</a></p>
+    <p style="margin-left:auto"><button id="theme" type="button">theme: auto</button></p>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var btn = document.getElementById("theme");
+    var order = ["auto", "dark", "light"];
+    var saved = null;
+    try { saved = localStorage.getItem("haven-theme"); } catch (e) {}
+    var mode = order.indexOf(saved) > -1 ? saved : "auto";
+
+    function paint() {
+      if (mode === "auto") document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.setAttribute("data-theme", mode);
+      btn.textContent = "theme: " + mode;
+    }
+    btn.addEventListener("click", function () {
+      mode = order[(order.indexOf(mode) + 1) % order.length];
+      try { localStorage.setItem("haven-theme", mode); } catch (e) {}
+      paint();
+    });
+    paint();
+  })();
+</script>
+</body>
+</html>

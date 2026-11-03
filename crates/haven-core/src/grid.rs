@@ -226,6 +226,79 @@ impl Grid {
         self.scrollback.iter()
     }
 
+    /// Every row, scrollback first: the coordinate space copy mode works in.
+    pub fn history(&self) -> impl Iterator<Item = &Row> {
+        self.scrollback.iter().chain(self.rows.iter())
+    }
+
+    /// One row of the whole history, scrollback included.
+    pub fn history_row(&self, index: usize) -> Option<&Row> {
+        match self.scrollback.get(index) {
+            Some(row) => Some(row),
+            None => self.rows.get(index - self.scrollback.len()),
+        }
+    }
+
+    pub fn history_len(&self) -> usize {
+        self.scrollback.len() + self.rows.len()
+    }
+
+    /// The text between two points of the history, inclusive of both.
+    ///
+    /// A row that wrapped is joined to the next without a newline: it was one
+    /// logical line that the width broke, and pasting it back with a break in
+    /// it is how a copied command turns into two broken ones.
+    pub fn text_between(&self, start: (usize, usize), end: (usize, usize)) -> String {
+        let (start, end) = if start <= end { (start, end) } else { (end, start) };
+        let mut out = String::new();
+        for index in start.0..=end.0.min(self.history_len().saturating_sub(1)) {
+            let Some(row) = self.history_row(index) else { break };
+            let first = if index == start.0 { start.1 } else { 0 };
+            let last = if index == end.0 { end.1 } else { row.cells.len().saturating_sub(1) };
+            for cell in row.cells.iter().take(last + 1).skip(first) {
+                if cell.flags.contains(crate::CellFlags::WIDE_SPACER) {
+                    continue;
+                }
+                out.push_str(&self.cell_text(cell));
+            }
+            if index < end.0 && !row.wrapped {
+                // Trailing blanks on a hard-ended line are padding, not text.
+                while out.ends_with(' ') {
+                    out.pop();
+                }
+                out.push('\n');
+            }
+        }
+        while out.ends_with(' ') {
+            out.pop();
+        }
+        out
+    }
+
+    /// The first row past `from` whose text contains `query`, searching in
+    /// the given direction. `from` itself is skipped, so repeating a search
+    /// advances instead of finding the same row again. Case-insensitive unless the query has a
+    /// capital in it, which is the convention every editor since vi uses.
+    pub fn find(&self, query: &str, from: usize, backwards: bool) -> Option<usize> {
+        if query.is_empty() {
+            return None;
+        }
+        let fold = !query.chars().any(char::is_uppercase);
+        let needle = if fold { query.to_lowercase() } else { query.to_string() };
+        let len = self.history_len();
+        let matches = |index: usize| -> bool {
+            let Some(row) = self.history_row(index) else { return false };
+            let text: String = row.cells.iter().map(|c| self.cell_text(c)).collect();
+            let text = if fold { text.to_lowercase() } else { text };
+            text.contains(&needle)
+        };
+        if backwards {
+            (0..from.min(len)).rev().find(|i| matches(*i))
+        } else {
+            ((from + 1).min(len)..len).find(|i| matches(*i))
+        }
+    }
+
     /// How far back a view may be scrolled: one row per row of history.
     pub fn max_scroll(&self) -> usize {
         self.scrollback.len()
@@ -1037,6 +1110,54 @@ mod tests {
             g.view(99).iter().map(|r| r.cells[0].c).collect::<String>(),
             g.view(g.max_scroll()).iter().map(|r| r.cells[0].c).collect::<String>()
         );
+    }
+
+    #[test]
+    fn text_between_two_points_spans_rows() {
+        let mut g = Grid::new(10, 3);
+        write_str(&mut g, "alpha\nbeta\ngamma");
+        assert_eq!(g.text_between((0, 0), (2, 4)), "alpha\nbeta\ngamma");
+        // Both ends are included, so columns 1 to 3 of "beta" are "eta".
+        assert_eq!(g.text_between((1, 1), (1, 3)), "eta");
+        // Given backwards, it still reads forwards.
+        assert_eq!(g.text_between((1, 3), (1, 1)), "eta");
+    }
+
+    #[test]
+    fn a_wrapped_line_is_copied_as_one_line() {
+        // The property that makes a copied command paste back as one command
+        // instead of two broken ones.
+        let mut g = Grid::new(5, 3);
+        write_str(&mut g, "abcdefgh");
+        assert!(g.row(0).wrapped, "the test needs a wrap to be meaningful");
+        assert_eq!(g.text_between((0, 0), (1, 4)), "abcdefgh");
+    }
+
+    #[test]
+    fn trailing_blanks_are_not_copied() {
+        let mut g = Grid::new(10, 2);
+        write_str(&mut g, "hi\nthere");
+        assert_eq!(g.text_between((0, 0), (1, 9)), "hi\nthere");
+    }
+
+    #[test]
+    fn search_walks_the_history_both_ways() {
+        let mut g = Grid::new(10, 2);
+        write_str(&mut g, "needle\nhay\nhay\nneedle\nhay");
+        // Two rows on screen, three in history.
+        assert_eq!(g.find("needle", 0, false), Some(3));
+        assert_eq!(g.find("needle", 4, true), Some(3));
+        assert_eq!(g.find("needle", 3, true), Some(0));
+        assert_eq!(g.find("nothing", 0, false), None);
+    }
+
+    #[test]
+    fn search_folds_case_until_the_query_does_not() {
+        let mut g = Grid::new(10, 2);
+        write_str(&mut g, "hay\nNeedle\nhay");
+        assert_eq!(g.find("needle", 2, true), Some(1));
+        // A capital in the query means the search is exact.
+        assert_eq!(g.find("NEEDLE", 2, true), None);
     }
 
     #[test]

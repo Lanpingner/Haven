@@ -165,6 +165,17 @@ impl Frontend for TuiFrontend {
         self.decoder.next_event()
     }
 
+    /// `OSC 52`, so a copy inside Haven reaches the clipboard of whatever
+    /// terminal Haven is running in — and through it, over ssh.
+    fn set_clipboard(&mut self, text: &str) {
+        if !self.caps.clipboard_osc52 || self.raw.is_none() {
+            return;
+        }
+        let payload = haven_core::base64::encode(text.as_bytes());
+        let seq = format!("\x1b]52;c;{payload}\x1b\\");
+        let _ = raw::write_all(rustix::stdio::stdout(), seq.as_bytes());
+    }
+
     fn present(&mut self, frame: &FrameModel) -> Result<(), PresentError> {
         let bytes = self.render(frame);
         if bytes.is_empty() {

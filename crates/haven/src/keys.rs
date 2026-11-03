@@ -35,6 +35,10 @@ pub enum Action {
     /// Move the view through the pane's history, in rows. Negative goes back
     /// towards the live screen.
     Scroll(i32),
+    /// Enter copy mode.
+    Copy,
+    /// Send the newest paste buffer to the pane.
+    Paste,
 }
 
 /// How far `PageUp` moves. Not a pane height, which the key table has no way
@@ -55,6 +59,9 @@ pub fn prefix_table(event: &KeyEvent) -> Option<Action> {
         Key::Char(':') => Action::EnterCommand,
         // Ctrl+S after the prefix, as tmux spells its chooser.
         Key::Char('s') => Action::Choose,
+        // tmux's brackets: `[` goes up into the history, `]` brings text back.
+        Key::Char('[') => Action::Copy,
+        Key::Char(']') => Action::Paste,
         Key::Char('%') => Action::SplitColumns,
         Key::Char('"') => Action::SplitRows,
         Key::Char('x') => Action::ClosePane,
@@ -110,6 +117,8 @@ pub const COMMANDS: &[&str] = &[
     "new-tab",
     "new-session",
     "detach",
+    "copy-mode",
+    "paste-buffer",
     "scroll-up",
     "scroll-down",
     "scroll-end",
@@ -178,6 +187,8 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         "kill-pane" | "killp" => Action::ClosePane,
         "zoom" => Action::ToggleZoom,
         "choose" | "choose-tree" => Action::Choose,
+        "copy-mode" | "copy" => Action::Copy,
+        "paste-buffer" | "paste" => Action::Paste,
         "scroll-up" | "page-up" => Action::Scroll(PAGE_ROWS),
         "scroll-down" | "page-down" => Action::Scroll(-PAGE_ROWS),
         // The live screen again, whatever the history.
@@ -231,7 +242,9 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         | Action::EnterCommand
         | Action::Choose
         | Action::NewSession
-        | Action::Scroll(_) => return None,
+        | Action::Scroll(_)
+        | Action::Copy
+        | Action::Paste => return None,
     })
 }
 

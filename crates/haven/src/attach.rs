@@ -136,6 +136,8 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
                     Some(Action::Choose) => Intercepted::OpenChooser,
                     Some(Action::NewSession) => Intercepted::NewSession,
                     Some(Action::Scroll(rows)) => Intercepted::Scroll(rows),
+                    Some(Action::Copy) => Intercepted::EnterCopy,
+                    Some(Action::Paste) => Intercepted::Paste,
                     Some(Action::Detach) => Intercepted::Detach,
                     Some(Action::SendPrefix) => Intercepted::Pass,
                     Some(action) => match keys::to_proto(action) {
@@ -170,6 +172,8 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::Choose) => Intercepted::OpenChooser,
         Ok(Action::NewSession) => Intercepted::NewSession,
         Ok(Action::Scroll(rows)) => Intercepted::Scroll(rows),
+        Ok(Action::Copy) => Intercepted::EnterCopy,
+        Ok(Action::Paste) => Intercepted::Paste,
         Ok(action) => match keys::to_proto(action) {
             Some(wire) => Intercepted::Act(wire),
             None => Intercepted::Consumed,

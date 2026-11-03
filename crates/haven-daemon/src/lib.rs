@@ -339,6 +339,26 @@ impl Daemon {
             }
             ClientMsg::Action(action) => self.act(index, action)?,
             ClientMsg::Scroll { pane, delta } => self.scroll(index, pane, delta),
+            ClientMsg::ScrollTo { pane, row } => self.scroll_to(index, pane, row),
+            ClientMsg::Copy { pane, start, end } => {
+                let text = self
+                    .pane_grid(index, pane)
+                    .map(|g| {
+                        g.text_between(
+                            (start.row as usize, start.col as usize),
+                            (end.row as usize, end.col as usize),
+                        )
+                    })
+                    .unwrap_or_default();
+                let _ = self.clients[index].framed.queue(&ServerMsg::Copied { pane, text });
+            }
+            ClientMsg::Search { pane, query, from, backwards } => {
+                let row = self
+                    .pane_grid(index, pane)
+                    .and_then(|g| g.find(&query, from as usize, backwards))
+                    .map(|r| r as u32);
+                let _ = self.clients[index].framed.queue(&ServerMsg::Found { pane, row });
+            }
             ClientMsg::ListSessions => {
                 let sessions = self.session_infos();
                 let _ = self.clients[index].framed.queue(&ServerMsg::Sessions {
@@ -446,6 +466,27 @@ impl Daemon {
         // The view is about to be a different set of rows at the same
         // indices, which row revisions cannot express.
         state.snapshotted = false;
+    }
+
+    /// A pane's grid, for the read-only queries copy mode makes.
+    fn pane_grid(&self, index: usize, pane: PaneId) -> Option<&haven_core::Grid> {
+        let id = self.clients.get(index)?.session?;
+        self.sessions.get(&id)?.runtime.pane(pane).map(|p| p.grid())
+    }
+
+    /// Put a view at an absolute row of the history: where a search landed.
+    fn scroll_to(&mut self, index: usize, pane: PaneId, row: u32) {
+        let Some(grid) = self.pane_grid(index, pane) else { return };
+        let (history, rows) = (grid.max_scroll(), grid.num_rows());
+        // Land the row a third of the way down, so there is context above it
+        // as well as below — a match pinned to the top row reads badly.
+        let want = (history + rows).saturating_sub(row as usize + rows / 3 + 1);
+        let state = self.clients[index].sync.pane(pane);
+        let next = want.min(history);
+        if next != state.offset {
+            state.offset = next;
+            state.snapshotted = false;
+        }
     }
 
     fn host_of(&mut self, index: usize) -> Option<&mut SessionHost> {

@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -148,6 +148,18 @@ impl RowRle {
     }
 }
 
+/// A cell in a pane's whole history: scrollback first, then the live rows.
+///
+/// Absolute rather than relative to a view, so a selection survives the
+/// scrolling that making it requires. Rows trimmed from the front of the
+/// scrollback do shift these, which is a budget away and a copy-mode session
+/// long — worth knowing, not worth a generation counter.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Serialize, Deserialize)]
+pub struct HistoryPoint {
+    pub row: u32,
+    pub col: u16,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum ClientMsg {
     Attach {
@@ -180,6 +192,31 @@ pub enum ClientMsg {
     Scroll {
         pane: PaneId,
         delta: i32,
+    },
+    /// Put this client's view at an absolute row of the pane's history,
+    /// which is how a search result is reached.
+    ScrollTo {
+        pane: PaneId,
+        row: u32,
+    },
+    /// Text between two points of a pane's history, for copy mode.
+    ///
+    /// Done on the daemon because only it holds the whole history, and
+    /// because joining wrapped rows correctly needs the `wrapped` flag that
+    /// never reaches a client.
+    Copy {
+        pane: PaneId,
+        start: HistoryPoint,
+        end: HistoryPoint,
+    },
+    /// Find `query` in a pane's history, starting from `from` and moving in
+    /// the given direction. Case-insensitive unless the query has a capital
+    /// in it, as every editor written since vi has done.
+    Search {
+        pane: PaneId,
+        query: String,
+        from: u32,
+        backwards: bool,
     },
     /// Control-mode queries, which the CLI is built on: anything `haven ls`
     /// can do, a script can do (`docs/PLAN.md` §14.2).
@@ -259,6 +296,16 @@ pub enum ServerMsg {
         /// away from the cursor: a block parked at the bottom of a page of
         /// history is not where anything is about to be typed.
         cursor_visible: bool,
+    },
+    /// The text a [`ClientMsg::Copy`] asked for.
+    Copied {
+        pane: PaneId,
+        text: String,
+    },
+    /// Where a [`ClientMsg::Search`] found the query, if anywhere.
+    Found {
+        pane: PaneId,
+        row: Option<u32>,
     },
     /// Where this client's view of a pane sits in its history. Sent whenever
     /// it moves, including back to the bottom, so the bar can say so.

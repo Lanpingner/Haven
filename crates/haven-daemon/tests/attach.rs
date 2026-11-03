@@ -411,6 +411,75 @@ fn two_clients_scroll_independently() {
 }
 
 #[test]
+fn copy_mode_takes_text_out_of_the_history() {
+    use haven_proto::HistoryPoint;
+
+    let mut daemon = Daemon::detached(counting_spawner);
+    let mut client = attach(&mut daemon, 20, 6);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let pane = client.focus.expect("focus");
+    send_input(&mut client, pane, b"20\n");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.pane_text(pane).contains("line20"));
+
+    // Rows 1 and 2 of the history: the echoed command, then line1.
+    client
+        .transport
+        .send(ClientMsg::Copy {
+            pane,
+            start: HistoryPoint { row: 1, col: 0 },
+            end: HistoryPoint { row: 2, col: 19 },
+        })
+        .expect("copy");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| !c[0].buffers.is_empty()),
+        "nothing came back"
+    );
+    let got = client.buffers[0].clone();
+    assert!(got.contains("line1"), "copied the wrong rows: {got:?}");
+    assert!(!got.ends_with(' '), "trailing padding was copied: {got:?}");
+}
+
+#[test]
+fn a_search_moves_the_view_to_the_match() {
+    let mut daemon = Daemon::detached(counting_spawner);
+    let mut client = attach(&mut daemon, 20, 6);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let pane = client.focus.expect("focus");
+    send_input(&mut client, pane, b"40\n");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.pane_text(pane).contains("line40"));
+    assert!(!client.frame.pane_text(pane).contains("line7\n"), "line7 should be off-screen");
+
+    client
+        .transport
+        .send(ClientMsg::Search { pane, query: "line7 ".into(), from: 0, backwards: false })
+        .expect("search");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame.pane_text(pane).contains("line7\n")
+        }),
+        "the view never moved to the match:\n{}",
+        client.frame.pane_text(pane)
+    );
+}
+
+#[test]
+fn a_search_that_finds_nothing_says_so() {
+    let mut daemon = Daemon::detached(counting_spawner);
+    let mut client = attach(&mut daemon, 20, 6);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let pane = client.focus.expect("focus");
+
+    client
+        .transport
+        .send(ClientMsg::Search { pane, query: "nowhere-at-all".into(), from: 0, backwards: false })
+        .expect("search");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| c[0].frame.notice.is_some()),
+        "a key that found nothing must not look like a key that did nothing"
+    );
+}
+
+#[test]
 fn colours_survive_the_round_trip_through_the_protocol() {
     use haven_core::{Color, Rgb};
 

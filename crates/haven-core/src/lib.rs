@@ -4,6 +4,7 @@
 //! concerns — it is a pure state machine you drive with byte slices, which is
 //! what makes the golden-screen tests in `docs/PLAN.md` §17 cheap.
 
+pub mod base64;
 pub mod charset;
 pub mod color;
 pub mod grid;

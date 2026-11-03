@@ -29,6 +29,18 @@ pub fn reserve(size: CellSize) -> CellSize {
     CellSize { rows: size.rows - ROWS, ..size }
 }
 
+/// What else the bar has to say, beyond the session itself.
+///
+/// A struct rather than three more arguments: the list was already at the
+/// point where the call site said nothing about which `None` was which.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct BarState {
+    /// How far the focused pane is scrolled back, when it is.
+    pub scroll: Option<(u32, u32)>,
+    /// Copy mode's label, when it is up.
+    pub copy: Option<String>,
+}
+
 /// What the client is currently doing, shown on the right of the bar.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub enum Mode {
@@ -159,7 +171,7 @@ pub fn build(
     mode: &Mode,
     now_unix: u64,
     theme: &Theme,
-    scroll: Option<(u32, u32)>,
+    state: &BarState,
 ) -> Option<Widget> {
     if size.rows <= ROWS || size.cols == 0 {
         return None;
@@ -199,9 +211,12 @@ pub fn build(
     let right = right_text(status, now_unix, theme);
     // Reading history is a mode, and an interface that does not say so leaves
     // you wondering why the screen stopped moving.
-    let alert = match (scroll, *mode == Mode::Prefix) {
-        (_, true) => Some(" PREFIX ".to_string()),
-        (Some((offset, total)), _) => Some(format!(" SCROLL {offset}/{total} ")),
+    // Most urgent first: what you are typing, then what key is armed, then
+    // where in the history you are.
+    let alert = match (state.copy.as_ref(), *mode == Mode::Prefix, state.scroll) {
+        (Some(label), _, _) => Some(format!(" {label} ")),
+        (_, true, _) => Some(" PREFIX ".to_string()),
+        (_, _, Some((offset, total))) => Some(format!(" SCROLL {offset}/{total} ")),
         _ => None,
     };
     let tail = alert.as_ref().map(|a| a.chars().count()).unwrap_or(0) + right.chars().count();
@@ -367,8 +382,15 @@ mod tests {
 
     #[test]
     fn the_bar_names_the_session_the_windows_and_the_time() {
-        let w = build(size(60, 24), Some(&status()), &Mode::Normal, 1000 + 125, &theme(), None)
-            .unwrap();
+        let w = build(
+            size(60, 24),
+            Some(&status()),
+            &Mode::Normal,
+            1000 + 125,
+            &theme(),
+            &BarState::default(),
+        )
+        .unwrap();
         let line = text(&w);
         assert!(line.contains("work"), "no session name: {line:?}");
         assert!(line.contains("1:shell"), "no window list: {line:?}");
@@ -384,7 +406,8 @@ mod tests {
         let mut s = status();
         s.active_window = 2;
         let theme = theme();
-        let w = build(size(60, 24), Some(&s), &Mode::Normal, 1000, &theme, None).unwrap();
+        let w = build(size(60, 24), Some(&s), &Mode::Normal, 1000, &theme, &BarState::default())
+            .unwrap();
         let active = w.rows[0]
             .spans
             .iter()
@@ -405,9 +428,15 @@ mod tests {
         // Too narrow to fit everything, and wide enough to spare: both must
         // come out exactly `cols`, or it draws over a pane or leaves a gap.
         for cols in [10u16, 40, 200] {
-            let w =
-                build(size(cols, 24), Some(&status()), &Mode::Normal, 9_999_999, &theme(), None)
-                    .unwrap();
+            let w = build(
+                size(cols, 24),
+                Some(&status()),
+                &Mode::Normal,
+                9_999_999,
+                &theme(),
+                &BarState::default(),
+            )
+            .unwrap();
             assert_eq!(text(&w).chars().count(), cols as usize, "width wrong at {cols}");
         }
     }
@@ -415,8 +444,10 @@ mod tests {
     #[test]
     fn typing_a_command_replaces_the_bar() {
         let mode = Mode::command("split-h".into());
-        let line =
-            text(&build(size(40, 24), Some(&status()), &mode, 1000, &theme(), None).unwrap());
+        let line = text(
+            &build(size(40, 24), Some(&status()), &mode, 1000, &theme(), &BarState::default())
+                .unwrap(),
+        );
         // A `:` badge, then what is being typed, then a block for the
         // cursor — the pane still owns the real one.
         assert!(line.contains(':'), "no prompt: {line:?}");
@@ -429,8 +460,15 @@ mod tests {
         // A screen that stopped moving with nothing saying why is the thing
         // this avoids.
         let line = text(
-            &build(size(60, 24), Some(&status()), &Mode::Normal, 1000, &theme(), Some((7, 40)))
-                .unwrap(),
+            &build(
+                size(60, 24),
+                Some(&status()),
+                &Mode::Normal,
+                1000,
+                &theme(),
+                &BarState { scroll: Some((7, 40)), copy: None },
+            )
+            .unwrap(),
         );
         assert!(line.contains("SCROLL 7/40"), "{line:?}");
     }
@@ -438,7 +476,15 @@ mod tests {
     #[test]
     fn the_prefix_is_visible_while_it_is_armed() {
         let line = text(
-            &build(size(60, 24), Some(&status()), &Mode::Prefix, 1000, &theme(), None).unwrap(),
+            &build(
+                size(60, 24),
+                Some(&status()),
+                &Mode::Prefix,
+                1000,
+                &theme(),
+                &BarState::default(),
+            )
+            .unwrap(),
         );
         assert!(line.contains("PREFIX"), "{line:?}");
     }
@@ -453,7 +499,8 @@ mod tests {
 
     #[test]
     fn a_detached_bar_still_fills_the_row() {
-        let w = build(size(30, 24), None, &Mode::Normal, 0, &theme(), None).unwrap();
+        let w =
+            build(size(30, 24), None, &Mode::Normal, 0, &theme(), &BarState::default()).unwrap();
         assert_eq!(text(&w).chars().count(), 30);
     }
 }

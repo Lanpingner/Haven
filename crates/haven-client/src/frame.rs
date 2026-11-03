@@ -106,6 +106,10 @@ pub struct Widget {
     pub rows: Vec<FrameRow>,
 }
 
+/// A selected run of cells: the pane it is in, and the first and last cell
+/// in that pane's view coordinates.
+pub type Selection = (PaneId, (usize, usize), (usize, usize));
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrameModel {
     pub size: CellSize,
@@ -120,6 +124,14 @@ pub struct FrameModel {
     pub status: Option<haven_proto::SessionStatus>,
     /// Out-of-band message to show the user (version skew, server gone).
     pub notice: Option<String>,
+    /// Where copy mode's own cursor is, as (pane, row, col) in that pane's
+    /// view. It replaces the pane's cursor while copy mode is up: the pane's
+    /// is where typing would land, which is not where you are reading.
+    pub copy_cursor: Option<(PaneId, usize, usize)>,
+    /// The copy-mode selection: which pane, and the start and end cells in
+    /// that pane's view, both inclusive. Painted by `composite`, so it looks
+    /// the same in a window and in a terminal.
+    pub selection: Option<Selection>,
     /// What the interface is painted with, as the daemon last sent it. It
     /// lives on the frame because compositing draws with it and a frontend
     /// is handed nothing else.
@@ -138,6 +150,8 @@ impl FrameModel {
             status: None,
             focus: None,
             notice: None,
+            copy_cursor: None,
+            selection: None,
             theme: haven_proto::theme::Theme::default(),
             generation: 0,
         }
@@ -188,9 +202,11 @@ impl FrameModel {
         }
     }
 
-    /// Whether the focused pane's cursor should be drawn at all.
+    /// Whether a cursor should be drawn at all. Copy mode always has one —
+    /// it is the thing you are moving.
     pub fn cursor_visible(&self) -> bool {
-        self.focus.and_then(|id| self.pane(id)).is_none_or(|p| p.cursor_visible)
+        self.copy_cursor.is_some()
+            || self.focus.and_then(|id| self.pane(id)).is_none_or(|p| p.cursor_visible)
     }
 
     /// How far the focused pane is scrolled back, when it is.
@@ -322,12 +338,50 @@ pub fn composite(frame: &FrameModel) -> (Screen, (usize, usize)) {
             );
         }
     }
+    paint_selection(&mut screen, frame, cols, rows);
     // After every pane, because a rule is decided by what its neighbours are.
     separators(&mut screen, frame, cols, rows);
     for widget in &frame.widgets {
         place(&mut screen, &widget.rect, &widget.rows, cols);
     }
+    // Copy mode's cursor wins: it is the one being moved.
+    if let Some((pane, row, col)) = frame.copy_cursor {
+        if let Some(rect) = frame.pane(pane).map(|p| p.rect) {
+            cursor = (
+                (rect.row as usize + row).min(rows.saturating_sub(1)),
+                (rect.col as usize + col).min(cols.saturating_sub(1)),
+            );
+        }
+    }
     (screen, cursor)
+}
+
+/// Repaint the selected cells in the theme's selection colours.
+///
+/// Done as a pass over the composited screen rather than inside `place`,
+/// because a selection is a property of the *view* — which rows are on screen
+/// right now — and not of any pane's content.
+fn paint_selection(screen: &mut Screen, frame: &FrameModel, cols: usize, rows: usize) {
+    let Some((pane, start, end)) = frame.selection else { return };
+    let Some(rect) = frame.pane(pane).map(|p| p.rect) else { return };
+    let style = frame.theme.selection.style();
+    for row in start.0..=end.0 {
+        // A multi-row selection takes whole lines between its ends, which is
+        // what a terminal selection means and what a per-row box does not.
+        let first = if row == start.0 { start.1 } else { 0 };
+        let last = if row == end.0 { end.1 } else { rect.cols as usize - 1 };
+        let screen_row = rect.row as usize + row;
+        if screen_row >= rows {
+            break;
+        }
+        for col in first..=last {
+            let screen_col = rect.col as usize + col;
+            if screen_col >= cols || col >= rect.cols as usize {
+                break;
+            }
+            screen[screen_row][screen_col].style = style;
+        }
+    }
 }
 
 fn place(screen: &mut Screen, rect: &PaneRect, rows: &[FrameRow], cols: usize) {

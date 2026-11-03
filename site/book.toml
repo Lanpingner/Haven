@@ -1,0 +1,25 @@
+[book]
+title = "Haven Terminal"
+description = "A GPU-accelerated, keyboard-first terminal emulator in Rust with multiplexing built into the core."
+authors = ["Haven Terminal contributors"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+# The design plan is included from docs/, which lives outside src/.
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+additional-css = ["theme/haven.css"]
+git-repository-url = "https://github.com/berromaa/HavenTerminal"
+edit-url-template = "https://github.com/berromaa/HavenTerminal/edit/master/site/{path}"
+site-url = "/HavenTerminal/"
+
+[output.html.playground]
+runnable = false
+
+[output.html.search]
+limit-results = 20

@@ -1160,7 +1160,27 @@ view sits still. The view is therefore resent whole whenever the offset moves
 or history grows underneath it, which is cheap — a client that is reading is
 not a client watching a build scroll past.
 
+Copy mode is the client's, like the chooser, because it needs the view the
+frontend is showing *and* the pane it belongs to. Its coordinates are the
+awkward part and are worth stating: the cursor is in view coordinates because
+that is where it is drawn, while a selection's anchor is a `HistoryPoint`,
+absolute in `scrollback ++ live`. Selecting more than a screenful means
+scrolling, and a view-relative anchor slides out from under the selection as
+soon as it does.
+
+The cursor keeps its *view* row across a scroll rather than its history row.
+Re-pinning it, which looks more correct, undoes the move the scroll was for:
+`k` at the top of the view scrolls one row to show the row above, and a cursor
+that followed its old history row would land straight back where it started.
+
+Extraction and search are the daemon's, not the client's: only the daemon has
+the whole history, and joining a wrapped row to the next without a newline —
+which is what makes a copied command paste back as one command — needs the
+`wrapped` flag that never reaches a client.
+
 **Bugs this work surfaced, worth remembering:**
+- `OSC 52` payloads were kept base64-encoded and handed to the client as if
+  they were text, so honouring one would have put `aGVsbG8=` on the clipboard.
 - `haven server run -- prog -x` dropped `-x`. Every other subcommand does
   `cfg.args.extend(args.rest)`; the daemon's spawner never did, so the program
   ran with no arguments at all and looked like it had simply ignored them.
