@@ -22,6 +22,7 @@
 //! arguments for all of this, so pointing [`Settings::cli`] at it is the
 //! whole of podman support.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -67,9 +68,13 @@ impl Backend for Docker {
     fn targets(&self, settings: &Settings) -> Vec<Target> {
         let ps = capture(&settings.cli, &["ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}"])
             .unwrap_or_default();
-        let images =
-            capture(&settings.cli, &["images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}"])
-                .unwrap_or_default();
+        // The id is asked for so that the six tags of one image can be
+        // offered as one line instead of six.
+        let images = capture(
+            &settings.cli,
+            &["images", "--format", "{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.Size}}"],
+        )
+        .unwrap_or_default();
         offer(&ps, &images, &settings.images)
     }
 
@@ -145,12 +150,120 @@ fn capture(cli: &str, args: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Distro names, for telling a thing you would want a shell in from a thing
+/// you happen to have built.
+///
+/// Not a filter. A list of base images is a *ranking*: the machine this was
+/// written on offers sixty-odd images, nearly all of them service builds,
+/// and burying `archlinux` under thirty tags of a private registry makes the
+/// menu useless. Everything is still there, and still reachable by typing.
+const DISTROS: &[&str] = &[
+    "almalinux",
+    "alpine",
+    "amazonlinux",
+    "archlinux",
+    "busybox",
+    "centos",
+    "clearlinux",
+    "debian",
+    "fedora",
+    "gentoo",
+    "kali-rolling",
+    "mageia",
+    "nix",
+    "opensuse",
+    "oraclelinux",
+    "photon",
+    "rockylinux",
+    "slackware",
+    "tumbleweed",
+    "ubuntu",
+    "void",
+];
+
+/// The registry an image name names, if it names one.
+///
+/// `127.0.0.1:5000/x`, `ghcr.io/y` and `localhost/z` are hosted somewhere;
+/// `ubuntu` and `vectorim/element-web` are not. The rule is Docker's own: a
+/// first segment with a dot or a colon in it is a host.
+fn registry(name: &str) -> Option<&str> {
+    let (first, _) = name.split_once('/')?;
+    (first.contains('.') || first.contains(':') || first == "localhost").then_some(first)
+}
+
+/// Lower sorts earlier: a distro, then a plain image, then one from a
+/// registry — which is nearly always something you built rather than
+/// something you want a shell in.
+fn rank(name: &str) -> u8 {
+    let repo = name.split(':').next().unwrap_or(name);
+    let last = repo.rsplit('/').next().unwrap_or(repo);
+    match (registry(name).is_some(), DISTROS.contains(&last)) {
+        (false, true) => 0,
+        (false, false) => 1,
+        (true, true) => 2,
+        (true, false) => 3,
+    }
+}
+
+/// Which of one image's names to show.
+///
+/// Prefers an unhosted name, then a short one, then `:latest` — the name you
+/// would have typed, out of the several the daemon happens to hold.
+fn best_name(names: &[String]) -> String {
+    names
+        .iter()
+        .min_by_key(|n| {
+            (
+                u8::from(registry(n).is_some()),
+                n.matches('/').count(),
+                u8::from(!n.ends_with(":latest")),
+                n.len(),
+            )
+        })
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Whether a tag names a build rather than a version a person chose.
+///
+/// `e917629-dirty`, `27803cc`, `v0.0.1-rc1-6-g182cc9a` — a commit, in the
+/// shape every CI pipeline writes it. A machine that builds its own images
+/// accumulates dozens, each a distinct image that cannot be collapsed by id,
+/// and together they bury everything a person would actually pick. `latest`,
+/// `22-alpine`, `16` and `release` are not builds: someone chose those, and
+/// choosing between them is the point of the menu.
+fn is_build_tag(tag: &str) -> bool {
+    let tag = tag.strip_suffix("-dirty").unwrap_or(tag);
+    if tag.is_empty() {
+        return false;
+    }
+    // `…-g182cc9a`, git-describe's suffix.
+    if let Some(last) = tag.rsplit('-').next() {
+        if let Some(hex) = last.strip_prefix('g') {
+            if hex.len() >= 7 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                return true;
+            }
+        }
+    }
+    // A bare commit, which must not swallow `16` or `2`.
+    tag.len() >= 7 && tag.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The repository half of an image name.
+fn repository(name: &str) -> &str {
+    match name.rfind(':') {
+        // A port in a registry host has a `/` after it; a tag does not.
+        Some(at) if !name[at..].contains('/') => &name[..at],
+        _ => name,
+    }
+}
+
 /// The menu, built from what the CLI said.
 ///
 /// Running containers first, because wanting a shell in one is a live
-/// problem; then images you have; then the ones that would be fetched. A
-/// pullable image is never dropped from the list but never ranks above
-/// something already here.
+/// problem; then images, ranked so that distros come before the things you
+/// built; then the ones that would have to be fetched. Nothing that costs a
+/// download ranks above something already here, and nothing is hidden.
 fn offer(ps: &str, images: &str, known: &[String]) -> Vec<Target> {
     let mut out = Vec::new();
 
@@ -172,22 +285,67 @@ fn offer(ps: &str, images: &str, known: &[String]) -> Vec<Target> {
         });
     }
 
-    let mut local: Vec<(String, String)> = Vec::new();
+    // One line per *image*, not per tag. Six tags of one build are six ways
+    // of saying the same thing, and they crowded out everything that was not
+    // the same thing.
+    let mut groups: Vec<(String, Vec<String>, String)> = Vec::new();
     for line in images.lines().filter(|l| !l.trim().is_empty()) {
         let mut fields = line.split('\t');
+        let Some(id) = fields.next().map(str::trim).filter(|i| !i.is_empty()) else { continue };
         let Some(name) = fields.next().map(str::trim).filter(|n| !n.is_empty()) else { continue };
         // `<none>:<none>` is an intermediate layer, and `<none>` as a tag is
         // an image whose tag moved. Neither is something to offer.
         if name.contains("<none>") {
             continue;
         }
-        local.push((name.to_string(), fields.next().unwrap_or_default().trim().to_string()));
+        let size = fields.next().unwrap_or_default().trim().to_string();
+        match groups.iter_mut().find(|(seen, ..)| seen == id) {
+            Some((_, names, _)) => names.push(name.to_string()),
+            None => groups.push((id.to_string(), vec![name.to_string()], size)),
+        }
     }
-    for (name, size) in &local {
+
+    // Name, size, and how many other tags of the same thing are not being
+    // shown — said out loud rather than quietly dropped, because the tag you
+    // were looking for is one of them.
+    let mut local: Vec<(String, String, usize)> = Vec::new();
+    let mut first_build: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, names, size) in &groups {
+        let name = best_name(names);
+        let repo = repository(&name).to_string();
+        if is_build_tag(name[repo.len()..].trim_start_matches(':')) {
+            // Docker lists newest first, so the first build of a repository
+            // is the one worth showing and the rest are its history.
+            if let Some(at) = first_build.get(&repo) {
+                local[*at].2 += names.len();
+                continue;
+            }
+            first_build.insert(repo, local.len());
+        }
+        local.push((name, size.clone(), names.len() - 1));
+    }
+    let mut local: Vec<(String, String)> = local
+        .into_iter()
+        .map(|(name, size, hidden)| {
+            let detail = match hidden {
+                0 => size,
+                1 => format!("{size} · +1 other tag"),
+                n => format!("{size} · +{n} other tags"),
+            };
+            (name, detail)
+        })
+        .collect();
+    // Within a rank: a tag someone chose before the newest build of the
+    // same thing. Stable, so Docker's newest-first order survives both.
+    local.sort_by_key(|(name, _)| {
+        (rank(name), u8::from(is_build_tag(name[repository(name).len()..].trim_start_matches(':'))))
+    });
+
+    for (name, detail) in &local {
         out.push(Target {
             spec: format!("docker://run/{name}"),
             label: name.clone(),
-            detail: size.clone(),
+            detail: detail.clone(),
             present: true,
             choosable: true,
         });
@@ -766,7 +924,7 @@ mod tests {
     #[test]
     fn running_containers_come_first_then_what_is_pulled_then_what_is_not() {
         let ps = "web\tnginx:latest\tUp 2 hours\n";
-        let images = "alpine:latest\t7.8MB\nmy/app:dev\t120MB\n<none>:<none>\t4MB\n";
+        let images = "aaa\talpine:latest\t7.8MB\nbbb\tmy/app:dev\t120MB\nccc\t<none>:<none>\t4MB\n";
         let known: Vec<String> =
             ["alpine:latest", "archlinux:latest"].iter().map(|s| s.to_string()).collect();
         let targets = offer(ps, images, &known);
@@ -783,16 +941,117 @@ mod tests {
     }
 
     #[test]
+    fn one_image_is_one_line_however_many_tags_it_has() {
+        // From a real machine: six tags of one build, under two registries,
+        // crowded every distro off the screen.
+        let images = "\
+            aaa\t127.0.0.1:5000/hydra-console:latest\t2.95GB\n\
+            aaa\t127.0.0.1:5000/hydra-console:v0.0.1-rc1-6-g182cc9a-dirty\t2.95GB\n\
+            aaa\t192.168.100.1:5000/hydra-console:latest\t2.95GB\n\
+            bbb\talpine:latest\t7.8MB\n";
+        let targets = offer("", images, &[]);
+        assert_eq!(targets.len(), 2, "{targets:?}");
+        // The distro first, although Docker listed it last.
+        assert_eq!(targets[0].label, "alpine:latest");
+        assert_eq!(targets[1].label, "127.0.0.1:5000/hydra-console:latest");
+        assert!(
+            targets[1].detail.contains("+2 other tags"),
+            "a collapsed tag has to be accounted for: {}",
+            targets[1].detail
+        );
+    }
+
+    #[test]
+    fn a_repositorys_old_builds_become_one_line() {
+        // The other half of the same problem: a machine that builds its own
+        // images has a dozen commits of each, every one a distinct image
+        // that cannot be folded by id. Newest first is Docker's order, and
+        // the newest is the one worth a line.
+        let images = "\
+            aaa\treg.example.com:5000/app:e917629-dirty\t2.9GB\n\
+            bbb\treg.example.com:5000/app:27803cc\t2.9GB\n\
+            ccc\treg.example.com:5000/app:v0.1-rc1-6-g182cc9a\t2.9GB\n\
+            ddd\treg.example.com:5000/app:latest\t2.9GB\n\
+            eee\tpostgres:16\t451MB\n\
+            fff\tpostgres:18\t457MB\n";
+        let targets = offer("", images, &[]);
+        let labels: Vec<&str> = targets.iter().map(|t| t.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "postgres:16",
+                "postgres:18",
+                "reg.example.com:5000/app:latest",
+                "reg.example.com:5000/app:e917629-dirty",
+            ],
+            "versions a person chose are kept apart; builds are not"
+        );
+        assert!(targets[3].detail.contains("+2 other tags"), "{}", targets[3].detail);
+    }
+
+    #[test]
+    fn a_tag_someone_chose_is_not_mistaken_for_a_build() {
+        // The distinction the folding rests on. `16` and `2` are short, and
+        // hex: the length rule is what keeps them whole.
+        for build in ["e917629-dirty", "27803cc", "v0.0.1-rc1-6-g182cc9a", "2238cd2-dirty"] {
+            assert!(is_build_tag(build), "{build}");
+        }
+        for chosen in ["latest", "16", "2", "22-alpine", "release", "24.04", "v1.2.3", "edge"] {
+            assert!(!is_build_tag(chosen), "{chosen}");
+        }
+    }
+
+    #[test]
+    fn a_registry_port_is_not_a_tag() {
+        // `127.0.0.1:5000/x` has a colon that is not a tag separator, and a
+        // repository split that got that wrong would fold unrelated images.
+        assert_eq!(
+            repository("127.0.0.1:5000/hydra-console:latest"),
+            "127.0.0.1:5000/hydra-console"
+        );
+        assert_eq!(repository("127.0.0.1:5000/hydra-console"), "127.0.0.1:5000/hydra-console");
+        assert_eq!(repository("alpine:latest"), "alpine");
+    }
+
+    #[test]
+    fn the_name_shown_is_the_one_you_would_have_typed() {
+        // Unhosted over hosted, short over long, `:latest` over a sha tag.
+        assert_eq!(
+            best_name(&[
+                "127.0.0.1:5000/hydra-pgproxy:v0.0.1-rc1-7-gfa325ee".into(),
+                "hydra-pgproxy:latest".into(),
+                "192.168.100.1:5000/hydra-pgproxy:latest".into(),
+            ]),
+            "hydra-pgproxy:latest"
+        );
+        assert_eq!(best_name(&["ubuntu:24.04".into(), "ubuntu:latest".into()]), "ubuntu:latest");
+    }
+
+    #[test]
+    fn a_distro_outranks_a_thing_you_built() {
+        // The ordering, in one line each: distro, plain image, registry.
+        assert!(rank("archlinux:latest") < rank("vectorim/element-web:latest"));
+        assert!(rank("vectorim/element-web:latest") < rank("ghcr.io/element-hq/synapse:latest"));
+        assert!(rank("node:22-alpine") > rank("alpine:latest"), "a node image is not a distro");
+        // `localhost/x` and `127.0.0.1:5000/x` are hosted; a bare namespace
+        // is not, which is Docker's own rule.
+        assert_eq!(registry("localhost/x:1"), Some("localhost"));
+        assert_eq!(registry("127.0.0.1:5000/x:1"), Some("127.0.0.1:5000"));
+        assert_eq!(registry("vectorim/element-web:latest"), None);
+        assert_eq!(registry("ubuntu:latest"), None);
+    }
+
+    #[test]
     fn an_image_already_pulled_is_not_also_offered_as_a_download() {
         let known: Vec<String> = vec!["alpine:latest".to_string()];
-        let targets = offer("", "alpine:latest\t7.8MB\n", &known);
+        let targets = offer("", "aaa\talpine:latest\t7.8MB\n", &known);
         assert_eq!(targets.len(), 1, "{targets:?}");
         assert!(targets[0].present);
     }
 
     #[test]
     fn intermediate_layers_are_not_offered_as_distros() {
-        let targets = offer("", "<none>:<none>\t4MB\nubuntu:<none>\t70MB\n", &[]);
+        let targets = offer("", "aaa\t<none>:<none>\t4MB\nbbb\tubuntu:<none>\t70MB\n", &[]);
         assert!(targets.is_empty(), "{targets:?}");
     }
 

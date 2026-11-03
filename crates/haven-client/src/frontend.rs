@@ -91,6 +91,12 @@ impl ScriptedFrontend {
         }
     }
 
+    /// Add an event after construction, for a test that has to let the
+    /// client reach a particular state before the keystroke lands.
+    pub fn feed(&mut self, event: InputEvent) {
+        self.script.push_back(event);
+    }
+
     /// Pretend to be a TUI client at a given fidelity, to exercise the
     /// degradation paths without a terminal.
     pub fn as_tui(mut self, tier: KeyTier) -> Self {

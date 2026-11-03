@@ -30,6 +30,41 @@ fetched. Nothing that costs a download ever ranks above something that is
 already here, and nothing that costs a download is hidden either — a menu that
 is empty until you have already done the thing by hand is not a feature.
 
+### What a machine with sixty images gets
+
+A workstation that builds things has a lot of images, and the first version of
+this listed all of them: sixty-two rows, mostly tags of the same handful of
+builds, with `archlinux` somewhere near the bottom. Three rules make that a
+menu again, and none of them is a filter you cannot see past.
+
+- **One line per image, not per tag.** Six tags of one build are six ways of
+  saying the same thing. The name shown is the one you would have typed —
+  unhosted over hosted, short over long, `:latest` over a commit — and the
+  rest are counted: `2.95GB · +2 other tags`.
+- **One line per repository for build tags.** `e917629-dirty`, `27803cc`,
+  `v0.1-rc1-6-g182cc9a` — a commit in the shape every CI pipeline writes it.
+  Those are distinct images that cannot be folded by identity, and a machine
+  accumulates dozens. The newest is shown, the rest are counted. A tag
+  somebody *chose* — `latest`, `22-alpine`, `16`, `release` — is never folded,
+  because choosing between those is the point of the menu.
+- **Distros first.** A base image ranks above a plain image, which ranks above
+  one from a registry — which is nearly always something you built rather than
+  something you want a shell in.
+
+On the machine this was written on, sixty-two rows became forty-one, with
+`alpine` at the top of them.
+
+Past about a dozen entries the menu is narrowed by **typing** rather than
+picked from by number: digits stop at nine, and there is no key `23`. Type
+`arch` and you are looking at one line. A short list keeps the numbers printed
+beside it, because for four shells a digit is faster than a word.
+
+Anything folded is still reachable by name, which is all a menu entry is:
+
+```sh
+haven run -- new-window 'docker://run/127.0.0.1:5000/app:e917629-dirty?scratch'
+```
+
 `Ctrl+A` `g` is the same menu; `Ctrl+A` `G` opens the pick as a pane instead of
 a tab.
 

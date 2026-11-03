@@ -24,7 +24,7 @@ with `mdbook serve site --open`; the last chapter includes this repository's
 ## Try it
 
 ```sh
-cargo test --workspace     # 582 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 591 tests, incl. mc/vim/less driven on real ptys
 
 # A GPU window, attached to the daemon (which it starts if needed).
 cargo run --release -p haven -- gpu
@@ -156,6 +156,13 @@ build breaks there.
 One menu rather than two keys, because it is one decision: "give me a shell"
 does not split into *which shell* and *where it runs* until after you have
 seen the list.
+
+A machine that builds things has a lot of images, so the list is one line per
+image rather than per tag, one line per repository for commit-shaped build
+tags, and distros before the things you built — sixty-two rows became
+forty-one on the machine this was written on. Past a dozen entries you narrow
+it by typing instead of by number. Nothing is hidden that a name cannot still
+reach.
 
 An image is asked one question first, per pane, because the answer differs per
 pane: **keep** reuses one lasting container per image, named

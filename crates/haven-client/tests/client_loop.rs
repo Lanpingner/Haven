@@ -559,6 +559,102 @@ fn containers_are_in_the_same_menu_as_the_shells() {
 }
 
 #[test]
+fn a_menu_pick_that_opens_another_menu_is_not_dropped_on_the_floor() {
+    // The bug this is here for: picking a distro did nothing and said
+    // nothing. Menu picks honoured only `Act` — the verdict that sends a
+    // message to the daemon — and silently discarded every other one, so an
+    // entry whose whole job is to ask a second question could never ask it.
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Shells {
+            shells: vec![],
+            containers: vec![haven_proto::ContainerTarget {
+                spec: "docker://run/fedora:latest".into(),
+                label: "fedora:latest".into(),
+                detail: "not pulled yet".into(),
+                present: false,
+                choosable: true,
+            }],
+        },
+    ]);
+    let frontend =
+        ScriptedFrontend::new(size(40, 10), [InputEvent::Key(KeyEvent::named(NamedKey::Enter))]);
+    let mut client = Client::new(frontend, server);
+    // The vocabulary lives above the client, so the filter stands in for it.
+    client.key_filter = Some(Box::new(|_, _, _| haven_client::Intercepted::ChooseLifetime {
+        verb: "new-window".into(),
+        spec: "docker://run/fedora:latest".into(),
+    }));
+    client.tick().unwrap();
+    assert!(client.menu.is_some(), "the shell menu did not open");
+
+    // Fed only now: a keystroke is read before the messages are folded in,
+    // so one queued at the start would arrive before there was a menu.
+    client.frontend.feed(InputEvent::Key(KeyEvent::named(NamedKey::Enter)));
+    client.tick().unwrap();
+    let menu = client.menu.as_ref().expect("picking a distro left no menu at all");
+    assert!(
+        menu.title.contains("keep what you install"),
+        "the second question was never asked: {}",
+        menu.title
+    );
+    assert_eq!(menu.entries.len(), 2, "{:?}", menu.entries);
+}
+
+#[test]
+fn a_menu_pick_that_only_has_something_to_say_says_it() {
+    // The same bug, in the shape it takes for a command that reports rather
+    // than acts: the notice was dropped too, which is how "nothing happened"
+    // became indistinguishable from "nothing happened, silently".
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Shells { shells: vec!["/bin/bash".into()], containers: vec![] },
+    ]);
+    let frontend =
+        ScriptedFrontend::new(size(40, 10), [InputEvent::Key(KeyEvent::named(NamedKey::Enter))]);
+    let mut client = Client::new(frontend, server);
+    client.key_filter =
+        Some(Box::new(|_, _, _| haven_client::Intercepted::Notice("could not".into())));
+    client.tick().unwrap();
+    client.tick().unwrap();
+    assert_eq!(client.frame.notice.as_deref(), Some("could not"));
+}
+
+#[test]
+fn a_long_list_is_typed_at_rather_than_counted_down() {
+    // A machine with sixty images filled the screen with a menu you could
+    // only reach the top of. Digits stop at nine; typing does not.
+    let containers: Vec<haven_proto::ContainerTarget> = (0..40)
+        .map(|i| haven_proto::ContainerTarget {
+            spec: format!("docker://run/thing-{i}:latest"),
+            label: format!("thing-{i}:latest"),
+            detail: "120MB".into(),
+            present: true,
+            choosable: true,
+        })
+        .collect();
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Shells { shells: vec!["/bin/bash".into()], containers },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 10), []), server);
+    client.tick().unwrap();
+    assert!(client.menu.as_ref().expect("no menu").filterable);
+
+    // A handful of shells is still picked by number.
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Shells {
+            shells: vec!["/bin/bash".into(), "/usr/bin/fish".into()],
+            containers: vec![],
+        },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 10), []), server);
+    client.tick().unwrap();
+    assert!(!client.menu.as_ref().expect("no menu").filterable);
+}
+
+#[test]
 fn mounts_follow_the_container_and_leave_ordinary_shells_alone() {
     let server = ScriptedTransport::new([
         ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),

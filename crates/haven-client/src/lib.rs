@@ -108,6 +108,11 @@ pub enum Tick {
     Finished,
 }
 
+/// Above this many entries a menu is narrowed by typing rather than picked
+/// from by number. Nine is where digits stop working; the margin is for the
+/// ones you can still count down to faster than you can type.
+const DIGIT_LIMIT: usize = 12;
+
 /// Drives one client session: pulls input from a [`Frontend`], pushes it at a
 /// [`Transport`], folds server messages into a [`FrameModel`], presents.
 pub struct Client<F, T> {
@@ -387,24 +392,103 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         };
         if let Some(command) = chosen.filter(|c| !c.is_empty()) {
             self.menu = None;
-            self.run_menu_command(&command)?;
+            return self.run_menu_command(&command);
         }
         Ok(Tick::Redraw)
+    }
+
+    /// What a verdict from the key filter means.
+    ///
+    /// `None` is the key belonging to the pane rather than to us. One method
+    /// rather than one per caller, because it was two: picking from a menu
+    /// honoured only [`Intercepted::Act`] and dropped every other verdict in
+    /// silence, so a menu entry that opens a second menu — a container being
+    /// asked whether it lasts — did nothing, and said nothing either.
+    fn act_on(&mut self, verdict: Intercepted) -> Result<Option<Tick>, TransportError> {
+        Ok(Some(match verdict {
+            Intercepted::Consumed => Tick::Redraw,
+            Intercepted::Notice(text) => {
+                self.frame.notice = Some(text);
+                Tick::Redraw
+            }
+            Intercepted::Act(action) => {
+                self.transport.send(ClientMsg::Action(action))?;
+                Tick::Idle
+            }
+            Intercepted::OpenChooser => {
+                self.open_chooser()?;
+                Tick::Redraw
+            }
+            Intercepted::NewSession => {
+                self.new_session(None)?;
+                Tick::Redraw
+            }
+            Intercepted::EnterCopy => {
+                self.enter_copy();
+                Tick::Redraw
+            }
+            Intercepted::ChooseShell(verb) => {
+                // Remembered until the listing arrives: the daemon answers
+                // with shells, not with what to do with one.
+                self.shell_verb = verb;
+                self.transport.send(ClientMsg::ListShells)?;
+                Tick::Idle
+            }
+            Intercepted::ChooseLifetime { verb, spec } => {
+                self.ask_lifetime(&verb, &spec);
+                Tick::Redraw
+            }
+            Intercepted::ContainerMounts { add, remove } => {
+                self.frame.notice = Some(self.change_mounts(add, remove));
+                Tick::Redraw
+            }
+            Intercepted::OpenMenu { title, entries, filterable } => {
+                let mut menu = menu::Menu::new(title, entries);
+                if filterable {
+                    menu = menu.filterable();
+                }
+                self.menu = Some(menu);
+                Tick::Redraw
+            }
+            Intercepted::DisplayPanes => {
+                self.showing_panes = true;
+                Tick::Redraw
+            }
+            Intercepted::FindWindow(text) => {
+                self.find_window(&text)?;
+                Tick::Redraw
+            }
+            Intercepted::Paste => {
+                self.paste()?;
+                Tick::Idle
+            }
+            Intercepted::Scroll(delta) => {
+                if let Some(pane) = self.focus {
+                    self.transport.send(ClientMsg::Scroll { pane, delta })?;
+                }
+                Tick::Idle
+            }
+            Intercepted::Detach => {
+                self.transport.send(ClientMsg::Detach)?;
+                Tick::Finished
+            }
+            Intercepted::Pass => return Ok(None),
+        }))
     }
 
     /// What a menu entry resolves to. The client cannot parse a command — the
     /// vocabulary lives above it — so the filter is asked, exactly as it is
     /// for a typed line.
-    fn run_menu_command(&mut self, command: &str) -> Result<(), TransportError> {
-        let Some(mut filter) = self.key_filter.take() else { return Ok(()) };
-        let mut mode = status_bar::Mode::command(command.to_string());
+    fn run_menu_command(&mut self, command: &str) -> Result<Tick, TransportError> {
+        let Some(mut filter) = self.key_filter.take() else { return Ok(Tick::Redraw) };
+        // The client's own mode, not a scratch copy of one: a command that
+        // opens a prompt has to leave the prompt open, and a mode dropped on
+        // the floor took the prompt with it.
+        self.mode = status_bar::Mode::command(command.to_string());
         let verdict =
-            filter(&input::KeyEvent::named(input::NamedKey::Enter), &mut mode, &self.bindings);
+            filter(&input::KeyEvent::named(input::NamedKey::Enter), &mut self.mode, &self.bindings);
         self.key_filter = Some(filter);
-        match verdict {
-            Intercepted::Act(action) => self.transport.send(ClientMsg::Action(action)),
-            _ => Ok(()),
-        }
+        Ok(self.act_on(verdict)?.unwrap_or(Tick::Redraw))
     }
 
     /// Enter copy mode on the focused pane.
@@ -881,74 +965,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 let mut filter = self.key_filter.take();
                 let verdict = filter.as_mut().map(|f| f(&key, &mut self.mode, &self.bindings));
                 self.key_filter = filter;
-                match verdict {
-                    Some(Intercepted::Consumed) => return Ok(Tick::Redraw),
-                    Some(Intercepted::Notice(text)) => {
-                        self.frame.notice = Some(text);
-                        return Ok(Tick::Redraw);
+                if let Some(verdict) = verdict {
+                    if let Some(tick) = self.act_on(verdict)? {
+                        return Ok(tick);
                     }
-                    Some(Intercepted::Act(action)) => {
-                        self.transport.send(ClientMsg::Action(action))?;
-                        return Ok(Tick::Idle);
-                    }
-                    Some(Intercepted::OpenChooser) => {
-                        self.open_chooser()?;
-                        return Ok(Tick::Redraw);
-                    }
-                    Some(Intercepted::NewSession) => {
-                        self.new_session(None)?;
-                        return Ok(Tick::Redraw);
-                    }
-                    Some(Intercepted::EnterCopy) => {
-                        self.enter_copy();
-                        return Ok(Tick::Redraw);
-                    }
-                    Some(Intercepted::ChooseShell(verb)) => {
-                        // Remembered until the listing arrives: the daemon
-                        // answers with shells, not with what to do with one.
-                        self.shell_verb = verb;
-                        self.transport.send(ClientMsg::ListShells)?;
-                        return Ok(Tick::Idle);
-                    }
-                    Some(Intercepted::ChooseLifetime { verb, spec }) => {
-                        self.ask_lifetime(&verb, &spec);
-                        return Ok(Tick::Redraw);
-                    }
-                    Some(Intercepted::ContainerMounts { add, remove }) => {
-                        self.frame.notice = Some(self.change_mounts(add, remove));
-                        return Ok(Tick::Redraw);
-                    }
-                    Some(Intercepted::OpenMenu { title, entries, filterable }) => {
-                        let mut menu = menu::Menu::new(title, entries);
-                        if filterable {
-                            menu = menu.filterable();
-                        }
-                        self.menu = Some(menu);
-                        return Ok(Tick::Redraw);
-                    }
-                    Some(Intercepted::DisplayPanes) => {
-                        self.showing_panes = true;
-                        return Ok(Tick::Redraw);
-                    }
-                    Some(Intercepted::FindWindow(text)) => {
-                        self.find_window(&text)?;
-                        return Ok(Tick::Redraw);
-                    }
-                    Some(Intercepted::Paste) => {
-                        self.paste()?;
-                        return Ok(Tick::Idle);
-                    }
-                    Some(Intercepted::Scroll(delta)) => {
-                        if let Some(pane) = self.focus {
-                            self.transport.send(ClientMsg::Scroll { pane, delta })?;
-                        }
-                        return Ok(Tick::Idle);
-                    }
-                    Some(Intercepted::Detach) => {
-                        self.transport.send(ClientMsg::Detach)?;
-                        return Ok(Tick::Finished);
-                    }
-                    Some(Intercepted::Pass) | None => {}
                 }
                 let Some(pane) = self.focus else { return Ok(Tick::Idle) };
                 // Encoding happens client-side: only the client knows what its
@@ -1085,7 +1105,15 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     };
                     (label, command)
                 }));
-                self.menu = Some(menu::Menu::new(format!("run in a new {where_}"), entries));
+                let mut menu = menu::Menu::new(format!("run in a new {where_}"), entries);
+                // Digits beat typing for four shells, and are useless for
+                // forty images — there is no key `23`. So the long list is
+                // the one you narrow by typing, and the short one keeps the
+                // numbers printed beside it.
+                if menu.entries.len() > DIGIT_LIMIT {
+                    menu = menu.filterable();
+                }
+                self.menu = Some(menu);
                 true
             }
             ServerMsg::Environment(env) => {
