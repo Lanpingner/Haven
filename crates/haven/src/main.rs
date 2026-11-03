@@ -258,7 +258,7 @@ fn gpu(args: Args) -> ExitCode {
 fn attach(args: Args) -> ExitCode {
     let socket = socket_of(&args);
     let session = args.target.map(haven_proto::SessionId);
-    match haven::attach::run(&socket, session, haven_tui::HostCaps::from_env()) {
+    match haven::attach::run_probed(&socket, session) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("haven: {e}");
@@ -471,7 +471,7 @@ fn tui(args: Args) -> ExitCode {
         launch_config(args.program.as_deref(), args.login, args.integrate, &ctx(args.login));
     cfg.args.extend(args.rest);
 
-    match haven::solo::run(cfg, haven_tui::HostCaps::from_env()) {
+    match haven::solo::run_probed(cfg) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("haven: {e}");

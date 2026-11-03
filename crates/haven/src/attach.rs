@@ -249,9 +249,27 @@ pub fn run_gpu(
         .map_err(|e| io::Error::other(e.to_string()))
 }
 
+/// As [`run`], but asking the host terminal what it can do first.
+///
+/// Separate so tests and `haven dump` can hand in known capabilities rather
+/// than writing escape sequences at whatever is reading them.
+pub fn run_probed(socket: &Path, session: Option<SessionId>) -> io::Result<()> {
+    let transport = connect_or_start(socket)?;
+    let frontend = TuiFrontend::enter_probed()?;
+    drive(transport, frontend, session)
+}
+
 pub fn run(socket: &Path, session: Option<SessionId>, host: HostCaps) -> io::Result<()> {
     let transport = connect_or_start(socket)?;
     let frontend = TuiFrontend::enter(host)?;
+    drive(transport, frontend, session)
+}
+
+fn drive(
+    transport: SocketTransport,
+    frontend: TuiFrontend,
+    session: Option<SessionId>,
+) -> io::Result<()> {
     let mut client = Client::new(frontend, transport);
     client.key_filter = Some(Box::new(key_filter()));
     client.attach(session).map_err(to_io)?;

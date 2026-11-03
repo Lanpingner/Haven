@@ -7,6 +7,7 @@
 
 pub mod decode;
 pub mod probe;
+pub mod query;
 pub mod raw;
 
 use std::io;
@@ -33,6 +34,9 @@ extern "C" fn handle_sigwinch(_: i32) {
 #[derive(Debug)]
 pub struct TuiFrontend {
     caps: ClientCaps,
+    /// What the host said it can do, kept so a caller driving the terminal
+    /// itself can ask without probing a second time.
+    host: HostCaps,
     serializer: Serializer,
     decoder: Decoder,
     raw: Option<RawMode>,
@@ -40,8 +44,39 @@ pub struct TuiFrontend {
     read_buf: [u8; 4096],
 }
 
+/// Ask the host terminal what it can do, before anything is drawn.
+///
+/// Raw mode is needed for the replies — they are line-buffered and echoed
+/// otherwise — and is given back immediately, so the caller can set the
+/// terminal up as it likes without inheriting a half-configured one. The
+/// bytes returned are whatever the user typed while the host was answering,
+/// which belong to the caller's decoder.
+pub fn detect_host() -> io::Result<(HostCaps, Vec<u8>)> {
+    // Nothing pushed: this must not leave the alt screen on, or the caller's
+    // own enter would be the second of two.
+    let raw = RawMode::enter(Pushed::default())?;
+    let detected = HostCaps::detect(rustix::stdio::stdin());
+    drop(raw);
+    Ok(detected)
+}
+
 impl TuiFrontend {
     /// Take over the terminal. The returned frontend restores it on drop.
+    /// Take over the terminal, after asking it what it can do.
+    pub fn enter_probed() -> io::Result<Self> {
+        let (host, typed) = detect_host()?;
+        let mut frontend = Self::enter(host)?;
+        // Anything typed while the host was answering is still input.
+        frontend.feed_input(&typed);
+        Ok(frontend)
+    }
+
+    /// What the host said it can do, for a caller that drives the terminal
+    /// itself rather than through this frontend.
+    pub fn host_caps(&self) -> HostCaps {
+        self.host
+    }
+
     pub fn enter(host: HostCaps) -> io::Result<Self> {
         let (cols, rows, px, py) = raw::window_size(rustix::stdio::stdin())?;
         let pushed = Pushed {
@@ -69,6 +104,7 @@ impl TuiFrontend {
 
         Ok(Self {
             caps,
+            host,
             serializer: Serializer::new(Caps {
                 depth: host.depth,
                 synchronized_output: host.synchronized_output,
@@ -86,6 +122,7 @@ impl TuiFrontend {
         let mut decoder = Decoder::default();
         decoder.tier = host.key_tier();
         Self {
+            host,
             caps: ClientCaps {
                 frontend: FrontendKind::Tui,
                 size,

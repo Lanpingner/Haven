@@ -26,7 +26,18 @@ use haven_mux::layout::Direction;
 /// One row at the bottom for the status line.
 const STATUS_ROWS: u16 = 1;
 
+/// As [`run`], but asking the host terminal what it can do first.
+pub fn run_probed(cfg: PtyConfig) -> io::Result<()> {
+    let (host, typed) = haven_tui::detect_host()?;
+    run_with(cfg, host, &typed)
+}
+
 pub fn run(cfg: PtyConfig, host: HostCaps) -> io::Result<()> {
+    run_with(cfg, host, &[])
+}
+
+/// `typed` is whatever arrived while the host was being probed.
+fn run_with(cfg: PtyConfig, host: HostCaps, typed: &[u8]) -> io::Result<()> {
     let stdin = rustix::stdio::stdin();
     let stdout = rustix::stdio::stdout();
     let (cols, rows, px, py) = raw::window_size(stdin)?;
@@ -56,6 +67,8 @@ pub fn run(cfg: PtyConfig, host: HostCaps) -> io::Result<()> {
     });
     let mut decoder = Decoder::default();
     decoder.tier = host.key_tier();
+    // A keystroke during the probe is still a keystroke.
+    decoder.push(typed);
     let mut encoder = KeyEncoder::new(host.key_tier());
     let mut prefix_armed = false;
     // Standalone reads the same config the daemon would: a key that behaved
