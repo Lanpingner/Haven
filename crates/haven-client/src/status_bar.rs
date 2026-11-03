@@ -36,17 +36,18 @@ pub enum Mode {
     Normal,
     /// The prefix key was pressed and the next key is a command.
     Prefix,
-    /// A command is being typed: the text so far, and what it could become.
+    /// A command is being typed: the text so far, what it could become, and
+    /// which of those is highlighted.
     ///
     /// The suggestions are carried rather than computed because the command
     /// table lives in the composition root, above this crate — the same
     /// reason the key table does.
-    Command { text: String, suggestions: Vec<String> },
+    Command { text: String, suggestions: Vec<String>, selected: usize },
 }
 
 impl Mode {
     pub fn command(text: String) -> Self {
-        Self::Command { text, suggestions: Vec::new() }
+        Self::Command { text, suggestions: Vec::new(), selected: 0 }
     }
 
     pub fn command_text(&self) -> Option<&str> {
@@ -61,7 +62,7 @@ impl Mode {
 /// typed. `None` when there is nothing to suggest, so an exact command does
 /// not leave a box with one obvious entry in it.
 pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget> {
-    let Mode::Command { text, suggestions } = mode else { return None };
+    let Mode::Command { text, suggestions, selected } = mode else { return None };
     if suggestions.is_empty() || (suggestions.len() == 1 && suggestions[0] == *text) {
         return None;
     }
@@ -71,7 +72,12 @@ pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget>
     if shown == 0 {
         return None;
     }
-    let widest = suggestions.iter().take(shown).map(|s| s.chars().count()).max().unwrap_or(0);
+    // Keep the highlighted entry on screen when the list is longer than the
+    // room for it: an arrow that moves a selection you cannot see is worse
+    // than no arrow at all.
+    let first = selected.saturating_sub(shown - 1);
+    let widest =
+        suggestions.iter().skip(first).take(shown).map(|s| s.chars().count()).max().unwrap_or(0);
     let inner = widest.max("completions".len());
     let cols = (inner + 4).min(size.cols as usize);
     let inner = cols.saturating_sub(4);
@@ -79,9 +85,9 @@ pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget>
     let g = &theme.glyphs;
     let mut out = Vec::with_capacity(shown + 2);
     out.push(border_row(g, cols, " completions ", theme, true));
-    for (i, name) in suggestions.iter().take(shown).enumerate() {
-        // The first is what Tab takes, so it is the one that looks chosen.
-        let style = if i == 0 { theme.selection.style() } else { theme.panel.style() };
+    for (i, name) in suggestions.iter().enumerate().skip(first).take(shown) {
+        // The highlighted one is what the arrows chose and what Enter runs.
+        let style = if i == *selected { theme.selection.style() } else { theme.panel.style() };
         out.push(FrameRow {
             spans: vec![
                 Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() },
@@ -462,9 +468,14 @@ mod suggestion_tests {
     }
 
     fn mode(text: &str, names: &[&str]) -> Mode {
+        chosen(text, names, 0)
+    }
+
+    fn chosen(text: &str, names: &[&str], selected: usize) -> Mode {
         Mode::Command {
             text: text.into(),
             suggestions: names.iter().map(|s| s.to_string()).collect(),
+            selected,
         }
     }
 
@@ -484,6 +495,33 @@ mod suggestion_tests {
         // One candidate that is already what was typed is not a suggestion.
         assert!(suggestions(size(80, 24), &mode("zoom", &["zoom"]), &t).is_none());
         assert!(suggestions(size(80, 24), &Mode::Normal, &t).is_none());
+    }
+
+    #[test]
+    fn the_highlight_follows_the_selection() {
+        let m = chosen("s", &["one", "two", "three"], 2);
+        let w = suggestions(size(40, 24), &m, &Theme::haven()).expect("a box");
+        // Rows: border, three entries, border. The painted one is the third.
+        let painted: Vec<bool> = w.rows[1..4]
+            .iter()
+            .map(|r| r.spans[1].style == Theme::haven().selection.style())
+            .collect();
+        assert_eq!(painted, vec![false, false, true], "the wrong entry is highlighted");
+    }
+
+    #[test]
+    fn a_selection_below_the_fold_is_still_shown() {
+        // Two rows of room, a selection at the bottom of a longer list: the
+        // window has to move, or the arrows would appear to do nothing.
+        let names: Vec<String> = (0..8).map(|i| format!("cmd{i}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let m = chosen("c", &refs, 7);
+        let w = suggestions(size(40, 5), &m, &Theme::haven()).expect("a box");
+        let shown: Vec<String> = w.rows[1..w.rows.len() - 1]
+            .iter()
+            .map(|r| r.spans[1].text.trim().to_string())
+            .collect();
+        assert!(shown.contains(&"cmd7".to_string()), "the selection scrolled off: {shown:?}");
     }
 
     #[test]

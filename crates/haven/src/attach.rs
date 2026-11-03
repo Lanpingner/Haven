@@ -68,7 +68,23 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
             return Intercepted::Consumed;
         }
         match mode {
-            Mode::Command { text, suggestions } => {
+            Mode::Command { text, suggestions, selected } => {
+                // The arrows walk the completion box and put the chosen entry
+                // on the command line, so what Enter will run is always what
+                // is written there. They deliberately do not recompute the
+                // list: narrowing it to the one entry just selected would
+                // close the box after a single press.
+                let step = match &event.key {
+                    Key::Named(NamedKey::Down) => 1,
+                    Key::Named(NamedKey::Up) => -1,
+                    _ => 0,
+                };
+                if step != 0 && !suggestions.is_empty() {
+                    let len = suggestions.len() as i32;
+                    *selected = (((*selected as i32 + step) % len + len) % len) as usize;
+                    *text = suggestions[*selected].clone();
+                    return Intercepted::Consumed;
+                }
                 let out = match &event.key {
                     Key::Named(NamedKey::Escape) => {
                         *mode = Mode::Normal;
@@ -105,6 +121,9 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode) -> Intercepted {
                     _ => Intercepted::Consumed,
                 };
                 *suggestions = keys::complete(text).into_iter().map(|s| s.to_string()).collect();
+                // Typing moves the goalposts: a selection into the old list
+                // would point at whatever happens to sit at that index now.
+                *selected = 0;
                 return out;
             }
             Mode::Prefix => {
@@ -424,6 +443,73 @@ mod tests {
         // The same action the `%` binding produces: one vocabulary, two ways in.
         assert_eq!(out, Intercepted::Act(Wire::SplitColumns));
         assert_eq!(mode, Mode::Normal);
+    }
+
+    #[test]
+    fn the_arrows_walk_the_completions_and_put_one_on_the_line() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode);
+        filter(&key(Key::Char(':'), Modifiers::empty()), &mut mode);
+        filter(&key(Key::Char('s'), Modifiers::empty()), &mut mode);
+
+        let listed = match &mode {
+            Mode::Command { suggestions, .. } => suggestions.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(listed.len() > 2, "not enough candidates to walk: {listed:?}");
+
+        let down = key(Key::Named(NamedKey::Down), Modifiers::empty());
+        filter(&down, &mut mode);
+        assert_eq!(mode.command_text(), Some(listed[1].as_str()), "Down did not take the next one");
+        filter(&down, &mut mode);
+        assert_eq!(mode.command_text(), Some(listed[2].as_str()));
+
+        // The list must not narrow as the selection moves, or the box would
+        // close after one press.
+        match &mode {
+            Mode::Command { suggestions, selected, .. } => {
+                assert_eq!(suggestions, &listed, "the list was recomputed under the selection");
+                assert_eq!(*selected, 2);
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // Up wraps back round the top.
+        let up = key(Key::Named(NamedKey::Up), Modifiers::empty());
+        filter(&up, &mut mode);
+        filter(&up, &mut mode);
+        filter(&up, &mut mode);
+        assert_eq!(mode.command_text(), Some(listed[listed.len() - 1].as_str()), "Up did not wrap");
+    }
+
+    #[test]
+    fn enter_runs_what_the_arrows_chose() {
+        let mut filter = key_filter();
+        let mut mode = Mode::command(String::new());
+        for c in "split-".chars() {
+            filter(&key(Key::Char(c), Modifiers::empty()), &mut mode);
+        }
+        // split-h and split-v, in that order.
+        filter(&key(Key::Named(NamedKey::Down), Modifiers::empty()), &mut mode);
+        assert_eq!(mode.command_text(), Some("split-v"));
+        let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode);
+        assert_eq!(out, Intercepted::Act(Wire::SplitColumns));
+    }
+
+    #[test]
+    fn typing_after_arrowing_starts_the_selection_again() {
+        // Otherwise the old index points at whatever happens to sit there in
+        // the new, narrower list.
+        let mut filter = key_filter();
+        let mut mode = Mode::command(String::new());
+        filter(&key(Key::Char('s'), Modifiers::empty()), &mut mode);
+        filter(&key(Key::Named(NamedKey::Down), Modifiers::empty()), &mut mode);
+        filter(&key(Key::Char('x'), Modifiers::empty()), &mut mode);
+        match &mode {
+            Mode::Command { selected, .. } => assert_eq!(*selected, 0),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

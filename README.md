@@ -82,8 +82,10 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |
 
 `Tab` completes as far as the candidates agree. A box above the bar lists what
-matches as you type, with the first entry — what `Tab` would take — marked.
-`Esc` cancels, `Backspace` on an empty line leaves the mode.
+matches as you type, with one entry highlighted. `Up` and `Down` walk the list
+and put the highlighted entry on the command line, so what `Enter` runs is
+always what is written there; typing again starts the list over. `Esc`
+cancels, `Backspace` on an empty line leaves the mode.
 
 ### Tab names
 

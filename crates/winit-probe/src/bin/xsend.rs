@@ -82,6 +82,8 @@ fn main() {
             "Next" | "PageDown" => 0xff56,
             "Home" => 0xff50,
             "End" => 0xff57,
+            "Down" => 0xff54,
+            "Up" => 0xff52,
             _ => match ch.chars().next() {
                 Some(c) => c as u32,
                 None => continue,
