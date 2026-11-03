@@ -50,6 +50,14 @@ type Spawner = Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>;
 /// socket for as long as the session lives.
 pub type SessionEnv = std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>;
 
+/// Where a pane's shell may run other than on this machine, as the config
+/// currently says.
+///
+/// Shared for the same reason the environment is: a pane opened after the
+/// config changed must be spawned by the rules that are in force now, not by
+/// the ones that were in force when its session was made.
+pub type ContainerSettings = std::rc::Rc<std::cell::RefCell<haven_backend::Settings>>;
+
 struct SessionHost {
     name: String,
     /// The environment new panes in this session are given.
@@ -90,7 +98,10 @@ pub struct Daemon {
     sessions: BTreeMap<u32, SessionHost>,
     clients: Vec<Client>,
     next_session: u32,
-    make_spawner: Box<dyn FnMut(SessionEnv) -> Spawner>,
+    make_spawner: Box<dyn FnMut(SessionEnv, ContainerSettings) -> Spawner>,
+    /// Handed to every spawner, so a config reload reaches panes opened
+    /// afterwards without rebuilding anything.
+    containers: ContainerSettings,
     policy: ResizePolicy,
     shutting_down: bool,
     /// Configuration, re-read when the file moves. The daemon owns it so a
@@ -111,7 +122,10 @@ impl std::fmt::Debug for Daemon {
 impl Daemon {
     /// A daemon with no listener, driven by [`Daemon::accept_stream`]. This is
     /// what the tests use: no socket, no filesystem, no second process.
-    pub fn detached(make_spawner: impl FnMut(SessionEnv) -> Spawner + 'static) -> Self {
+    pub fn detached(
+        make_spawner: impl FnMut(SessionEnv, ContainerSettings) -> Spawner + 'static,
+    ) -> Self {
+        let config = config::ConfigWatcher::new(default_config_path(), default_theme_dir());
         Self {
             listener: None,
             socket_path: None,
@@ -119,9 +133,13 @@ impl Daemon {
             clients: Vec::new(),
             next_session: 1,
             make_spawner: Box::new(make_spawner),
+            // Seeded from the config rather than from the defaults: the
+            // first pane of the first session is spawned before any reload
+            // could have happened, and it is not a lesser pane.
+            containers: std::rc::Rc::new(std::cell::RefCell::new(config.containers())),
             policy: ResizePolicy::default(),
             shutting_down: false,
-            config: config::ConfigWatcher::new(default_config_path(), default_theme_dir()),
+            config,
             save_path: snapshot::default_path(),
             last_save: unix_now(),
         }
@@ -132,7 +150,7 @@ impl Daemon {
     /// not start until the user deletes a file.
     pub fn bind(
         path: impl AsRef<Path>,
-        make_spawner: impl FnMut(SessionEnv) -> Spawner + 'static,
+        make_spawner: impl FnMut(SessionEnv, ContainerSettings) -> Spawner + 'static,
     ) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
@@ -236,6 +254,7 @@ impl Daemon {
         // A changed theme invalidates what every client was last sent, which
         // is what turns an edit into a redraw rather than into nothing.
         if self.config.poll() {
+            *self.containers.borrow_mut() = self.config.containers();
             for client in &mut self.clients {
                 client.theme_sent = None;
                 client.keys_sent = None;
@@ -361,7 +380,20 @@ impl Daemon {
             ClientMsg::ListShells => {
                 let shells: Vec<String> =
                     haven_shell::available().iter().map(|p| p.display().to_string()).collect();
-                let _ = self.clients[index].framed.queue(&ServerMsg::Shells(shells));
+                // The same question, one message: which shell and where it
+                // runs are one decision, and two listings arriving
+                // separately would mean a menu that grows under the cursor.
+                let containers = haven_backend::targets(&self.config.containers())
+                    .into_iter()
+                    .map(|t| haven_proto::ContainerTarget {
+                        spec: t.spec,
+                        label: t.label,
+                        detail: t.detail,
+                        present: t.present,
+                        choosable: t.choosable,
+                    })
+                    .collect();
+                let _ = self.clients[index].framed.queue(&ServerMsg::Shells { shells, containers });
             }
             ClientMsg::ShowEnvironment => {
                 let env = self
@@ -520,7 +552,7 @@ impl Daemon {
         // session's first pane — which would otherwise be the one pane that
         // never saw the attaching client's environment.
         let cell: SessionEnv = std::rc::Rc::new(std::cell::RefCell::new(env.to_vec()));
-        let spawner = (self.make_spawner)(cell.clone());
+        let spawner = (self.make_spawner)(cell.clone(), self.containers.clone());
         let runtime = MuxRuntime::new(SessionId(id), &name, caps.size, spawner)?;
         self.sessions.insert(
             id,
@@ -625,6 +657,16 @@ impl Daemon {
                     snapshot::SavedPane {
                         cwd: runtime.cwd().map(|p| p.display().to_string()),
                         command: runtime.foreground_command().unwrap_or_default(),
+                        // Only ever a virtual shell, never an arbitrary
+                        // program: what a save file may cause to run is the
+                        // same question `restore_programs` exists to answer,
+                        // and this half of it is answered at restore time by
+                        // refusing to start anything that is not already up.
+                        program: runtime
+                            .program()
+                            .and_then(|p| p.to_str())
+                            .filter(|p| haven_backend::Spec::parse(p).is_some())
+                            .map(str::to_string),
                     }
                 })
             })
@@ -673,9 +715,19 @@ impl Daemon {
     fn restore_one(&mut self, saved: &snapshot::SavedSession, size: CellSize) -> io::Result<()> {
         let Some(first) = saved.windows.first() else { return Ok(()) };
         let allowed: Vec<String> = self.config.restore_programs().to_vec();
+        let containers = self.config.containers();
         let request = |pane: &snapshot::SavedPane| haven_mux::PaneRequest {
             size: haven_pty::PtySize { cols: 1, rows: 1, ..Default::default() },
-            program: None,
+            // A virtual shell comes back only if there is something to
+            // rejoin. A restore never starts a container: otherwise a file
+            // on disk would decide what runs on the machine after a reboot.
+            // A pane whose container is gone is an ordinary shell, which is
+            // the same thing every other restored pane is.
+            program: pane
+                .program
+                .as_deref()
+                .filter(|spec| haven_backend::rejoinable(spec, &containers))
+                .map(std::path::PathBuf::from),
             cwd: pane.cwd.as_ref().map(std::path::PathBuf::from),
             run: if snapshot::restorable(&pane.command, &allowed) {
                 pane.command.clone()
@@ -687,7 +739,7 @@ impl Daemon {
         let id = self.next_session;
         self.next_session += 1;
         let cell: SessionEnv = Default::default();
-        let spawner = (self.make_spawner)(cell.clone());
+        let spawner = (self.make_spawner)(cell.clone(), self.containers.clone());
         // The session is created with its first window's first pane, and the
         // rest of the shape is installed over it: `MuxRuntime::new` has to
         // make a pane, and a session with no panes is not representable.

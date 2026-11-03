@@ -400,43 +400,67 @@ fn server(args: Args) -> ExitCode {
             // already honours. Without this `server run -- prog -x` ran
             // `prog` with nothing, silently.
             let rest = args.rest.clone();
-            let make_spawner = move |env: haven_daemon::SessionEnv| {
-                let program = program.clone();
-                let rest = rest.clone();
-                let spawner: Box<
-                    dyn FnMut(haven_mux::PaneRequest) -> std::io::Result<haven_pty::Pty>,
-                > = Box::new(move |request| {
-                    // A pane asked to run something in particular gets
-                    // that and no arguments: the session's arguments
-                    // belong to the session's own program.
-                    let chosen = request.program.clone();
-                    let (mut cfg, _, _) = launch_config(
-                        chosen.as_deref().or(program.as_deref()),
-                        login,
-                        integrate,
-                        &ctx(login),
-                    );
-                    if chosen.is_none() {
-                        cfg.args.extend(rest.iter().cloned());
-                    }
-                    // Read at spawn time, not at session creation: a pane
-                    // opened after a reattach must get that attach's
-                    // agent socket, not the one the session was born with.
-                    cfg.env.extend(
-                        env.borrow().iter().map(|(k, v)| (k.clone().into(), v.clone().into())),
-                    );
-                    // A restored pane starts where it was, not where the
-                    // daemon happens to be — which after a reboot is `/`.
-                    // A directory that has since gone is ignored rather
-                    // than fatal: the pane is still worth having.
-                    if let Some(cwd) = request.cwd.as_ref().filter(|p| p.is_dir()) {
-                        cfg.cwd = Some(cwd.clone());
-                    }
-                    cfg.size = request.size;
-                    haven_pty::Pty::spawn(&cfg)
-                });
-                spawner
-            };
+            let make_spawner =
+                move |env: haven_daemon::SessionEnv,
+                      containers: haven_daemon::ContainerSettings| {
+                    let program = program.clone();
+                    let rest = rest.clone();
+                    let spawner: Box<
+                        dyn FnMut(haven_mux::PaneRequest) -> std::io::Result<haven_pty::Pty>,
+                    > = Box::new(move |request| {
+                        // A pane asked to run something in particular gets
+                        // that and no arguments: the session's arguments
+                        // belong to the session's own program.
+                        let chosen = request.program.clone();
+                        // A virtual shell is named in the same field an ordinary
+                        // program is, so it arrives here and nowhere else. The
+                        // whole feature crosses this one seam: nothing in the
+                        // protocol, the mux or the save format knows what a
+                        // container is.
+                        let virtual_shell =
+                            chosen.as_deref().and_then(|p| p.to_str()).and_then(|p| {
+                                haven_backend::launch(
+                                    p,
+                                    &haven_backend::Context {
+                                        settings: containers.borrow().clone(),
+                                        cwd: request.cwd.clone(),
+                                        dir: runtime_dir(),
+                                    },
+                                )
+                            });
+                        let mut cfg = match virtual_shell {
+                            Some(cfg) => cfg,
+                            None => {
+                                let (cfg, _, _) = launch_config(
+                                    chosen.as_deref().or(program.as_deref()),
+                                    login,
+                                    integrate,
+                                    &ctx(login),
+                                );
+                                cfg
+                            }
+                        };
+                        if chosen.is_none() {
+                            cfg.args.extend(rest.iter().cloned());
+                        }
+                        // Read at spawn time, not at session creation: a pane
+                        // opened after a reattach must get that attach's
+                        // agent socket, not the one the session was born with.
+                        cfg.env.extend(
+                            env.borrow().iter().map(|(k, v)| (k.clone().into(), v.clone().into())),
+                        );
+                        // A restored pane starts where it was, not where the
+                        // daemon happens to be — which after a reboot is `/`.
+                        // A directory that has since gone is ignored rather
+                        // than fatal: the pane is still worth having.
+                        if let Some(cwd) = request.cwd.as_ref().filter(|p| p.is_dir()) {
+                            cfg.cwd = Some(cwd.clone());
+                        }
+                        cfg.size = request.size;
+                        haven_pty::Pty::spawn(&cfg)
+                    });
+                    spawner
+                };
             match haven_daemon::Daemon::bind(&socket, make_spawner) {
                 Ok(mut daemon) => match daemon.run() {
                     Ok(()) => ExitCode::SUCCESS,

@@ -46,6 +46,10 @@ welcome as pull requests against this page.
 - **GPU text and scrollback** in the same program that owns the panes.
 - **Save and restore built in**, not a plugin you have to find — and with the
   same allowlist discipline `tmux-resurrect` arrived at, for the same reason.
+- **A pane can be another distro.** The shell chooser lists containers next to
+  your shells, so an Arch shell is two keys rather than a `docker run` you
+  have to remember the flags for. See
+  [a pane that is another distro](./containers.md).
 
 ### Over kitty
 

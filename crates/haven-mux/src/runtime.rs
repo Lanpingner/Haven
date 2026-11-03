@@ -27,6 +27,10 @@ pub struct PaneRuntime {
     pub exited: Option<ExitStatus>,
     /// The size we last told the child about, to avoid redundant `SIGWINCH`.
     size: PtySize,
+    /// What this pane was asked to run, kept because `/proc` cannot answer
+    /// it: a pane whose shell lives in a container runs the container CLI,
+    /// and asking the kernel gives the wrapper rather than the request.
+    program: Option<std::path::PathBuf>,
 }
 
 impl PaneRuntime {
@@ -50,6 +54,11 @@ impl PaneRuntime {
     /// Where this pane's shell is, for saving a session.
     pub fn cwd(&self) -> Option<std::path::PathBuf> {
         self.pty.cwd()
+    }
+
+    /// What this pane was asked to run, if anything in particular.
+    pub fn program(&self) -> Option<&std::path::Path> {
+        self.program.as_deref()
     }
 
     /// What is running in the foreground, when it is not just the shell.
@@ -533,12 +542,14 @@ fn make_pane<F: FnMut(PaneRequest) -> io::Result<Pty>>(
     request: PaneRequest,
 ) -> io::Result<PaneRuntime> {
     let size = request.size;
+    let program = request.program.clone();
     let pty = spawn(request)?;
     Ok(PaneRuntime {
         pty,
         emulator: Emulator::new(size.cols as usize, size.rows as usize),
         exited: None,
         size,
+        program,
     })
 }
 

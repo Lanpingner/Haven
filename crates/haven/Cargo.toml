@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 haven-core.workspace = true
 haven-pty.workspace = true
+haven-backend.workspace = true
 haven-shell.workspace = true
 haven-client.workspace = true
 haven-mux.workspace = true

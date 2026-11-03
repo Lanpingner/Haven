@@ -45,8 +45,25 @@ pub enum Action {
     },
     /// Offer the daemon's shells, and run the one picked with this command.
     /// `new-window` by default, so the key that offers a shell does the same
-    /// thing as the key that makes a tab.
+    /// thing as the key that makes a tab. Containers are in the same menu:
+    /// which shell and where it runs are one decision.
     ChooseShell(String),
+    /// A container picked from that menu, with one question left: does what
+    /// you install in it outlive the pane. The menu's second step, and a
+    /// command of its own so the menu stays data rather than code.
+    ContainerShell {
+        verb: String,
+        spec: String,
+    },
+    /// Which host directories container panes are given. Both `None` asks
+    /// what they are. A command rather than a config key because a mount can
+    /// only be chosen before the container starts, so it belongs to opening
+    /// the pane — and because nothing of the machine is mounted by default,
+    /// which is the right default and the wrong one to be stuck with.
+    ContainerMounts {
+        add: Option<String>,
+        remove: Option<String>,
+    },
     SaveSessions,
     RestoreSessions,
     /// Every command, as a list you narrow by typing.
@@ -104,6 +121,9 @@ pub const PAGE_ROWS: i32 = 20;
 pub const COMMANDS: &[&str] = &[
     "choose",
     "choose-shell",
+    "container-mount",
+    "container-mounts",
+    "container-unmount",
     "command-palette",
     "switch-table",
     "command-prompt",
@@ -292,6 +312,23 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
             Some(verb) => verb,
             None => "new-window".to_string(),
         }),
+        "container-shell" => {
+            let mut words = line.split_whitespace().skip(1);
+            let how = words.next().ok_or_else(|| "container-shell needs a command".to_string())?;
+            let spec = words.next().ok_or_else(|| "container-shell needs a spec".to_string())?;
+            Action::ContainerShell { verb: how.to_string(), spec: spec.to_string() }
+        }
+        "container-mount" | "mount" => Action::ContainerMounts {
+            add: Some(optional(line, verb).ok_or_else(|| "mount needs a directory".to_string())?),
+            remove: None,
+        },
+        "container-unmount" | "unmount" => Action::ContainerMounts {
+            add: None,
+            remove: Some(
+                optional(line, verb).ok_or_else(|| "unmount needs a directory".to_string())?,
+            ),
+        },
+        "container-mounts" | "mounts" => Action::ContainerMounts { add: None, remove: None },
         "palette" | "command-palette" => Action::CommandPalette,
         "switch-table" | "table" => Action::SwitchTable(rest_of(line, verb)),
         "save-sessions" | "save" => Action::SaveSessions,
@@ -421,6 +458,8 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::DisplayPanes
         | Action::FindWindow(_)
         | Action::ChooseShell(_)
+        | Action::ContainerShell { .. }
+        | Action::ContainerMounts { .. }
         | Action::CommandPalette
         | Action::SwitchTable(_) => return None,
         Action::NextLayout => P::NextLayout,
@@ -622,9 +661,12 @@ mod tests {
         // A completion that suggests something `parse_command` rejects would
         // be worse than no completion at all.
         for name in COMMANDS {
-            // Two take a number, and the rest stand alone.
+            // Two take a number, two take a directory, and the rest stand
+            // alone. The ones that need an argument are offered through
+            // `command-prompt`, which is what `palette_entry` is for.
             let line = match *name {
                 "select-window" | "join-pane" => format!("{name} 1"),
+                "container-mount" | "container-unmount" => format!("{name} /src"),
                 other => other.to_string(),
             };
             assert!(parse_command(&line).is_ok(), "{name} is offered but does not parse");

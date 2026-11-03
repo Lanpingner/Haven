@@ -4,6 +4,7 @@ members = [
     "crates/haven-core",
     "crates/haven-pty",
     "crates/haven-shell",
+    "crates/haven-backend",
     "crates/haven-vtwrite",
     "crates/haven-proto",
     "crates/haven-mux",
@@ -26,6 +27,7 @@ repository = "https://github.com/berromaa/HavenTerminal"
 haven-core = { path = "crates/haven-core" }
 haven-pty = { path = "crates/haven-pty" }
 haven-shell = { path = "crates/haven-shell" }
+haven-backend = { path = "crates/haven-backend" }
 haven-vtwrite = { path = "crates/haven-vtwrite" }
 haven-proto = { path = "crates/haven-proto" }
 haven-mux = { path = "crates/haven-mux" }

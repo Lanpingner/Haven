@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -294,8 +294,11 @@ pub enum ClientMsg {
     /// Control-mode queries, which the CLI is built on: anything `haven ls`
     /// can do, a script can do (`docs/PLAN.md` §14.2).
     ListSessions,
-    /// What shells the *daemon's* machine has. Asked for rather than guessed
-    /// at by the client, because the pane is spawned where the daemon is.
+    /// What shells the *daemon's* machine has, and what containers it could
+    /// put one in. Asked for rather than guessed at by the client, because
+    /// the pane is spawned where the daemon is: a client's idea of where
+    /// `fish` lives, or of which images are pulled, means nothing once a
+    /// session is on another host.
     ListShells,
     /// Write every session's shape to the save file, or read it back.
     ///
@@ -426,6 +429,26 @@ impl Tables {
     }
 }
 
+/// Somewhere a pane's shell could run that is not this machine's filesystem.
+///
+/// Described rather than named, because a client must be able to draw the
+/// menu without knowing what a container is: it has a label, a second
+/// column, and a `spec` string it hands back untouched.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct ContainerTarget {
+    /// The pane program that opens it, e.g. `docker://run/alpine:latest`.
+    pub spec: String,
+    pub label: String,
+    /// The second column: a size, a status, or that it is not here yet.
+    pub detail: String,
+    /// Already on the daemon's machine. One that is not has to be fetched
+    /// first, which the menu says out loud rather than leaving to be
+    /// discovered by a pane that sits still for two minutes.
+    pub present: bool,
+    /// Whether opening it poses the lasting-or-throwaway question.
+    pub choosable: bool,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum ServerMsg {
     Hello {
@@ -466,7 +489,15 @@ pub enum ServerMsg {
         problem: Option<String>,
     },
     /// Answer to [`ClientMsg::ListShells`], most useful first.
-    Shells(Vec<String>),
+    ///
+    /// One message with both halves, because they are one menu: picking
+    /// where a shell runs is the same decision as picking which shell, and
+    /// two listings arriving separately would mean a menu that grows under
+    /// the cursor after it has been opened.
+    Shells {
+        shells: Vec<String>,
+        containers: Vec<ContainerTarget>,
+    },
     /// Answer to [`ClientMsg::ShowEnvironment`].
     Environment(Vec<(String, String)>),
     /// The key table. Sent on attach and whenever the config changes, for

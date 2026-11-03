@@ -2,11 +2,11 @@
 
 **Usable, with plenty still ahead.** `mc`, `vim` and `htop` render correctly;
 sessions, splits, tabs, zoom, attach/detach, copy mode, the mouse, configurable
-bindings, save and restore, shell integration, themes and a GPU window all
-work.
+bindings, save and restore, shell integration, container panes, themes and a
+GPU window all work.
 
 The [design plan](./plan.md) tracks this milestone by milestone, updated as
-work lands so the document cannot drift from the tree. 530 tests, zero clippy
+work lands so the document cannot drift from the tree. 582 tests, zero clippy
 warnings, `cargo test --workspace` green.
 
 ## Working
@@ -31,6 +31,10 @@ warnings, `cargo test --workspace` green.
 - **Shells** — bash, zsh, fish and a generic implementation behind one `Shell`
   trait, with correct job control and signal delivery, correct environment,
   native-capability detection, and `ZDOTDIR` / `--rcfile` shims.
+- **[Containers as panes](./containers.md)** — the shell chooser also lists
+  running containers, your images and a few distros that are not pulled yet;
+  a pull happens in the pane and says so, a kept container is reused by later
+  panes, and every failure leaves a working shell and a reason.
 - **Interface** — status bar with zoom, sync, activity and bell marks; command
   line with completion you can walk with the arrows; the session tree; a pane
   numbering overlay; `find-window`; scrollback reading; live theming and live

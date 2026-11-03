@@ -61,6 +61,11 @@ pub struct SavedPane {
     /// re-run: a save file people can read is worth more than a tidy one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub command: Vec<String>,
+    /// The virtual shell this pane was opened as, if it was one — e.g.
+    /// `docker://run/archlinux:latest?keep`. Written only for a spec the
+    /// backends recognise, never for an arbitrary program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
 }
 
 /// The pane tree as the file holds it.
@@ -271,10 +276,16 @@ mod tests {
                 active_pane: 1,
                 layout: SavedNode::from_tree(&tree(), &tree().panes()),
                 panes: vec![
-                    SavedPane { cwd: Some("/tmp".into()), command: vec![] },
+                    SavedPane { cwd: Some("/tmp".into()), ..Default::default() },
                     SavedPane {
                         cwd: Some("/var".into()),
                         command: vec!["vim".into(), "a.txt".into()],
+                        ..Default::default()
+                    },
+                    SavedPane {
+                        cwd: Some("/src".into()),
+                        program: Some("docker://run/alpine:latest?keep".into()),
+                        ..Default::default()
                     },
                     SavedPane::default(),
                 ],

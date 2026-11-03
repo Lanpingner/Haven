@@ -34,7 +34,7 @@ rather than a code change.
 | `D` | detach every other client |
 | `Ctrl+S` / `Ctrl+R` | [save](./sessions.md) every session / build back the saved ones |
 | `P` | the command palette |
-| `g` / `G` | new tab / new pane, [choosing what runs in it](./sessions.md#choosing-a-shell) |
+| `g` / `G` | new tab / new pane, [choosing what runs in it](./sessions.md#choosing-a-shell) — a shell, or [another distro](./containers.md) |
 | `[` / `]` | enter copy mode / paste the newest buffer |
 | `d` | detach |
 | `:` | open the command line |
@@ -50,7 +50,7 @@ the history that exists.
 
 | Key | Action |
 |---|---|
-| `Alt+C` | open a tab and [choose what runs in it](./sessions.md#choosing-a-shell) |
+| `Alt+C` | open a tab and [choose what runs in it](./sessions.md#choosing-a-shell): a local shell or [a container](./containers.md) |
 | `Alt+P` | the command palette |
 
 Those two are the defaults, and the *root table* they live in is the same

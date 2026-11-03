@@ -65,6 +65,15 @@ pub enum Intercepted {
     /// Ask the daemon what shells it has, and run the one picked with this
     /// command — `new-window` for a tab, `split-v` for a pane.
     ChooseShell(String),
+    /// A container was picked from the shell menu and has a question left to
+    /// answer: does what you install in it survive the pane. Asked here
+    /// rather than guessed, and asked per pane because the answer differs
+    /// per pane — a scratch Arch to try one command, a kept Ubuntu to build
+    /// in all week.
+    ChooseLifetime { verb: String, spec: String },
+    /// Change which host directories a container pane is given. `add` and
+    /// `remove` are both `None` for a request to simply say what they are.
+    ContainerMounts { add: Option<String>, remove: Option<String> },
     /// Show a menu the composition root built, since only it knows what the
     /// commands are. Title, then label-and-command pairs.
     OpenMenu { title: String, entries: Vec<(String, String)>, filterable: bool },
@@ -129,6 +138,13 @@ pub struct Client<F, T> {
     /// What to do with the shell picked from the menu, held between asking
     /// the daemon for the list and the list arriving.
     pub shell_verb: String,
+    /// Host directories handed to container panes opened from here.
+    ///
+    /// Client-side and deliberately so: a mount can only be decided before
+    /// the container starts, so it belongs to the act of opening a pane
+    /// rather than to the session. Empty by default — a distro pane sees
+    /// nothing of the machine until you say otherwise.
+    pub container_mounts: Vec<String>,
     /// Pane numbers are on screen until the next keystroke.
     showing_panes: bool,
     /// The key table, as the daemon's config describes it.
@@ -176,6 +192,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             menu: None,
             buffers: Vec::new(),
             shell_verb: "new-window".into(),
+            container_mounts: Vec::new(),
             mouse_enabled: true,
             showing_panes: false,
             environment: Vec::new(),
@@ -203,6 +220,69 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         })?;
         self.attached = true;
         Ok(())
+    }
+
+    /// A command with this client's container mounts appended.
+    ///
+    /// Only a spec can take them: appending to `new-window /bin/bash` would
+    /// be nonsense, and the test suite says so.
+    fn with_mounts(&self, command: &str) -> String {
+        if self.container_mounts.is_empty() || !command.contains("://") {
+            return command.to_string();
+        }
+        let mut out = command.to_string();
+        for mount in &self.container_mounts {
+            out.push(if out.contains('?') { '&' } else { '?' });
+            out.push_str("mount=");
+            out.push_str(mount);
+        }
+        out
+    }
+
+    /// The second half of picking a container: does it last.
+    ///
+    /// A menu rather than two entries per distro in the first one. The list
+    /// of places to run a shell is long and worth reading; doubling it to
+    /// carry an answer that only applies to half of its entries makes the
+    /// common case worse to serve the second question.
+    fn ask_lifetime(&mut self, verb: &str, spec: &str) {
+        let name = spec.rsplit('/').next().unwrap_or(spec);
+        self.menu = Some(menu::Menu::new(
+            format!("{name} — keep what you install in it?"),
+            vec![
+                (
+                    "keep        packages and files survive the pane".to_string(),
+                    self.with_mounts(&format!("{verb} {spec}?keep")),
+                ),
+                (
+                    "scratch     gone when the pane closes".to_string(),
+                    self.with_mounts(&format!("{verb} {spec}?scratch")),
+                ),
+            ],
+        ));
+    }
+
+    /// Add or drop a mount, or just say what they are. Returns the line to
+    /// show, because a command that changes something invisible and says
+    /// nothing is indistinguishable from one that failed.
+    fn change_mounts(&mut self, add: Option<String>, remove: Option<String>) -> String {
+        if let Some(path) = add {
+            if !self.container_mounts.contains(&path) {
+                self.container_mounts.push(path);
+            }
+        }
+        if let Some(path) = remove {
+            // Matched on either half, so `container-unmount /src` drops
+            // `/src:/work` as well: you asked about the directory, and
+            // having to retype the destination to undo a mount is a trap.
+            self.container_mounts
+                .retain(|m| m != &path && m.split(':').next() != Some(path.as_str()));
+        }
+        if self.container_mounts.is_empty() {
+            "container panes see none of this machine".to_string()
+        } else {
+            format!("container panes get {}", self.container_mounts.join(", "))
+        }
     }
 
     /// Open the session tree, asking the daemon for a fresh listing: the one
@@ -830,6 +910,14 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                         self.transport.send(ClientMsg::ListShells)?;
                         return Ok(Tick::Idle);
                     }
+                    Some(Intercepted::ChooseLifetime { verb, spec }) => {
+                        self.ask_lifetime(&verb, &spec);
+                        return Ok(Tick::Redraw);
+                    }
+                    Some(Intercepted::ContainerMounts { add, remove }) => {
+                        self.frame.notice = Some(self.change_mounts(add, remove));
+                        return Ok(Tick::Redraw);
+                    }
                     Some(Intercepted::OpenMenu { title, entries, filterable }) => {
                         let mut menu = menu::Menu::new(title, entries);
                         if filterable {
@@ -970,21 +1058,34 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 });
                 true
             }
-            ServerMsg::Shells(shells) => {
+            ServerMsg::Shells { shells, containers } => {
                 // The listing is what the menu was opened for; until it
                 // arrives there is nothing to show.
                 let verb = self.shell_verb.clone();
                 let where_ = if verb.starts_with("split") { "pane" } else { "tab" };
-                self.menu = Some(menu::Menu::new(
-                    format!("run in a new {where_}"),
-                    shells
-                        .iter()
-                        .map(|path| {
-                            let name = path.rsplit('/').next().unwrap_or(path).to_string();
-                            (format!("{name:<8} {path}"), format!("{verb} {path}"))
-                        })
-                        .collect(),
-                ));
+                let mut entries: Vec<(String, String)> = shells
+                    .iter()
+                    .map(|path| {
+                        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+                        (format!("{name:<10} {path}"), self.with_mounts(&format!("{verb} {path}")))
+                    })
+                    .collect();
+                // One menu, not two. Which shell and where it runs are the
+                // same decision — "give me a shell" — and splitting them
+                // across two keys would mean knowing which kind of shell you
+                // wanted before you had seen the list.
+                entries.extend(containers.iter().map(|target| {
+                    let label = format!("{:<10} {}  {}", "container", target.label, target.detail);
+                    let command = if target.choosable {
+                        // One question still to ask, so this entry opens a
+                        // menu rather than a pane.
+                        format!("container-shell {verb} {}", target.spec)
+                    } else {
+                        self.with_mounts(&format!("{verb} {}", target.spec))
+                    };
+                    (label, command)
+                }));
+                self.menu = Some(menu::Menu::new(format!("run in a new {where_}"), entries));
                 true
             }
             ServerMsg::Environment(env) => {

@@ -210,6 +210,8 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::Copy) => Intercepted::EnterCopy,
         Ok(Action::DisplayPanes) => Intercepted::DisplayPanes,
         Ok(Action::ChooseShell(verb)) => Intercepted::ChooseShell(verb),
+        Ok(Action::ContainerShell { verb, spec }) => Intercepted::ChooseLifetime { verb, spec },
+        Ok(Action::ContainerMounts { add, remove }) => Intercepted::ContainerMounts { add, remove },
         // Both need the client's mode, which a typed line has no access to.
         Ok(Action::SwitchTable(_)) => Intercepted::Consumed,
         Ok(Action::CommandPalette) => Intercepted::OpenMenu {
@@ -666,6 +668,77 @@ mod tests {
             keys::parse_command("choose-shell split-v"),
             Ok(keys::Action::ChooseShell("split-v".into()))
         );
+    }
+
+    #[test]
+    fn a_container_from_the_shell_menu_asks_whether_it_lasts() {
+        // Picking a distro is two questions, and the second one is the one
+        // that matters a week later: did what I install in here survive.
+        assert_eq!(
+            run_command("container-shell new-window docker://run/archlinux:latest"),
+            Intercepted::ChooseLifetime {
+                verb: "new-window".into(),
+                spec: "docker://run/archlinux:latest".into()
+            }
+        );
+    }
+
+    #[test]
+    fn the_answer_to_that_question_is_an_ordinary_new_window() {
+        // What the second menu produces is the plain command with the whole
+        // spec as the program, so nothing past this point knows a container
+        // was involved — not the protocol, not the mux, not the save file.
+        assert_eq!(
+            run_command("new-window docker://run/archlinux:latest?keep"),
+            Intercepted::Act(Wire::NewWindow {
+                program: Some("docker://run/archlinux:latest?keep".into())
+            })
+        );
+        assert_eq!(
+            run_command("split-v docker://run/alpine:latest?scratch&mount=cwd"),
+            Intercepted::Act(Wire::SplitColumns {
+                program: Some("docker://run/alpine:latest?scratch&mount=cwd".into())
+            })
+        );
+    }
+
+    #[test]
+    fn a_running_container_is_opened_without_being_asked_about() {
+        // It already exists, so there is no lifetime to choose: it outlives
+        // the pane whatever the pane does.
+        assert_eq!(
+            run_command("new-window docker://exec/web"),
+            Intercepted::Act(Wire::NewWindow { program: Some("docker://exec/web".into()) })
+        );
+    }
+
+    #[test]
+    fn mounts_are_added_dropped_and_asked_about() {
+        assert_eq!(
+            run_command("container-mount /Projects"),
+            Intercepted::ContainerMounts { add: Some("/Projects".into()), remove: None }
+        );
+        // `cwd` is the word for the directory the pane was opened in,
+        // resolved where the pane is spawned rather than where it was typed.
+        assert_eq!(
+            run_command("mount cwd"),
+            Intercepted::ContainerMounts { add: Some("cwd".into()), remove: None }
+        );
+        assert_eq!(
+            run_command("container-unmount /Projects"),
+            Intercepted::ContainerMounts { add: None, remove: Some("/Projects".into()) }
+        );
+        assert_eq!(
+            run_command("container-mounts"),
+            Intercepted::ContainerMounts { add: None, remove: None }
+        );
+    }
+
+    #[test]
+    fn a_mount_with_no_directory_is_an_error_rather_than_a_silent_nothing() {
+        assert!(keys::parse_command("container-mount").is_err());
+        assert!(keys::parse_command("container-unmount").is_err());
+        assert!(keys::parse_command("container-shell new-window").is_err());
     }
 
     #[test]

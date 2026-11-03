@@ -840,6 +840,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 name = "haven"
 version = "0.0.1"
 dependencies = [
+ "haven-backend",
  "haven-client",
  "haven-core",
  "haven-daemon",
@@ -852,6 +853,14 @@ dependencies = [
  "haven-vtwrite",
  "libc",
  "rustix 1.1.6",
+]
+
+[[package]]
+name = "haven-backend"
+version = "0.0.1"
+dependencies = [
+ "haven-pty",
+ "haven-shell",
 ]
 
 [[package]]
@@ -878,6 +887,7 @@ dependencies = [
 name = "haven-daemon"
 version = "0.0.1"
 dependencies = [
+ "haven-backend",
  "haven-client",
  "haven-core",
  "haven-mux",

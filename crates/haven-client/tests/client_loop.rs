@@ -492,7 +492,10 @@ fn the_shell_listing_becomes_a_menu_that_does_what_was_asked() {
     // where the pane will be spawned.
     let server = ScriptedTransport::new([
         ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
-        ServerMsg::Shells(vec!["/usr/bin/fish".into(), "/bin/bash".into()]),
+        ServerMsg::Shells {
+            shells: vec!["/usr/bin/fish".into(), "/bin/bash".into()],
+            containers: vec![],
+        },
     ]);
     let frontend = ScriptedFrontend::new(size(20, 6), []);
     let mut client = Client::new(frontend, server);
@@ -513,12 +516,82 @@ fn the_shell_listing_becomes_a_menu_that_does_what_was_asked() {
 }
 
 #[test]
+fn containers_are_in_the_same_menu_as_the_shells() {
+    // One menu, because it is one decision: "give me a shell" does not
+    // split into "which shell" and "where" until after you have seen the
+    // list. Two keys would mean choosing before you knew.
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Shells {
+            shells: vec!["/bin/bash".into()],
+            containers: vec![
+                haven_proto::ContainerTarget {
+                    spec: "docker://exec/web".into(),
+                    label: "web".into(),
+                    detail: "nginx:latest · Up 2 hours".into(),
+                    present: true,
+                    choosable: false,
+                },
+                haven_proto::ContainerTarget {
+                    spec: "docker://run/archlinux:latest".into(),
+                    label: "archlinux:latest".into(),
+                    detail: "not pulled yet".into(),
+                    present: false,
+                    choosable: true,
+                },
+            ],
+        },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 8), []), server);
+    client.tick().unwrap();
+
+    let menu = client.menu.as_ref().expect("no menu");
+    assert_eq!(menu.entries.len(), 3, "{:?}", menu.entries);
+    assert_eq!(menu.entries[0].1, "new-window /bin/bash");
+    // A container that is already up has nothing left to ask, so it opens.
+    assert_eq!(menu.entries[1].1, "new-window docker://exec/web");
+    // An image does: hence a command that opens the second question rather
+    // than a pane.
+    assert_eq!(menu.entries[2].1, "container-shell new-window docker://run/archlinux:latest");
+    // And the list says what it would cost before you pick it: a pane that
+    // sits blank while half a gigabyte arrives looks broken.
+    assert!(menu.entries[2].0.contains("not pulled yet"), "{}", menu.entries[2].0);
+}
+
+#[test]
+fn mounts_follow_the_container_and_leave_ordinary_shells_alone() {
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Shells {
+            shells: vec!["/bin/bash".into()],
+            containers: vec![haven_proto::ContainerTarget {
+                spec: "docker://exec/web".into(),
+                label: "web".into(),
+                detail: String::new(),
+                present: true,
+                choosable: false,
+            }],
+        },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 8), []), server);
+    client.container_mounts = vec!["cwd".into(), "/srv:/work".into()];
+    client.tick().unwrap();
+
+    let menu = client.menu.as_ref().expect("no menu");
+    assert_eq!(
+        menu.entries[0].1, "new-window /bin/bash",
+        "a local shell has nothing to mount and must not be given mount options"
+    );
+    assert_eq!(menu.entries[1].1, "new-window docker://exec/web?mount=cwd&mount=/srv:/work");
+}
+
+#[test]
 fn the_shell_menu_can_be_asked_for_a_pane_instead() {
     // The same menu, a different verb: what to do with the pick travels
     // with the request rather than being baked into the menu.
     let server = ScriptedTransport::new([
         ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
-        ServerMsg::Shells(vec!["/bin/bash".into()]),
+        ServerMsg::Shells { shells: vec!["/bin/bash".into()], containers: vec![] },
     ]);
     let frontend = ScriptedFrontend::new(size(20, 6), []);
     let mut client = Client::new(frontend, server);

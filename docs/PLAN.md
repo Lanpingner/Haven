@@ -442,6 +442,74 @@ keyboard protocol if we advertise it, which is the fast path to T3 fidelity.
 
 ---
 
+### 9.5 Virtual shells (`haven-backend`)
+
+A pane's shell need not live on this machine's filesystem. `haven-shell`
+answers *which shell, and how does its integration load*; `haven-backend`
+answers the question one level out: *where does it run at all*. Containers
+first, because that is the one people ask for; the shape is built so a VM, an
+ssh host or a namespace is an impl and a registry line rather than a design.
+
+The trait is deliberately the one `Shell` already earned — `name`, `targets`,
+`launch`, `rejoinable`, one impl per thing, nothing else branching on which
+one it is.
+
+**It crosses no new seams.** A virtual shell is named by a string:
+
+```
+docker://run/archlinux:latest?keep&mount=cwd
+docker://exec/web
+```
+
+which travels as the pane's **program** — the field that already existed, that
+the daemon already interprets on its own machine, that the save file already
+records and that the command line already accepts. So
+`haven run -- new-window 'docker://run/alpine:latest?scratch'` works for free,
+and nothing in the protocol, the mux or the emulator knows what a container
+is. The one addition to the wire is a `ContainerTarget` in the shell listing,
+described rather than named: a label, a second column, and a spec the client
+hands back untouched.
+
+**`launch` cannot fail.** It returns a `PtyConfig` that runs a short shell
+script, and every way the thing can go wrong — no CLI, a failed pull, a
+container that has stopped — is handled *inside* that script, in the pane,
+ending in `exec $SHELL` with a line saying why. Two reasons. A pane that
+closed before its error could be read takes the explanation with it; and a
+spawn error on this path reaches the daemon's event loop, which should not
+have to care whether Docker is installed.
+
+**The pull is in the pane.** `docker run` would fetch an absent image by
+itself, after one terse line and then several hundred megabytes of
+undifferentiated progress. Doing it explicitly means the pane says what is
+happening and that it happens once — the second Arch pane is instant, and
+nobody who was not told that would guess it.
+
+**Two questions are asked rather than configured.** Which host directories a
+container pane gets (none by default: a distro pane is usually opened to be
+*away* from your files) and whether what you install in it survives the pane.
+The second is asked per pane because the answer differs per pane — scratch to
+try one command, kept to build in all week — so a config key would force one
+afternoon's answer on the other. The menu asks it as a second step rather
+than listing every distro twice.
+
+**The restore line.** A save file decides what a machine runs when it comes
+back, which is why `restore_programs` is an allowlist. The same reasoning
+here: a restored pane may *rejoin* a container that is already running and may
+never start one. That is self-limiting — no file can cause a container to be
+created — and a pane whose container is gone is an ordinary shell, which is
+what every restored pane is anyway.
+
+**Integration is offered, not installed.** The script is bind-mounted
+read-only at `/haven`; bash loads it via `--rcfile` after the container's own
+rc files; anything else gets the environment and no marks. Which shell runs is
+decided *inside*, by `command -v`, because it cannot be decided outside:
+alpine has ash and no bash, and guessing from an image name is wrong for
+every image nobody curated.
+
+**`docker` is a setting.** podman takes every argument used here unchanged, so
+`cli = "podman"` is the whole of podman support, and a test asserts the word
+`docker` appears nowhere in a launch built with another CLI.
+
 ## 10. Multiplexing model (`haven-mux`)
 
 ```
@@ -1052,7 +1120,7 @@ rewrite.
 ## 20. Implementation status
 
 Updated as milestones land, so the plan above does not drift from the tree.
-**295 tests, zero clippy warnings, `cargo test --workspace` green.**
+**582 tests, zero clippy warnings, `cargo test --workspace` green.**
 
 | Milestone | State |
 |---|---|
@@ -1068,9 +1136,9 @@ Updated as milestones land, so the plan above does not drift from the tree.
 | **M1** GPU frontend | Done bar polish. wgpu pipelines, shelf-packed glyph atlas, font fallback with a last-resort system scan, sRGB-correct colour, procedural box drawing, a winit window with vsync, and `haven screenshot` so the renderer stays reviewable without a display. No italic faces, no ligatures, no colour emoji yet. |
 | **M4** keyboard | Partial. A prefix key table resolving to a declarative `Action`, shared by the standalone and attached paths. The modal stack, configurable bindings, palette and copy mode are still to come. |
 
-**Crates:** `haven-core`, `haven-pty`, `haven-shell`, `haven-vtwrite`,
-`haven-proto`, `haven-client`, `haven-tui`, `haven-mux`, `haven-daemon`,
-`haven`.
+**Crates:** `haven-core`, `haven-pty`, `haven-shell`, `haven-backend`,
+`haven-vtwrite`, `haven-proto`, `haven-client`, `haven-tui`, `haven-mux`,
+`haven-daemon`, `haven`.
 
 **Deviations from the plan above, deliberately:**
 - **The daemon uses a poll loop, not tokio.** The pane pump was already
@@ -1083,6 +1151,10 @@ Updated as milestones land, so the plan above does not drift from the tree.
 **Not started:** plugins (M3.5), live daemon upgrade (M5.9), fidelity tiers
 end-to-end (M6.5), sixel/kitty graphics. Ligatures need a shaping engine;
 bold, italic and colour faces are in.
+
+Containers as panes are in (§9.5), inside the shell chooser rather than beside
+it: which shell and where it runs are one decision, and a second key would
+have meant choosing between them before seeing either list.
 
 **Still missing against tmux**, deliberately and with reasons: hooks and the
 `run-shell`/`if-shell` family, which are a scripting language rather than a

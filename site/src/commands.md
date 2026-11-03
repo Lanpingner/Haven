@@ -21,7 +21,9 @@ the other.
 | `scroll-up`, `scroll-down`, `scroll-top`, `scroll-end` | as the paging keys do |
 | `copy-mode` (`copy`), `paste-buffer` | enter copy mode / paste the newest buffer |
 | `choose` | the session tree |
-| `choose-shell [verb]` | the shell menu; `verb` is what to do with the pick, `new-window` by default |
+| `choose-shell [verb]` | the shell menu, [containers and all](./containers.md); `verb` is what to do with the pick, `new-window` by default |
+| `container-mount <path>` (`mount`) | hand a host directory to [container panes](./containers.md); `cwd` means the pane's own |
+| `container-unmount <path>` (`unmount`), `container-mounts` (`mounts`) | stop handing one over / say what they are |
 | `command-palette` (`palette`) | every command, narrowed by typing |
 | `switch-table <name>` | arm a [key table](./keys.md#key-tables) |
 | `display-panes`, `find-window <text>` | number the panes / go to a tab by name |
@@ -70,7 +72,9 @@ Haven scriptable at all:
 
 ```sh
 haven run -- split-v
+haven run -- new-window 'docker://run/alpine:latest?scratch'
 haven run -- send-keys 'cargo test\n'
+haven run -- new-window 'docker://run/alpine:latest?scratch'
 haven run -t 2 -- select-window 3
 ```
 

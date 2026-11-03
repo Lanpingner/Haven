@@ -24,7 +24,7 @@ with `mdbook serve site --open`; the last chapter includes this repository's
 ## Try it
 
 ```sh
-cargo test --workspace     # 295 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 582 tests, incl. mc/vim/less driven on real ptys
 
 # A GPU window, attached to the daemon (which it starts if needed).
 cargo run --release -p haven -- gpu
@@ -145,6 +145,65 @@ run while you are working. The file is
 `$XDG_DATA_HOME/haven/sessions.toml`, written atomically, and it is TOML you
 can read and edit.
 
+### Containers as panes
+
+`Alt+C` lists the shells on this machine and, in the same menu, containers:
+the ones already running, the images you have, and a handful of distros that
+are not here yet. Pick `archlinux:latest` and the pane is an Arch shell. The
+model is nix-shell's — a pane that is Arch for ten minutes to see whether the
+build breaks there.
+
+One menu rather than two keys, because it is one decision: "give me a shell"
+does not split into *which shell* and *where it runs* until after you have
+seen the list.
+
+An image is asked one question first, per pane, because the answer differs per
+pane: **keep** reuses one lasting container per image, named
+`haven-<image>`, so what you install stays installed; **scratch** is `--rm`,
+gone with the pane. A container that is already running is never asked — it
+outlives the pane either way — and picking one is a `docker exec` alongside
+whatever it is doing.
+
+An image that is not here is pulled *in the pane*, with a line saying what is
+happening and that it happens once: a pane that sits blank while half a
+gigabyte arrives is indistinguishable from a broken one. Every failure ends in
+a working pane and a reason — no Docker, a failed pull, a container that has
+since stopped. Asking for a stopped container gets a local shell and a line
+about it, never a container Haven started on your behalf.
+
+Nothing of your filesystem is in there until you say so:
+
+```
+:container-mount cwd         # the directory the pane is opened in
+:container-mount /srv:/work  # or a path, somewhere else inside
+:container-mounts            # say what they are
+```
+
+Shell integration is *offered* rather than installed: the script is mounted
+read-only at `/haven`, bash loads it through `--rcfile` after the container's
+own rc files, anything else gets the environment and no marks, and nothing in
+the container is modified. Which shell runs is decided inside, by `command -v`
+— alpine has ash and no bash, and guessing from an image name would be wrong
+for every image nobody listed.
+
+```toml
+[containers]
+enabled = true
+cli = "docker"      # podman takes the same arguments; this is the whole of podman support
+images = ["archlinux:latest", "ubuntu:latest", "alpine:latest"]
+```
+
+It is one implementation of a `Backend` trait, shaped like the `Shell` trait
+next to it, and it crosses no new seams: a virtual shell is a string,
+`docker://run/archlinux:latest?keep`, carried in the field a pane's program
+already used. So the save file records it, a restore rejoins a container that
+is still running (and never starts one), and this works without a line of
+container code anywhere near it:
+
+```sh
+haven run -- new-window 'docker://run/alpine:latest?scratch'
+```
+
 ### Scripting
 
 ```sh
@@ -215,7 +274,9 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | Command | Does |
 | --- | --- |
 | `split-h [prog]` / `split-v [prog]` | split into rows / columns, optionally running `prog` |
-| `choose-shell [verb]` | the shell menu; `verb` is what to do with the pick, `new-window` by default |
+| `choose-shell [verb]` | the shell menu, containers and all; `verb` is what to do with the pick, `new-window` by default |
+| `container-mount <path>` (`mount`) | hand a host directory to container panes; `cwd` means the pane's own |
+| `container-unmount <path>`, `container-mounts` | stop handing one over / say what they are |
 | `command-palette` (`palette`) | every command, narrowed by typing |
 | `switch-table <name>` | arm a key table |
 | `new-window [prog]` (`new-tab`), `next`, `prev` | tabs |

@@ -16,6 +16,7 @@ What comes back is the **shape of the work**:
 - tabs, with the names you typed
 - the pane tree, with its proportions
 - each pane's working directory
+- whether a pane was a container, and which one
 
 What does not come back is the processes. They are gone; a restored pane is a
 fresh shell in the right place.
@@ -97,6 +98,12 @@ A tab, because `c` has meant a tab everywhere else all along and one letter
 should not mean two things. `Ctrl+A` `G` opens a pane instead, and
 `choose-shell <verb>` takes any command that accepts a program —
 `choose-shell split-h`, say.
+
+The same menu also lists containers — picking `archlinux:latest` makes the
+pane an Arch shell. Which shell and where it runs are one decision, so they
+are one menu; [a pane that is another distro](./containers.md) is the whole of
+it. A restored container pane rejoins a container that is still running and
+never starts one, for the same reason `restore_programs` is an allowlist.
 
 The pane is told which shell it is running: `$SHELL` is inherited from
 whatever started the daemon, so a bash tab opened from a session started

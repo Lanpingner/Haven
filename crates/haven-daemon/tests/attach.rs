@@ -20,7 +20,10 @@ fn size(cols: u16, rows: u16) -> CellSize {
 }
 
 /// Panes running a quiet shell that echoes what it is told.
-fn spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
+fn spawner(
+    _env: haven_daemon::SessionEnv,
+    _containers: haven_daemon::ContainerSettings,
+) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
     Box::new(|request| {
         let size = request.size;
         Pty::spawn(&PtyConfig {
@@ -37,6 +40,7 @@ fn spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PaneRequest) -> io::
 /// characters in caret notation, so no real `ESC` ever reaches the emulator.
 fn marking_spawner(
     _env: haven_daemon::SessionEnv,
+    _containers: haven_daemon::ContainerSettings,
 ) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
     Box::new(|request| {
         let size = request.size;
@@ -289,6 +293,7 @@ fn a_new_session_can_be_named() {
 /// test can recognise by eye.
 fn counting_spawner(
     _env: haven_daemon::SessionEnv,
+    _containers: haven_daemon::ContainerSettings,
 ) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
     Box::new(|request| {
         let size = request.size;
@@ -490,7 +495,10 @@ fn a_search_that_finds_nothing_says_so() {
 
 /// A pane that prints one variable from its own environment, so a test can
 /// see what it was actually given rather than what it was meant to be given.
-fn env_spawner(env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
+fn env_spawner(
+    env: haven_daemon::SessionEnv,
+    _containers: haven_daemon::ContainerSettings,
+) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
     Box::new(move |request| {
         let size = request.size;
         Pty::spawn(&PtyConfig {
@@ -641,7 +649,10 @@ fn a_bell_marks_the_tab_you_were_not_looking_at() {
 }
 
 /// A pane running a real shell, so `/proc` has a cwd worth reading.
-fn shell_spawner(env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
+fn shell_spawner(
+    env: haven_daemon::SessionEnv,
+    _containers: haven_daemon::ContainerSettings,
+) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
     Box::new(move |request| {
         Pty::spawn(&PtyConfig {
             program: Some("/bin/sh".into()),
@@ -726,6 +737,62 @@ fn a_saved_session_comes_back_with_its_shape_and_its_directories() {
 }
 
 #[test]
+fn a_container_pane_is_saved_as_a_spec_and_restored_only_if_there_is_one_to_rejoin() {
+    // Half of this is what the save file may say, and half is what a restore
+    // may act on. A save file decides what a machine runs when it comes
+    // back, so the line is: a virtual shell is recorded, and honoured only
+    // when its container is *already* running. Nothing in a file can make a
+    // restore start a container.
+    let dir = std::env::temp_dir().join(format!("haven-containers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let save = dir.join("sessions.toml");
+
+    let mut daemon = Daemon::detached(shell_spawner);
+    daemon.save_path = save.clone();
+    let mut client = attach(&mut daemon, 40, 10);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    // A container that could not possibly be running, so the restore below
+    // has nothing to rejoin whatever this machine happens to have.
+    let spec = "docker://run/haven-no-such-image:latest?keep";
+    send_action(&mut client, Action::NewWindow { program: Some(spec.into()) }).expect("new window");
+    // And an ordinary program, which must never be written to the file.
+    send_action(&mut client, Action::NewWindow { program: Some("/bin/sh".into()) })
+        .expect("new window");
+    settle(&mut daemon, &mut [&mut client], |c| {
+        c[0].frame.status.as_ref().is_some_and(|s| s.windows.len() == 3)
+    });
+
+    let (_, problem) = daemon.save_sessions();
+    assert_eq!(problem, None, "save failed");
+    let saved = haven_daemon::snapshot::Snapshot::read(&save).expect("read");
+    let windows = &saved.sessions[0].windows;
+    assert_eq!(windows[1].panes[0].program.as_deref(), Some(spec), "the spec was not recorded");
+    assert_eq!(
+        windows[2].panes[0].program, None,
+        "only a virtual shell belongs in this field: an arbitrary program in a save file is \
+         the thing `restore_programs` exists to prevent"
+    );
+
+    let mut fresh = Daemon::detached(shell_spawner);
+    fresh.save_path = save.clone();
+    let (restored, problem) = fresh.restore_sessions();
+    assert_eq!(problem, None, "restore failed");
+    assert_eq!(restored, 1);
+    for _ in 0..40 {
+        fresh.tick(Duration::from_millis(10)).expect("tick");
+    }
+    let (_, problem) = fresh.save_sessions();
+    assert_eq!(problem, None);
+    let again = haven_daemon::snapshot::Snapshot::read(&save).expect("read");
+    assert_eq!(
+        again.sessions[0].windows[1].panes[0].program, None,
+        "the container is gone, so the pane that came back is an ordinary shell"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn restoring_twice_does_not_duplicate_or_clobber_a_live_session() {
     // A restore has to be safe to run from a login script that may fire
     // more than once, and safe to run while you are working.
@@ -752,7 +819,7 @@ fn restoring_twice_does_not_duplicate_or_clobber_a_live_session() {
 fn colours_survive_the_round_trip_through_the_protocol() {
     use haven_core::{Color, Rgb};
 
-    let mut daemon = Daemon::detached(|_env| {
+    let mut daemon = Daemon::detached(|_env, _containers| {
         Box::new(|request| {
             let size = request.size;
             Pty::spawn(&PtyConfig {

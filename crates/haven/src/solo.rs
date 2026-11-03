@@ -254,6 +254,10 @@ fn apply<F: FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>(
         | Action::DisplayPanes
         | Action::FindWindow(_)
         | Action::ChooseShell(_)
+        // A container pane needs a daemon to spawn it and a client to ask
+        // the menu's questions; standalone has neither.
+        | Action::ContainerShell { .. }
+        | Action::ContainerMounts { .. }
         | Action::CommandPalette
         // Standalone has no client-side mode machine to switch.
         | Action::SwitchTable(_)

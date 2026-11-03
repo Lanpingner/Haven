@@ -192,6 +192,35 @@ impl KeysFile {
     }
 }
 
+/// The `[containers]` section: where a pane's shell may run other than here.
+///
+/// Three keys and no more. `cli` is the one that matters most and looks the
+/// least important: `podman` takes every argument Haven passes unchanged, so
+/// this line is the whole of podman support.
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ContainersFile {
+    pub enabled: bool,
+    pub cli: String,
+    /// Distros offered even when they are not pulled yet. Replaces the
+    /// built-in list rather than adding to it, so a list you wrote is the
+    /// list you get.
+    pub images: Vec<String>,
+}
+
+impl Default for ContainersFile {
+    fn default() -> Self {
+        let defaults = haven_backend::Settings::default();
+        Self { enabled: defaults.enabled, cli: defaults.cli, images: defaults.images }
+    }
+}
+
+impl From<&ContainersFile> for haven_backend::Settings {
+    fn from(file: &ContainersFile) -> Self {
+        Self { cli: file.cli.clone(), images: file.images.clone(), enabled: file.enabled }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -206,6 +235,8 @@ pub struct Config {
     /// Save every session this often, in seconds. Zero is off. Without it a
     /// save file is only as good as the last time someone remembered.
     pub autosave_seconds: u64,
+    /// Where a pane's shell may run other than on this machine.
+    pub containers: ContainersFile,
     /// Whether clients handle the mouse at all.
     ///
     /// Off hands it back to whatever terminal `haven attach` is running in,
@@ -219,6 +250,7 @@ impl Default for Config {
         Self {
             theme: ThemeSpec::default(),
             keys: KeysFile::default(),
+            containers: ContainersFile::default(),
             mouse: true,
             // tmux-resurrect's default list, for the same reasons: editors
             // and pagers, which re-open a file and do nothing else.
@@ -330,6 +362,10 @@ impl ConfigWatcher {
 
     pub fn autosave_seconds(&self) -> u64 {
         self.config.autosave_seconds
+    }
+
+    pub fn containers(&self) -> haven_backend::Settings {
+        (&self.config.containers).into()
     }
 
     /// Re-read if anything moved. Returns whether the theme changed, so the
