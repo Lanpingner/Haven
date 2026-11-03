@@ -130,17 +130,16 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode, &Bindings) -> Intercepted {
             Mode::Prefix => {
                 *mode = Mode::Normal;
                 return match bindings.command(Table::Prefix, event) {
-                    Some(command) => {
-                        let out = run_command(command);
-                        if let Intercepted::Consumed = out {
-                            // `command-prompt` is the one binding that opens
-                            // a mode rather than doing something.
-                            if keys::parse_command(command) == Ok(Action::EnterCommand) {
-                                *mode = Mode::command(String::new());
-                            }
+                    // `command-prompt` is the one binding that opens a mode
+                    // rather than doing something, and it may arrive with
+                    // text to start the line off with.
+                    Some(command) => match keys::parse_command(command) {
+                        Ok(Action::EnterCommand(prefill)) => {
+                            *mode = Mode::command(prefill);
+                            Intercepted::Consumed
                         }
-                        out
-                    }
+                        _ => run_command(command),
+                    },
                     // An unbound key after the prefix does nothing rather
                     // than leaking into the pane.
                     None => Intercepted::Consumed,
@@ -177,6 +176,8 @@ fn run_command(line: &str) -> Intercepted {
         // A literal prefix key goes to the pane, which is what `send-prefix`
         // means and the only way to drive a nested session.
         Ok(Action::SendPrefix) => Intercepted::Pass,
+        // Opening a prompt from a prompt would be a loop with nothing in it.
+        Ok(Action::EnterCommand(_)) => Intercepted::Consumed,
         Ok(action) => match keys::to_proto(action) {
             Some(wire) => Intercepted::Act(wire),
             None => Intercepted::Consumed,
@@ -277,6 +278,33 @@ pub fn kill_session(
     let mut transport = SocketTransport::connect(socket)?;
     transport.send(ClientMsg::KillSession(id)).map_err(to_io)?;
     wait_for_sessions(&mut transport)
+}
+
+/// The session's environment, as `export` lines a shell can evaluate.
+///
+/// The only way to fix a shell that was started before the latest attach:
+/// its environment was set at exec and nothing can reach in and change it.
+pub fn show_environment(socket: &Path) -> io::Result<Vec<(String, String)>> {
+    let mut transport = SocketTransport::connect(socket)?;
+    transport
+        .send(ClientMsg::Attach {
+            session: None,
+            caps: haven_proto::ClientCaps::null(haven_proto::CellSize::default()),
+            // Asking must not *change* what it is asking about.
+            env: Vec::new(),
+        })
+        .map_err(to_io)?;
+    transport.send(ClientMsg::ShowEnvironment).map_err(to_io)?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        match transport.try_recv() {
+            Ok(Some(haven_proto::ServerMsg::Environment(env))) => return Ok(env),
+            Ok(Some(_)) => {}
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(e) => return Err(to_io(e)),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::TimedOut, "no reply from the daemon"))
 }
 
 pub fn shutdown(socket: &Path) -> io::Result<()> {

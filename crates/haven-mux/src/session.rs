@@ -23,6 +23,9 @@ pub struct Session {
     pub name: String,
     pub windows: Vec<Window>,
     pub active: usize,
+    /// The window before this one, by id rather than index: indices shift
+    /// when a window closes and would point at a different window.
+    last_window: Option<WindowId>,
     next_pane: u32,
     next_window: u32,
 }
@@ -38,6 +41,7 @@ impl Session {
             name: name.into(),
             windows: vec![window],
             active: 0,
+            last_window: None,
             next_pane: 2,
             next_window: 2,
         };
@@ -79,7 +83,9 @@ impl Session {
         let id = WindowId(self.next_window);
         self.next_window += 1;
         self.windows.push(Window::new(id, pane));
-        self.active = self.windows.len() - 1;
+        // Through `go_to`, so a new tab is somewhere `last-window` can come
+        // back from — which is what makes it useful right after making one.
+        self.go_to(self.windows.len() - 1);
         (id, pane, SessionEvent::PaneOpened(pane))
     }
 
@@ -121,7 +127,7 @@ impl Session {
 
     pub fn select_window(&mut self, index: usize) -> bool {
         if index < self.windows.len() {
-            self.active = index;
+            self.go_to(index);
             true
         } else {
             false
@@ -130,13 +136,47 @@ impl Session {
 
     pub fn next_window(&mut self) {
         if !self.windows.is_empty() {
-            self.active = (self.active + 1) % self.windows.len();
+            self.go_to((self.active + 1) % self.windows.len());
         }
     }
 
     pub fn previous_window(&mut self) {
         if !self.windows.is_empty() {
-            self.active = (self.active + self.windows.len() - 1) % self.windows.len();
+            self.go_to((self.active + self.windows.len() - 1) % self.windows.len());
+        }
+    }
+
+    /// Back to the window you came from. Does nothing if that window has
+    /// since closed, rather than guessing at a replacement.
+    pub fn last_window(&mut self) -> bool {
+        let Some(id) = self.last_window else { return false };
+        let Some(index) = self.windows.iter().position(|w| w.id == id) else { return false };
+        self.go_to(index);
+        true
+    }
+
+    /// Move to a window, remembering where we were.
+    fn go_to(&mut self, index: usize) {
+        if index == self.active {
+            return;
+        }
+        self.last_window = self.windows.get(self.active).map(|w| w.id);
+        self.active = index;
+    }
+
+    /// Rename a window, or the session itself when `window` is `None`.
+    pub fn rename(&mut self, window: Option<WindowId>, name: &str) {
+        let name = name.trim();
+        match window {
+            None if !name.is_empty() => self.name = name.to_string(),
+            None => {}
+            Some(id) => {
+                if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                    // An empty name gives the window back to the command it
+                    // is running, which is where the name came from.
+                    w.title = (!name.is_empty()).then(|| name.to_string());
+                }
+            }
         }
     }
 
@@ -272,5 +312,71 @@ mod tests {
         panes.sort_unstable();
         assert_eq!(panes, vec![1, 2, 3]);
         assert_eq!(layout.active, Some(s.active_pane()));
+    }
+}
+
+#[cfg(test)]
+mod last_and_rename_tests {
+    use super::*;
+
+    fn session() -> Session {
+        Session::new(SessionId(1), "work").0
+    }
+
+    #[test]
+    fn last_window_goes_back_where_you_came_from() {
+        let mut s = session();
+        s.new_window();
+        s.new_window();
+        assert_eq!(s.active, 2);
+        s.select_window(0);
+        assert!(s.last_window(), "nothing to go back to");
+        assert_eq!(s.active, 2, "did not return to the window we left");
+        // And again, which is what makes it a toggle.
+        s.last_window();
+        assert_eq!(s.active, 0);
+    }
+
+    #[test]
+    fn last_window_is_remembered_by_id_not_by_index() {
+        // Closing a window shifts every index after it; an index would point
+        // at a different window, which is a silent jump to the wrong place.
+        let mut s = session();
+        s.new_window();
+        s.new_window();
+        s.select_window(0); // last = window 3
+        s.windows.remove(1); // window 2 closes; 3 is now at index 1
+        s.active = 0;
+        assert!(s.last_window());
+        assert_eq!(s.active_window().id, WindowId(3), "landed on the wrong window");
+    }
+
+    #[test]
+    fn a_window_that_closed_is_not_somewhere_to_go_back_to() {
+        let mut s = session();
+        s.new_window();
+        s.select_window(0); // last = window 2
+        s.windows.retain(|w| w.id != WindowId(2));
+        s.active = 0;
+        assert!(!s.last_window(), "went back to a window that no longer exists");
+    }
+
+    #[test]
+    fn renaming_a_window_overrides_the_command_name_and_empty_gives_it_back() {
+        let mut s = session();
+        let id = s.active_window().id;
+        s.rename(Some(id), "build");
+        assert_eq!(s.active_window().title.as_deref(), Some("build"));
+        s.rename(Some(id), "  ");
+        assert_eq!(s.active_window().title, None, "an empty name should restore the default");
+    }
+
+    #[test]
+    fn renaming_the_session_ignores_an_empty_name() {
+        let mut s = session();
+        s.rename(None, "deploy");
+        assert_eq!(s.name, "deploy");
+        s.rename(None, "");
+        assert_eq!(s.name, "deploy", "a session with no name is not usable");
     }
 }

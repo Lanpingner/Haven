@@ -18,6 +18,7 @@ usage:
   haven gpu [options]               attach in a GPU window
   haven attach [options]            attach to the daemon (starts it if needed)
   haven ls                          list sessions
+  haven show-env                    the session's environment, as exports
   haven kill-session -t <id>        end one session
   haven server run|stop             run or stop the daemon
   haven tui [options]               standalone: the mux with no daemon
@@ -207,6 +208,7 @@ fn main() -> ExitCode {
         "attach" => attach(args),
         "ls" => list(args),
         "kill-session" => kill_session(args),
+        "show-env" | "show-environment" => show_env(args),
         "server" => server(args),
         "tui" => tui(args),
         "dump" => dump(args),
@@ -302,6 +304,24 @@ fn list(args: Args) -> ExitCode {
     }
 }
 
+/// `eval "$(haven show-env)"` in a shell that predates the latest attach.
+fn show_env(args: Args) -> ExitCode {
+    match haven::attach::show_environment(&socket_of(&args)) {
+        Ok(env) => {
+            for (name, value) in env {
+                // Single-quoted with the usual escape, so a value with a
+                // space or a quote in it survives being evaluated.
+                println!("export {name}='{}'", value.replace('\'', r"'\''"));
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn kill_session(args: Args) -> ExitCode {
     let Some(id) = args.target else {
         eprintln!("haven: kill-session needs -t <id>");
@@ -332,7 +352,7 @@ fn server(args: Args) -> ExitCode {
             // already honours. Without this `server run -- prog -x` ran
             // `prog` with nothing, silently.
             let rest = args.rest.clone();
-            let make_spawner = move || {
+            let make_spawner = move |env: haven_daemon::SessionEnv| {
                 let program = program.clone();
                 let rest = rest.clone();
                 let spawner: Box<dyn FnMut(haven_pty::PtySize) -> std::io::Result<haven_pty::Pty>> =
@@ -340,6 +360,12 @@ fn server(args: Args) -> ExitCode {
                         let (mut cfg, _, _) =
                             launch_config(program.as_deref(), login, integrate, &ctx(login));
                         cfg.args.extend(rest.iter().cloned());
+                        // Read at spawn time, not at session creation: a pane
+                        // opened after a reattach must get that attach's
+                        // agent socket, not the one the session was born with.
+                        cfg.env.extend(
+                            env.borrow().iter().map(|(k, v)| (k.clone().into(), v.clone().into())),
+                        );
                         cfg.size = size;
                         haven_pty::Pty::spawn(&cfg)
                     });

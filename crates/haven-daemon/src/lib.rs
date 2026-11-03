@@ -41,8 +41,18 @@ pub enum ResizePolicy {
 
 type Spawner = Box<dyn FnMut(PtySize) -> io::Result<Pty>>;
 
+/// A session's share of the attaching client's environment.
+///
+/// Shared rather than copied because a pane opened an hour after the attach
+/// must get the *current* values: the session outlives the connection it was
+/// made from, and panes spawned later would otherwise inherit a dead agent
+/// socket for as long as the session lives.
+pub type SessionEnv = std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>>;
+
 struct SessionHost {
     name: String,
+    /// The environment new panes in this session are given.
+    env: SessionEnv,
     /// For the status line's "time open". Wall clock rather than `Instant`,
     /// so a client can render it without the daemon ticking.
     started_unix: u64,
@@ -75,7 +85,7 @@ pub struct Daemon {
     sessions: BTreeMap<u32, SessionHost>,
     clients: Vec<Client>,
     next_session: u32,
-    make_spawner: Box<dyn FnMut() -> Spawner>,
+    make_spawner: Box<dyn FnMut(SessionEnv) -> Spawner>,
     policy: ResizePolicy,
     shutting_down: bool,
     /// Configuration, re-read when the file moves. The daemon owns it so a
@@ -96,7 +106,7 @@ impl std::fmt::Debug for Daemon {
 impl Daemon {
     /// A daemon with no listener, driven by [`Daemon::accept_stream`]. This is
     /// what the tests use: no socket, no filesystem, no second process.
-    pub fn detached(make_spawner: impl FnMut() -> Spawner + 'static) -> Self {
+    pub fn detached(make_spawner: impl FnMut(SessionEnv) -> Spawner + 'static) -> Self {
         Self {
             listener: None,
             socket_path: None,
@@ -115,7 +125,7 @@ impl Daemon {
     /// not start until the user deletes a file.
     pub fn bind(
         path: impl AsRef<Path>,
-        make_spawner: impl FnMut() -> Spawner + 'static,
+        make_spawner: impl FnMut(SessionEnv) -> Spawner + 'static,
     ) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
@@ -301,7 +311,7 @@ impl Daemon {
 
     fn handle(&mut self, index: usize, msg: ClientMsg) -> io::Result<()> {
         match msg {
-            ClientMsg::Attach { session, caps } => {
+            ClientMsg::Attach { session, caps, env } => {
                 let id = match session {
                     Some(SessionId(id)) if self.sessions.contains_key(&id) => id,
                     Some(SessionId(id)) => {
@@ -313,13 +323,24 @@ impl Daemon {
                         });
                         return Ok(());
                     }
-                    None => self.first_or_create(caps)?,
+                    None => self.first_or_create(caps, &env)?,
                 };
+                self.refresh_env(id, env);
                 self.join(index, id, caps);
             }
-            ClientMsg::NewSession { name, caps } => {
-                let id = self.create_session(name, caps)?;
+            ClientMsg::NewSession { name, caps, env } => {
+                let id = self.create_session(name, caps, &env)?;
                 self.join(index, id, caps);
+            }
+            ClientMsg::ShowEnvironment => {
+                let env = self
+                    .clients
+                    .get(index)
+                    .and_then(|c| c.session)
+                    .and_then(|id| self.sessions.get(&id))
+                    .map(|h| h.env.borrow().clone())
+                    .unwrap_or_default();
+                let _ = self.clients[index].framed.queue(&ServerMsg::Environment(env));
             }
             ClientMsg::Input { pane, bytes } => {
                 // Typing returns to the live screen. Reading history and then
@@ -405,26 +426,36 @@ impl Daemon {
         Ok(())
     }
 
-    fn first_or_create(&mut self, caps: ClientCaps) -> io::Result<u32> {
+    fn first_or_create(&mut self, caps: ClientCaps, env: &[(String, String)]) -> io::Result<u32> {
         if let Some(id) = self.sessions.keys().next().copied() {
             return Ok(id);
         }
-        self.create_session(None, caps)
+        self.create_session(None, caps, env)
     }
 
     /// Make a session, whether or not one already exists.
-    fn create_session(&mut self, name: Option<String>, caps: ClientCaps) -> io::Result<u32> {
+    fn create_session(
+        &mut self,
+        name: Option<String>,
+        caps: ClientCaps,
+        env: &[(String, String)],
+    ) -> io::Result<u32> {
         let id = self.next_session;
         self.next_session += 1;
         // An unnamed session is numbered, which is what makes `haven-2`
         // follow `haven-1` without the client having to invent a name.
         let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("haven-{id}"));
-        let spawner = (self.make_spawner)();
+        // Filled before the runtime is built, because building it spawns the
+        // session's first pane — which would otherwise be the one pane that
+        // never saw the attaching client's environment.
+        let cell: SessionEnv = std::rc::Rc::new(std::cell::RefCell::new(env.to_vec()));
+        let spawner = (self.make_spawner)(cell.clone());
         let runtime = MuxRuntime::new(SessionId(id), &name, caps.size, spawner)?;
         self.sessions.insert(
             id,
             SessionHost {
                 name,
+                env: cell,
                 started_unix: unix_now(),
                 runtime,
                 policy: self.policy,
@@ -432,6 +463,20 @@ impl Daemon {
             },
         );
         Ok(id)
+    }
+
+    /// Take the attaching client's environment for this session.
+    ///
+    /// Replaces rather than merges: a stale `SSH_AUTH_SOCK` kept beside a
+    /// fresh one is the bug, not a feature, and the list is exactly the set
+    /// that names something belonging to the connection.
+    fn refresh_env(&mut self, id: u32, env: Vec<(String, String)>) {
+        if env.is_empty() {
+            return;
+        }
+        if let Some(host) = self.sessions.get(&id) {
+            *host.env.borrow_mut() = env;
+        }
     }
 
     /// Point a client at a session and tell it so. Attaching and creating
@@ -554,6 +599,21 @@ impl Daemon {
             }
             Action::Tiled => {
                 runtime.apply_named_layout(NamedLayout::Tiled)?;
+                false
+            }
+            Action::LastWindow => {
+                runtime.last_window()?;
+                false
+            }
+            Action::LastPane => {
+                runtime.session.active_window_mut().last_pane();
+                false
+            }
+            Action::Rename { window, name } => {
+                let id = window.then(|| runtime.session.active_window().id);
+                runtime.session.rename(id, &name);
+                // The session's own name is on the status bar, which is only
+                // resent when it changes; renaming is exactly such a change.
                 false
             }
         };

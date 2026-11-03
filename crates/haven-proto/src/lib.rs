@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -148,6 +148,33 @@ impl RowRle {
     }
 }
 
+/// Variables a client refreshes when it attaches.
+///
+/// The same list tmux updates by default, and for the same reason: these are
+/// the ones that name a resource belonging to the *connection*, not to the
+/// session, so a reattach from somewhere else leaves them pointing at
+/// something that is gone.
+pub const UPDATE_ENVIRONMENT: &[&str] = &[
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "KRB5CCNAME",
+    "SSH_ASKPASS",
+    "SSH_AUTH_SOCK",
+    "SSH_AGENT_PID",
+    "SSH_CONNECTION",
+    "WINDOWID",
+    "XAUTHORITY",
+    "TERM_PROGRAM",
+];
+
+/// Read those of [`UPDATE_ENVIRONMENT`] this process actually has.
+pub fn client_environment() -> Vec<(String, String)> {
+    UPDATE_ENVIRONMENT
+        .iter()
+        .filter_map(|name| std::env::var(name).ok().map(|value| ((*name).to_string(), value)))
+        .collect()
+}
+
 /// A key table, as the daemon's config describes it.
 ///
 /// Specs and commands stay strings on the wire. The protocol has no business
@@ -200,6 +227,12 @@ pub enum ClientMsg {
     Attach {
         session: Option<SessionId>,
         caps: ClientCaps,
+        /// Variables worth refreshing from the attaching client: the agent
+        /// socket, the display, the ssh connection. A session outlives the
+        /// connection it was made from, so panes opened later would
+        /// otherwise inherit a dead `SSH_AUTH_SOCK` for as long as the
+        /// session lives.
+        env: Vec<(String, String)>,
     },
     /// Make a session and attach to it. Distinct from `Attach { session:
     /// None }`, which joins the first session that exists and only creates
@@ -209,6 +242,7 @@ pub enum ClientMsg {
         /// `None` lets the daemon name it, as it does the first one.
         name: Option<String>,
         caps: ClientCaps,
+        env: Vec<(String, String)>,
     },
     /// Already-resolved input. Key *encoding* happens client-side, because only
     /// the client knows what its host terminal told it.
@@ -256,6 +290,9 @@ pub enum ClientMsg {
     /// Control-mode queries, which the CLI is built on: anything `haven ls`
     /// can do, a script can do (`docs/PLAN.md` §14.2).
     ListSessions,
+    /// The session's current environment, for a shell that was started
+    /// before the latest attach and cannot be told any other way.
+    ShowEnvironment,
     KillSession(SessionId),
     Shutdown,
     Detach,
@@ -263,7 +300,7 @@ pub enum ClientMsg {
 
 /// Mux actions a client can ask for. The same enum the key table resolves to,
 /// so anything a binding can do, `haven -C` and a plugin can do too.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Action {
     SplitColumns,
     SplitRows,
@@ -286,6 +323,15 @@ pub enum Action {
     EvenHorizontal,
     EvenVertical,
     Tiled,
+    /// The window, or the pane, focus was on before this one.
+    LastWindow,
+    LastPane,
+    /// Rename the active window, or the session when `window` is false. An
+    /// empty name gives a window back to the command it is running.
+    Rename {
+        window: bool,
+        name: String,
+    },
 }
 
 /// Appended entries for a pane's interning tables.
@@ -343,6 +389,8 @@ pub enum ServerMsg {
         pane: PaneId,
         row: Option<u32>,
     },
+    /// Answer to [`ClientMsg::ShowEnvironment`].
+    Environment(Vec<(String, String)>),
     /// The key table. Sent on attach and whenever the config changes, for
     /// the same reason the theme is.
     Keys(Box<KeyTable>),

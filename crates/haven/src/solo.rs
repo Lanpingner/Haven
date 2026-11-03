@@ -20,6 +20,7 @@ use haven_vtwrite::{Caps, RenderCell, Serializer, Snapshot};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 
 use crate::keys::{self, Action};
+use haven_client::bindings::{Bindings, Table};
 
 /// One row at the bottom for the status line.
 const STATUS_ROWS: u16 = 1;
@@ -56,6 +57,20 @@ pub fn run(cfg: PtyConfig, host: HostCaps) -> io::Result<()> {
     decoder.tier = host.key_tier();
     let mut encoder = KeyEncoder::new(host.key_tier());
     let mut prefix_armed = false;
+    // Standalone reads the same config the daemon would: a key that behaved
+    // one way with a server and another without one would be a trap.
+    let bindings = {
+        let config = haven_daemon::config::ConfigWatcher::new(
+            haven_daemon::default_config_path(),
+            haven_daemon::default_theme_dir(),
+        );
+        let table = config.keys().clone();
+        Bindings::default().with(Some(&table.prefix), &table.prefix_table, false).with(
+            None,
+            &table.root,
+            true,
+        )
+    };
     let mut buf = [0u8; 65536];
     let mut dirty = true;
 
@@ -104,7 +119,12 @@ pub fn run(cfg: PtyConfig, host: HostCaps) -> io::Result<()> {
                 InputEvent::Key(key) => {
                     if prefix_armed {
                         prefix_armed = false;
-                        match keys::prefix_table(&key) {
+                        // The same table the attached client uses. Two key
+                        // tables would be two behaviours for one keymap.
+                        match bindings
+                            .command(Table::Prefix, &key)
+                            .and_then(|c| keys::parse_command(c).ok())
+                        {
                             Some(Action::Detach) => return Ok(()),
                             Some(Action::SendPrefix) => {
                                 mux.send(&encoder.encode(&key))?;
@@ -122,7 +142,7 @@ pub fn run(cfg: PtyConfig, host: HostCaps) -> io::Result<()> {
                         }
                         continue;
                     }
-                    if keys::is_prefix(&key) {
+                    if bindings.is_prefix(&key) {
                         prefix_armed = true;
                         continue;
                     }
@@ -186,6 +206,16 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
             mux.select_window(index)?;
         }
         Action::ApplyLayout(layout) => mux.apply_named_layout(layout)?,
+        Action::LastWindow => {
+            mux.last_window()?;
+        }
+        Action::LastPane => {
+            mux.session.active_window_mut().last_pane();
+        }
+        Action::Rename { window, name } => {
+            let id = window.then(|| mux.session.active_window().id);
+            mux.session.rename(id, &name);
+        }
         // Standalone mode has no command line yet; the prefix table is the
         // whole interface there.
         // Standalone mode has no command line and no session list: there is
@@ -194,7 +224,7 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
         // nowhere for a second one to live.
         Action::Detach
         | Action::SendPrefix
-        | Action::EnterCommand
+        | Action::EnterCommand(_)
         | Action::Choose
         | Action::NewSession
         // Standalone mode draws straight from the grid, with no view to move

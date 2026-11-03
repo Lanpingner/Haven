@@ -56,6 +56,8 @@ cargo run -p haven -- shell-info
 | `x` | close the pane |
 | `c` / `n` / `p` / `1`-`9` | new tab / next / previous / select |
 | `C` | new session, and move to it |
+| `w` / `;` | the tab / pane you were on before |
+| `,` / `$` | rename this tab / the session |
 | `[` | copy mode |
 | `]` | paste the newest buffer |
 | `PageUp` / `PageDown` | read back through the pane's history |
@@ -90,6 +92,13 @@ root = { "C-t" = "new-window" }                          # no prefix needed
 Key specs are `C-`, `S-`, `A-`/`M-`, `D-` in any order, then a character or a
 name (`Up`, `PageUp`, `Enter`, `Space`, `F5`, …). The commands are the ones
 the command line takes, so nothing is bindable that cannot be typed.
+
+### Environment
+
+A session outlives the connection it was made from, so `SSH_AUTH_SOCK`,
+`DISPLAY` and the rest are refreshed from each attaching client and given to
+panes opened after that. An existing shell cannot be told — its environment
+was set at exec — so `eval "$(haven show-env)"` in that shell does it.
 
 ### Mouse
 
@@ -134,6 +143,9 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `new-session` (`new`) | a new session on this daemon, named `haven-<n>` |
 | `scroll-up`, `scroll-down`, `scroll-end` | as the paging keys do |
 | `copy-mode`, `paste-buffer` | as `[` and `]` do |
+| `last`, `last-pane` | back to the previous tab / pane |
+| `rename-window <name>`, `rename-session <name>` | an empty name gives a tab back to its command |
+| `command-prompt <text>` | open the command line with `text` on it |
 | `select-window <n>` (`select-tab`) | go to tab *n* (numbered from 1) |
 | `kill-pane`, `zoom`, `detach` | as the keys do |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |

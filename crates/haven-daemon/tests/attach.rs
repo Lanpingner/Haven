@@ -5,6 +5,7 @@ use std::io;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
+use haven_client::frontend::Frontend;
 use haven_client::{Client, NullFrontend};
 use haven_daemon::{Daemon, ResizePolicy};
 use haven_proto::transport::SocketTransport;
@@ -18,7 +19,7 @@ fn size(cols: u16, rows: u16) -> CellSize {
 }
 
 /// Panes running a quiet shell that echoes what it is told.
-fn spawner() -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
+fn spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
     Box::new(|size| {
         Pty::spawn(&PtyConfig {
             program: Some("/bin/sh".into()),
@@ -32,7 +33,7 @@ fn spawner() -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
 /// Panes whose shell reports what it runs, the way a shell with integration
 /// does. Typing the escape directly cannot work: the tty echoes control
 /// characters in caret notation, so no real `ESC` ever reaches the emulator.
-fn marking_spawner() -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
+fn marking_spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
     Box::new(|size| {
         Pty::spawn(&PtyConfig {
             program: Some("/bin/sh".into()),
@@ -281,7 +282,7 @@ fn a_new_session_can_be_named() {
 
 /// A pane that prints numbered lines on demand, so history has content a
 /// test can recognise by eye.
-fn counting_spawner() -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
+fn counting_spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
     Box::new(|size| {
         Pty::spawn(&PtyConfig {
             program: Some("/bin/sh".into()),
@@ -479,11 +480,95 @@ fn a_search_that_finds_nothing_says_so() {
     );
 }
 
+/// A pane that prints one variable from its own environment, so a test can
+/// see what it was actually given rather than what it was meant to be given.
+fn env_spawner(env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
+    Box::new(move |size| {
+        Pty::spawn(&PtyConfig {
+            program: Some("/bin/sh".into()),
+            args: vec![
+                "-c".into(),
+                "echo \"sock=$SSH_AUTH_SOCK\"; while read x; do :; done".into(),
+            ],
+            env: env.borrow().iter().map(|(k, v)| (k.clone().into(), v.clone().into())).collect(),
+            size,
+            ..Default::default()
+        })
+    })
+}
+
+#[test]
+fn a_pane_opened_after_a_reattach_gets_the_new_agent_socket() {
+    // The quiet one: a session outlives the connection it was made from, so
+    // without this a pane opened an hour later inherits a dead socket.
+    let mut daemon = Daemon::detached(env_spawner);
+    let (ours, theirs) = UnixStream::pair().expect("socket pair");
+    daemon.accept_stream(theirs).expect("adopt");
+    let transport = SocketTransport::from_stream(ours).expect("transport");
+    let mut client = Client::new(NullFrontend::new(size(40, 8)), transport);
+    client
+        .transport
+        .send(ClientMsg::Attach {
+            session: None,
+            caps: client.frontend.caps(),
+            env: vec![("SSH_AUTH_SOCK".into(), "/first".into())],
+        })
+        .expect("attach");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let first = client.focus.expect("focus");
+    assert!(settle(&mut daemon, &mut [&mut client], |c| {
+        c[0].frame.pane_text(first).contains("sock=/first")
+    }));
+
+    // Reattach from somewhere else, then open a pane.
+    client
+        .transport
+        .send(ClientMsg::Attach {
+            session: None,
+            caps: client.frontend.caps(),
+            env: vec![("SSH_AUTH_SOCK".into(), "/second".into())],
+        })
+        .expect("reattach");
+    settle(&mut daemon, &mut [&mut client], |_| false);
+    send_action(&mut client, Action::SplitColumns).expect("split");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame.panes.values().any(|p| {
+                p.rows.iter().any(|r| r.spans.iter().any(|s| s.text.contains("sock=/second")))
+            })
+        }),
+        "the new pane kept the old socket"
+    );
+}
+
+#[test]
+fn the_session_environment_can_be_asked_for() {
+    // The only way to fix a shell that was started before the latest attach.
+    let mut daemon = Daemon::detached(spawner);
+    let (ours, theirs) = UnixStream::pair().expect("socket pair");
+    daemon.accept_stream(theirs).expect("adopt");
+    let transport = SocketTransport::from_stream(ours).expect("transport");
+    let mut client = Client::new(NullFrontend::new(size(40, 8)), transport);
+    client
+        .transport
+        .send(ClientMsg::Attach {
+            session: None,
+            caps: client.frontend.caps(),
+            env: vec![("DISPLAY".into(), ":7".into())],
+        })
+        .expect("attach");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+
+    client.transport.send(ClientMsg::ShowEnvironment).expect("ask");
+    assert!(settle(&mut daemon, &mut [&mut client], |c| !c[0].environment.is_empty()));
+    assert_eq!(client.environment, vec![("DISPLAY".to_string(), ":7".to_string())]);
+}
+
 #[test]
 fn colours_survive_the_round_trip_through_the_protocol() {
     use haven_core::{Color, Rgb};
 
-    let mut daemon = Daemon::detached(|| {
+    let mut daemon = Daemon::detached(|_env| {
         Box::new(|size| {
             Pty::spawn(&PtyConfig {
                 program: Some("/bin/sh".into()),

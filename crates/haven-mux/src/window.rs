@@ -13,11 +13,13 @@ pub struct Window {
     /// Zoom is an *override*, never a mutation of the tree, so unzooming is
     /// lossless (`docs/PLAN.md` §10).
     pub zoomed: Option<PaneId>,
+    /// The pane focus was on before this one, for `last-pane`.
+    last: Option<PaneId>,
 }
 
 impl Window {
     pub fn new(id: WindowId, pane: PaneId) -> Self {
-        Self { id, title: None, root: PaneNode::Leaf(pane), active: pane, zoomed: None }
+        Self { id, title: None, root: PaneNode::Leaf(pane), active: pane, zoomed: None, last: None }
     }
 
     pub fn panes(&self) -> Vec<PaneId> {
@@ -48,7 +50,7 @@ impl Window {
         // Splitting while zoomed would be invisible, so unzoom first.
         self.zoomed = None;
         if self.root.split(self.active, dir, new, ratio) {
-            self.active = new;
+            self.focus_on(new);
             true
         } else {
             false
@@ -70,11 +72,16 @@ impl Window {
         }
         if self.active == pane {
             // Focus the pane that was nearest, falling back to the first.
-            self.active = crate::layout::neighbour(&rects, pane, Edge::Left)
+            let next = crate::layout::neighbour(&rects, pane, Edge::Left)
                 .or_else(|| crate::layout::neighbour(&rects, pane, Edge::Right))
                 .filter(|p| self.root.contains(*p))
                 .or_else(|| self.panes().first().copied())
                 .unwrap_or(pane);
+            self.focus_on(next);
+        }
+        // A pane that is gone is not somewhere to go back to.
+        if self.last == Some(pane) {
+            self.last = None;
         }
         true
     }
@@ -86,7 +93,7 @@ impl Window {
         }
         match crate::layout::neighbour(&self.rects(size), self.active, edge) {
             Some(pane) => {
-                self.active = pane;
+                self.focus_on(pane);
                 true
             }
             None => false,
@@ -95,11 +102,31 @@ impl Window {
 
     pub fn focus_pane(&mut self, pane: PaneId) -> bool {
         if self.root.contains(pane) {
-            self.active = pane;
+            self.focus_on(pane);
             true
         } else {
             false
         }
+    }
+
+    /// Back to the pane focus was on before. Does nothing if it has closed.
+    pub fn last_pane(&mut self) -> bool {
+        match self.last.filter(|p| self.root.contains(*p)) {
+            Some(pane) => {
+                self.focus_on(pane);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The one place focus moves, so `last` can never miss a move.
+    fn focus_on(&mut self, pane: PaneId) {
+        if pane == self.active {
+            return;
+        }
+        self.last = Some(self.active);
+        self.active = pane;
     }
 
     pub fn toggle_zoom(&mut self) {
@@ -251,6 +278,44 @@ mod tests {
         w.toggle_zoom();
         assert!(w.focus(Edge::Left, size(80, 24)));
         assert_eq!(w.zoomed, None);
+        assert_eq!(w.active, PaneId(1));
+    }
+}
+
+#[cfg(test)]
+mod last_pane_tests {
+    use super::*;
+
+    #[test]
+    fn last_pane_is_a_toggle_between_two_panes() {
+        let mut w = Window::new(WindowId(1), PaneId(1));
+        w.split(Direction::Columns, PaneId(2), 0.5);
+        assert_eq!(w.active, PaneId(2), "a split focuses the new pane");
+        assert!(w.last_pane());
+        assert_eq!(w.active, PaneId(1));
+        assert!(w.last_pane());
+        assert_eq!(w.active, PaneId(2), "it must toggle, not stick");
+    }
+
+    #[test]
+    fn a_closed_pane_is_not_somewhere_to_go_back_to() {
+        let mut w = Window::new(WindowId(1), PaneId(1));
+        w.split(Direction::Columns, PaneId(2), 0.5);
+        // Focus 1, so 2 is the pane we came from, then close 2.
+        w.focus_pane(PaneId(1));
+        w.close(PaneId(2));
+        assert!(!w.last_pane(), "focus moved to a pane that is gone");
+        assert_eq!(w.active, PaneId(1));
+    }
+
+    #[test]
+    fn focusing_the_pane_already_focused_does_not_lose_the_last_one() {
+        let mut w = Window::new(WindowId(1), PaneId(1));
+        w.split(Direction::Columns, PaneId(2), 0.5);
+        // A redundant focus must not make "last" point at the current pane,
+        // or the toggle would stop working.
+        w.focus_pane(PaneId(2));
+        assert!(w.last_pane());
         assert_eq!(w.active, PaneId(1));
     }
 }

@@ -105,6 +105,8 @@ pub struct Client<F, T> {
     pub chooser: Option<chooser::Chooser>,
     /// Copy mode, while it is up. Modal: it owns the keyboard.
     pub copy: Option<copy::CopyMode>,
+    /// The session's environment, when it has been asked for.
+    pub environment: Vec<(String, String)>,
     /// The key table, as the daemon's config describes it.
     pub bindings: bindings::Bindings,
     /// The rule being dragged, and whether it runs vertically.
@@ -148,6 +150,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             chooser: None,
             copy: None,
             buffers: Vec::new(),
+            environment: Vec::new(),
             bindings: bindings::Bindings::default(),
             dragging: None,
             fatal: None,
@@ -165,7 +168,11 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         let mut caps = self.frontend.caps();
         self.frame.size = caps.size;
         caps.size = status_bar::reserve(caps.size);
-        self.transport.send(ClientMsg::Attach { session, caps })?;
+        self.transport.send(ClientMsg::Attach {
+            session,
+            caps,
+            env: haven_proto::client_environment(),
+        })?;
         self.attached = true;
         Ok(())
     }
@@ -477,7 +484,11 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         self.frame.panes.clear();
         self.frame.status = None;
         self.chooser = None;
-        self.transport.send(ClientMsg::NewSession { name, caps })
+        self.transport.send(ClientMsg::NewSession {
+            name,
+            caps,
+            env: haven_proto::client_environment(),
+        })
     }
 
     fn pick(&mut self, choice: chooser::Choice) -> Result<(), TransportError> {
@@ -489,7 +500,11 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 caps.size = status_bar::reserve(caps.size);
                 self.frame.panes.clear();
                 self.frame.status = None;
-                self.transport.send(ClientMsg::Attach { session: Some(id), caps })
+                self.transport.send(ClientMsg::Attach {
+                    session: Some(id),
+                    caps,
+                    env: haven_proto::client_environment(),
+                })
             }
             chooser::Choice::Window(index) => {
                 self.transport.send(ClientMsg::Action(Action::SelectWindow(index)))
@@ -754,6 +769,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     None => self.frame.notice = Some("not found".into()),
                 }
                 true
+            }
+            ServerMsg::Environment(env) => {
+                self.environment = env;
+                false
             }
             ServerMsg::Keys(table) => {
                 self.bindings = bindings::Bindings::default()

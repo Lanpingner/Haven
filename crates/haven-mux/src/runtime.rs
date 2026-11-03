@@ -327,6 +327,14 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
         self.sync_sizes()
     }
 
+    pub fn last_window(&mut self) -> io::Result<bool> {
+        let ok = self.session.last_window();
+        if ok {
+            self.sync_sizes()?;
+        }
+        Ok(ok)
+    }
+
     pub fn resize_active(&mut self, edge: Edge, fraction: f32) -> io::Result<bool> {
         let ok = self.session.resize_active(edge, fraction);
         if ok {
