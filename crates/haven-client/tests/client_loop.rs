@@ -301,15 +301,7 @@ fn the_wheel_scrolls_the_pane_under_the_pointer() {
         &[(1, 0, 0, 10, 4), (2, 11, 0, 10, 4)],
         1,
     ))]);
-    let wheel = |col: u16| {
-        InputEvent::Mouse(MouseEvent {
-            button: MouseButton::WheelUp,
-            col,
-            row: 1,
-            pressed: true,
-            mods: Modifiers::empty(),
-        })
-    };
+    let wheel = |col: u16| InputEvent::Mouse(MouseEvent::press(MouseButton::WheelUp, col, 1));
     let frontend = ScriptedFrontend::new(size(21, 4), []);
     let mut client = Client::new(frontend, server);
     client.tick().unwrap(); // layout
@@ -341,6 +333,7 @@ fn a_scrolled_pane_says_so_and_hides_its_cursor() {
             app_cursor_keys: false,
             bracketed_paste: false,
             cursor_visible: false,
+            mouse: haven_proto::MouseMode::default(),
         },
         ServerMsg::Scrolled { pane: PaneId(1), offset: 7, total: 40 },
     ]);
@@ -349,4 +342,82 @@ fn a_scrolled_pane_says_so_and_hides_its_cursor() {
     client.tick().unwrap();
     assert_eq!(client.frame.scroll(), Some((7, 40)));
     assert!(!client.frame.cursor_visible(), "a cursor below the view would be drawn");
+}
+
+#[test]
+fn a_click_moves_focus_to_the_pane_under_the_pointer() {
+    use haven_client::{MouseButton, MouseEvent};
+
+    let server = ScriptedTransport::new([ServerMsg::Layout(layout(
+        &[(1, 0, 0, 10, 4), (2, 11, 0, 10, 4)],
+        1,
+    ))]);
+    let frontend = ScriptedFrontend::new(size(21, 4), []);
+    let mut client = Client::new(frontend, server);
+    client.tick().unwrap();
+    assert_eq!(client.focus, Some(PaneId(1)));
+
+    client.frontend = ScriptedFrontend::new(
+        size(21, 4),
+        [InputEvent::Mouse(MouseEvent::press(MouseButton::Left, 15, 2))],
+    );
+    client.tick().unwrap();
+    assert_eq!(
+        client.transport.sent.last(),
+        Some(&ClientMsg::Action(haven_proto::Action::SelectPane(2)))
+    );
+}
+
+#[test]
+fn a_pane_that_asked_for_the_mouse_gets_it_in_its_own_coordinates() {
+    use haven_client::{MouseButton, MouseEvent};
+    use haven_proto::{MouseMode, MouseTracking};
+
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 10, 4), (2, 11, 0, 10, 4)], 2)),
+        ServerMsg::Modes {
+            pane: PaneId(2),
+            app_cursor_keys: false,
+            bracketed_paste: false,
+            cursor_visible: true,
+            mouse: MouseMode { tracking: MouseTracking::Click, sgr: true },
+        },
+    ]);
+    let frontend = ScriptedFrontend::new(size(21, 4), []);
+    let mut client = Client::new(frontend, server);
+    client.tick().unwrap();
+
+    // Screen column 15 is column 4 of a pane that starts at 11, and the
+    // wire is one-based on top of that.
+    client.frontend = ScriptedFrontend::new(
+        size(21, 4),
+        [InputEvent::Mouse(MouseEvent::press(MouseButton::Left, 15, 2))],
+    );
+    client.tick().unwrap();
+    let sent: Vec<Vec<u8>> = client
+        .transport
+        .sent
+        .iter()
+        .filter_map(|m| match m {
+            ClientMsg::Input { pane, bytes } if *pane == PaneId(2) => Some(bytes.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, vec![b"\x1b[<0;5;3M".to_vec()], "wrong coordinates or no report");
+}
+
+#[test]
+fn the_wheel_still_scrolls_a_pane_that_does_not_want_the_mouse() {
+    use haven_client::{MouseButton, MouseEvent};
+
+    let server = ScriptedTransport::new([ServerMsg::Layout(layout(&[(1, 0, 0, 10, 4)], 1))]);
+    let frontend = ScriptedFrontend::new(size(10, 4), []);
+    let mut client = Client::new(frontend, server);
+    client.tick().unwrap();
+    client.frontend = ScriptedFrontend::new(
+        size(10, 4),
+        [InputEvent::Mouse(MouseEvent::press(MouseButton::WheelUp, 2, 2))],
+    );
+    client.tick().unwrap();
+    assert!(matches!(client.transport.sent.last(), Some(ClientMsg::Scroll { .. })));
 }

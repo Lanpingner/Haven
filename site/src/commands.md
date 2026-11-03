@@ -11,8 +11,14 @@ the other.
 | `new-session` (`new`) | a new session on this daemon, named `haven-<n>` |
 | `scroll-up`, `scroll-down`, `scroll-end` | as the paging keys do |
 | `select-window <n>` (`select-tab`) | go to tab *n*, numbered from 1 |
+| `copy-mode` (`copy`), `paste-buffer` | enter copy mode / paste the newest buffer |
+| `choose` | the session tree |
 | `kill-pane`, `zoom`, `detach` | as the keys do |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |
+
+Aliases are offered by completion deliberately: someone who types `vsplit`
+should see it in the list rather than be told after the fact that it does not
+exist.
 
 ## Completion
 

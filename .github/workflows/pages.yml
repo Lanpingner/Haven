@@ -2,7 +2,8 @@ name: pages
 on:
   push:
     branches: [master, main]
-    paths: ['site/**', '.github/workflows/pages.yml']
+    # The book includes docs/PLAN.md verbatim, so a plan edit must redeploy too.
+    paths: ['site/**', 'docs/PLAN.md', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 # The deployment needs to write a Pages artifact and claim an id-token; nothing
@@ -26,9 +27,13 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install mdbook --locked
+      - run: mdbook build site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: site/book
       - id: deploy
         uses: actions/deploy-pages@v4

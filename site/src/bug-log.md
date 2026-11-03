@@ -119,5 +119,7 @@ before typing.
   *inside* a message — so a wire-format change makes the frame fail to decode
   before anything can compare versions. The decode error now names the likely
   cause instead of reporting "Hit the end of buffer".
+- `OSC 52` payloads were kept base64-encoded and handed to the client as if
+  they were text, so honouring one would have put `aGVsbG8=` on the clipboard.
 - `str::replace` with a non-matching pattern is a silent no-op: an edit script
   that does not assert can "succeed" while changing nothing.

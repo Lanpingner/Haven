@@ -50,6 +50,11 @@ pub struct GpuFrontend {
     pointer: (u16, u16),
     /// Fractions of a row left over from a touchpad's smooth scrolling.
     wheel_residue: f32,
+    /// Modifier state, mirrored from the window so a mouse event can carry
+    /// it: the protocol folds shift, alt and ctrl into the button byte.
+    modifiers: Modifiers,
+    /// Which button is held, for motion reporting.
+    held: Option<MouseButton>,
     /// Opened on first use and then kept: on X11 the owner of a selection
     /// has to stay alive to serve it, so dropping this between copies would
     /// make the clipboard empty itself the moment it was filled.
@@ -104,6 +109,36 @@ impl GpuFrontend {
         );
     }
 
+    /// A button press or release at the pointer.
+    pub fn button(&mut self, button: MouseButton, pressed: bool) -> InputEvent {
+        InputEvent::Mouse(MouseEvent {
+            button,
+            col: self.pointer.0,
+            row: self.pointer.1,
+            pressed,
+            motion: false,
+            mods: self.modifiers,
+        })
+    }
+
+    /// Movement, reported only when it crosses into another cell: a program
+    /// that asked for motion wants one event per cell, not per pixel.
+    pub fn moved(&mut self, x: f64, y: f64, held: Option<MouseButton>) -> Option<InputEvent> {
+        let before = self.pointer;
+        self.note_pointer(x, y);
+        if self.pointer == before {
+            return None;
+        }
+        Some(InputEvent::Mouse(MouseEvent {
+            button: held.unwrap_or(MouseButton::None),
+            col: self.pointer.0,
+            row: self.pointer.1,
+            pressed: held.is_some(),
+            motion: true,
+            mods: self.modifiers,
+        }))
+    }
+
     /// A wheel notch at the pointer, or `None` when it did not move far
     /// enough to count. Fractions accumulate so a touchpad is not lost.
     pub fn wheel(&mut self, lines: f32) -> Option<InputEvent> {
@@ -119,7 +154,8 @@ impl GpuFrontend {
             col: self.pointer.0,
             row: self.pointer.1,
             pressed: true,
-            mods: Modifiers::empty(),
+            motion: false,
+            mods: self.modifiers,
         }))
     }
 
@@ -269,6 +305,11 @@ pub fn translate_key(
 }
 
 fn key_event(key: Key, mods: ModifiersState, state: KeyState) -> InputEvent {
+    InputEvent::Key(KeyEvent { key, mods: modifiers_of(mods), state })
+}
+
+/// winit's modifier state as ours.
+fn modifiers_of(mods: ModifiersState) -> Modifiers {
     let mut modifiers = Modifiers::empty();
     if mods.shift_key() {
         modifiers |= Modifiers::SHIFT;
@@ -282,7 +323,18 @@ fn key_event(key: Key, mods: ModifiersState, state: KeyState) -> InputEvent {
     if mods.super_key() {
         modifiers |= Modifiers::SUPER;
     }
-    InputEvent::Key(KeyEvent { key, mods: modifiers, state })
+    modifiers
+}
+
+fn translate_button(button: winit::event::MouseButton) -> Option<MouseButton> {
+    match button {
+        winit::event::MouseButton::Left => Some(MouseButton::Left),
+        winit::event::MouseButton::Middle => Some(MouseButton::Middle),
+        winit::event::MouseButton::Right => Some(MouseButton::Right),
+        // The protocol has no numbers for the rest, so they are dropped
+        // rather than reported as something they are not.
+        _ => None,
+    }
 }
 
 /// How to open the window.
@@ -390,7 +442,10 @@ impl<T: Transport> ApplicationHandler<Wake> for App<T> {
             WindowEvent::CloseRequested => {
                 self.client.frontend.push(InputEvent::Quit);
             }
-            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods.state(),
+            WindowEvent::ModifiersChanged(mods) => {
+                self.modifiers = mods.state();
+                self.client.frontend.modifiers = modifiers_of(self.modifiers);
+            }
             WindowEvent::KeyboardInput { event, is_synthetic, .. } => {
                 // A deliberate hook: the window's key path cannot be checked
                 // by reading it — the mapping was correct while the window
@@ -427,7 +482,17 @@ impl<T: Transport> ApplicationHandler<Wake> for App<T> {
                 self.client.frontend.push(InputEvent::Focus(focused));
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.client.frontend.note_pointer(position.x, position.y);
+                let held = self.client.frontend.held;
+                if let Some(event) = self.client.frontend.moved(position.x, position.y, held) {
+                    self.client.frontend.push(event);
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let Some(button) = translate_button(button) else { return };
+                let pressed = state == ElementState::Pressed;
+                self.client.frontend.held = pressed.then_some(button);
+                let event = self.client.frontend.button(button, pressed);
+                self.client.frontend.push(event);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // A line of a touchpad's smooth scroll is a fraction of a

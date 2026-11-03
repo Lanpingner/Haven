@@ -16,8 +16,10 @@ interactive capability probe are not written yet. See
 [its status section](docs/PLAN.md#20-implementation-status) for exactly what
 exists.
 
-There is a project page at <https://berromaa.github.io/HavenTerminal/>, built
-from [site/](site/).
+There is a project page at <https://berromaa.github.io/HavenTerminal/> — an
+mdBook whose chapters are the markdown files in [site/src/](site/src/). Build it
+with `mdbook serve site --open`; the last chapter includes this repository's
+[docs/PLAN.md](docs/PLAN.md) verbatim rather than copying it.
 
 ## Try it
 
@@ -70,6 +72,14 @@ the bar says so, its cursor is not drawn, and typing returns to the live
 screen. The offset is per client: two people on one session read at their own
 pace. The alternate screen keeps no history, so a full-screen program scrolls
 nothing.
+
+### Mouse
+
+A pane that asked for mouse reporting (1000/1002/1003, SGR or the original
+encoding) gets it, in its own coordinates — so vim, mc and less respond to
+clicks and drags. Everything else belongs to the multiplexer: the wheel reads
+history, a click moves focus, and dragging the rule between two panes resizes
+them. The pane under the *pointer* decides, not the focused one.
 
 ### Copy mode
 

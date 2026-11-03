@@ -99,15 +99,98 @@ pub enum MouseButton {
     Right,
     WheelUp,
     WheelDown,
+    /// Movement with nothing held.
+    None,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MouseEvent {
     pub button: MouseButton,
+    /// Cell coordinates, relative to whatever surface produced the event.
     pub col: u16,
     pub row: u16,
     pub pressed: bool,
+    /// The pointer moved rather than a button changing state. A program only
+    /// hears about these if it asked for them (1002 or 1003), so the flag has
+    /// to survive as far as the encoder.
+    pub motion: bool,
     pub mods: Modifiers,
+}
+
+impl MouseEvent {
+    pub fn press(button: MouseButton, col: u16, row: u16) -> Self {
+        Self { button, col, row, pressed: true, motion: false, mods: Modifiers::empty() }
+    }
+
+    pub fn with(mut self, mods: Modifiers) -> Self {
+        self.mods = mods;
+        self
+    }
+
+    /// The button's number as the protocol counts them, before modifiers and
+    /// the motion bit are folded in.
+    fn code(&self) -> u16 {
+        match self.button {
+            MouseButton::Left => 0,
+            MouseButton::Middle => 1,
+            MouseButton::Right => 2,
+            MouseButton::WheelUp => 64,
+            MouseButton::WheelDown => 65,
+            MouseButton::None => 3,
+        }
+    }
+
+    /// The bytes a pane expects for this event, or empty when the pane has
+    /// not asked for mouse reporting at all.
+    ///
+    /// Coordinates are one-based and relative to the pane, so the caller
+    /// subtracts the pane's origin before calling.
+    pub fn encode(&self, mode: haven_proto::MouseMode) -> Vec<u8> {
+        use haven_proto::MouseTracking;
+        if mode.tracking == MouseTracking::Off {
+            return Vec::new();
+        }
+        // A wheel notch is a press with no release, and it is reported at
+        // every tracking level.
+        let wheel = matches!(self.button, MouseButton::WheelUp | MouseButton::WheelDown);
+        if self.motion && !wheel {
+            match mode.tracking {
+                MouseTracking::Off | MouseTracking::Click => return Vec::new(),
+                // 1002 reports motion only while a button is down.
+                MouseTracking::ButtonEvent if self.button == MouseButton::None => {
+                    return Vec::new()
+                }
+                _ => {}
+            }
+        }
+
+        let mut code = self.code();
+        if self.mods.contains(Modifiers::SHIFT) {
+            code += 4;
+        }
+        if self.mods.contains(Modifiers::ALT) {
+            code += 8;
+        }
+        if self.mods.contains(Modifiers::CTRL) {
+            code += 16;
+        }
+        if self.motion {
+            code += 32;
+        }
+        let (col, row) = (self.col + 1, self.row + 1);
+
+        if mode.sgr {
+            let final_byte = if self.pressed || wheel { 'M' } else { 'm' };
+            return format!("\x1b[<{code};{col};{row}{final_byte}").into_bytes();
+        }
+        // The original encoding has no room for a release to say which button
+        // it was, and no room for a coordinate past 223.
+        let code = if self.pressed || wheel { code } else { 3 };
+        if col > 223 || row > 223 {
+            return Vec::new();
+        }
+        vec![0x1b, b'[', b'M', 32 + code as u8, 32 + col as u8, 32 + row as u8]
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -299,6 +382,90 @@ fn csi_u(code: u32, mods: Modifiers) -> Vec<u8> {
 /// Convenience wrapper used by the client loop.
 pub fn encode_key(event: &KeyEvent, tier: KeyTier) -> Vec<u8> {
     KeyEncoder::new(tier).encode(event)
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+    use haven_proto::{MouseMode, MouseTracking};
+
+    fn mode(tracking: MouseTracking, sgr: bool) -> MouseMode {
+        MouseMode { tracking, sgr }
+    }
+
+    #[test]
+    fn a_pane_that_did_not_ask_hears_nothing() {
+        let event = MouseEvent::press(MouseButton::Left, 3, 4);
+        assert!(event.encode(mode(MouseTracking::Off, true)).is_empty());
+    }
+
+    #[test]
+    fn sgr_reports_press_and_release_distinctly() {
+        let press = MouseEvent::press(MouseButton::Left, 3, 4);
+        assert_eq!(press.encode(mode(MouseTracking::Click, true)), b"\x1b[<0;4;5M".to_vec());
+        let release = MouseEvent { pressed: false, ..press };
+        // Lowercase `m`, and the button survives — which is the whole reason
+        // SGR exists.
+        assert_eq!(release.encode(mode(MouseTracking::Click, true)), b"\x1b[<0;4;5m".to_vec());
+    }
+
+    #[test]
+    fn the_legacy_encoding_loses_the_button_on_release() {
+        let press = MouseEvent::press(MouseButton::Right, 0, 0);
+        assert_eq!(
+            press.encode(mode(MouseTracking::Click, false)),
+            vec![0x1b, b'[', b'M', 34, 33, 33]
+        );
+        let release = MouseEvent { pressed: false, ..press };
+        // 3 is "some button came up"; the original encoding cannot say which.
+        assert_eq!(
+            release.encode(mode(MouseTracking::Click, false)),
+            vec![0x1b, b'[', b'M', 35, 33, 33]
+        );
+    }
+
+    #[test]
+    fn the_legacy_encoding_refuses_a_coordinate_it_cannot_express() {
+        // Past 223 the byte would wrap and point at the wrong cell, which is
+        // worse than reporting nothing.
+        let far = MouseEvent::press(MouseButton::Left, 300, 0);
+        assert!(far.encode(mode(MouseTracking::Click, false)).is_empty());
+        assert!(!far.encode(mode(MouseTracking::Click, true)).is_empty(), "SGR has no such limit");
+    }
+
+    #[test]
+    fn modifiers_fold_into_the_button_byte() {
+        let event = MouseEvent::press(MouseButton::Left, 0, 0).with(Modifiers::CTRL);
+        assert_eq!(event.encode(mode(MouseTracking::Click, true)), b"\x1b[<16;1;1M".to_vec());
+        let event = MouseEvent::press(MouseButton::Left, 0, 0).with(Modifiers::SHIFT);
+        assert_eq!(event.encode(mode(MouseTracking::Click, true)), b"\x1b[<4;1;1M".to_vec());
+    }
+
+    #[test]
+    fn motion_is_reported_only_to_a_pane_that_asked_for_it() {
+        let drag = MouseEvent { motion: true, ..MouseEvent::press(MouseButton::Left, 0, 0) };
+        assert!(drag.encode(mode(MouseTracking::Click, true)).is_empty(), "1000 is clicks only");
+        assert!(!drag.encode(mode(MouseTracking::ButtonEvent, true)).is_empty());
+
+        // 1002 is motion *while a button is held*; a bare hover is not that.
+        let hover = MouseEvent {
+            button: MouseButton::None,
+            pressed: false,
+            motion: true,
+            ..MouseEvent::press(MouseButton::Left, 0, 0)
+        };
+        assert!(hover.encode(mode(MouseTracking::ButtonEvent, true)).is_empty());
+        assert!(!hover.encode(mode(MouseTracking::AnyEvent, true)).is_empty());
+    }
+
+    #[test]
+    fn the_wheel_reports_at_every_level_and_never_releases() {
+        let wheel = MouseEvent::press(MouseButton::WheelUp, 0, 0);
+        assert_eq!(wheel.encode(mode(MouseTracking::Click, true)), b"\x1b[<64;1;1M".to_vec());
+        // A notch has no up stroke, so even one marked as a release is `M`.
+        let odd = MouseEvent { pressed: false, ..wheel };
+        assert_eq!(odd.encode(mode(MouseTracking::Click, true)), b"\x1b[<64;1;1M".to_vec());
+    }
 }
 
 #[cfg(test)]

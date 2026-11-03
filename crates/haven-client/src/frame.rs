@@ -39,6 +39,8 @@ pub struct PaneFrame {
     /// Modes that change how this client must encode input.
     pub app_cursor_keys: bool,
     pub bracketed_paste: bool,
+    /// What this pane has asked to hear about the mouse.
+    pub mouse: haven_proto::MouseMode,
     /// Drawn only when the pane says so: DECTCEM, and a view scrolled away
     /// from the cursor.
     pub cursor_visible: bool,
@@ -188,11 +190,13 @@ impl FrameModel {
         app_cursor_keys: bool,
         bracketed_paste: bool,
         cursor_visible: bool,
+        mouse: haven_proto::MouseMode,
     ) {
         if let Some(entry) = self.panes.get_mut(&pane.0) {
             entry.app_cursor_keys = app_cursor_keys;
             entry.bracketed_paste = bracketed_paste;
             entry.cursor_visible = cursor_visible;
+            entry.mouse = mouse;
         }
     }
 

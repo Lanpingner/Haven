@@ -32,13 +32,16 @@ warnings, `cargo test --workspace` green.
   native-capability detection, and `ZDOTDIR` / `--rcfile` shims.
 - **Interface** — status bar, command line with completion, the session tree,
   scrollback reading, live theming from the daemon's config.
+- **Copy mode** — a vi-keyed cursor over a pane's history, selection, search,
+  and `OSC 52` clipboard writes. The mode is the client's; extraction and search
+  are the daemon's, because only it holds the history.
 
 ## Not written yet
 
 - **Plugins.** The WASM host and the WIT world are specified in §15 of the plan
   and nothing is built.
-- **Copy mode** and the modal key table — in progress on `master`.
-- **Configurable bindings** and a command palette.
+- **The modal key table**, configurable bindings and a command palette — the
+  rest of M4. Copy mode itself has landed.
 - **The interactive capability probe.** Host detection is environment-based
   guessing today; the probe with timeouts and per-`TERM` caching is still owed.
 - **Live daemon upgrade.** A new binary currently needs the daemon restarted.

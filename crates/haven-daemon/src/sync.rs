@@ -19,7 +19,7 @@ pub struct PaneSync {
     pub clusters_sent: u16,
     pub cursor: Option<haven_core::Cursor>,
     pub title: Option<String>,
-    pub modes: Option<(bool, bool, bool)>,
+    pub modes: Option<crate::PaneModes>,
     /// False until the client has had a full snapshot.
     pub snapshotted: bool,
     /// How far back this client is reading, in rows above the live bottom.

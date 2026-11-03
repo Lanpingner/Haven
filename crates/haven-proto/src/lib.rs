@@ -148,6 +148,26 @@ impl RowRle {
     }
 }
 
+/// What a pane has asked to hear about the mouse: DEC modes 1000/1002/1003
+/// for how much, and 1006 for how it is written.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct MouseMode {
+    pub tracking: MouseTracking,
+    pub sgr: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum MouseTracking {
+    #[default]
+    Off,
+    /// 1000: presses and releases.
+    Click,
+    /// 1002: and motion while a button is held.
+    ButtonEvent,
+    /// 1003: and all motion.
+    AnyEvent,
+}
+
 /// A cell in a pane's whole history: scrollback first, then the live rows.
 ///
 /// Absolute rather than relative to a view, so a selection survives the
@@ -292,6 +312,7 @@ pub enum ServerMsg {
         pane: PaneId,
         app_cursor_keys: bool,
         bracketed_paste: bool,
+        mouse: MouseMode,
         /// DECTCEM, and false besides while this client's view is scrolled
         /// away from the cursor: a block parked at the bottom of a page of
         /// history is not where anything is about to be typed.

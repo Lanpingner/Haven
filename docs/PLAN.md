@@ -1087,7 +1087,6 @@ and theming (M7), sixel/kitty graphics.
 **Known gaps:**
 - Host capability detection is environment-based guessing; the interactive
   probe with timeouts and per-`TERM` caching is M6.
-- Mouse reporting is parsed and tracked but not encoded back from a client.
 - The status line and tab bar are built-in rather than plugins (M3.5 inverts
   that), though both are already pure functions of state.
 - `haven attach` has no detach-and-leave-running key beyond `Ctrl+A d`, and no
@@ -1177,6 +1176,15 @@ Extraction and search are the daemon's, not the client's: only the daemon has
 the whole history, and joining a wrapped row to the next without a newline —
 which is what makes a copied command paste back as one command — needs the
 `wrapped` flag that never reaches a client.
+
+The mouse reaches panes now. The emulator had tracked 1000/1002/1003 and 1006
+since M2 and no client ever encoded an event back, so clicking in vim did
+nothing. The pane's modes ride along on `ServerMsg::Modes`, the client encodes
+in the pane's own coordinates, and what a pane did not ask for stays with the
+multiplexer: wheel to read history, click to focus, drag a rule to resize.
+The terminal client also had to learn to *decode* mouse reports — `raw.rs` has
+been asking hosts for 1002 and 1006 all along, and the replies were falling
+through the key path.
 
 **Bugs this work surfaced, worth remembering:**
 - `OSC 52` payloads were kept base64-encoded and handed to the client as if

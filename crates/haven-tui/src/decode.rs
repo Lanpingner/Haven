@@ -12,6 +12,50 @@ use std::time::{Duration, Instant};
 use haven_client::input::{InputEvent, Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use haven_proto::KeyTier;
 
+/// Parse an SGR mouse report's parameters: `Cb ; Cx ; Cy`.
+///
+/// The button byte folds three things together — which button, which
+/// modifiers, and whether this is motion — and taking them apart in the wrong
+/// order is how a ctrl-drag turns into a middle click.
+fn mouse_event(params: &[u8], pressed: bool) -> Option<haven_client::input::MouseEvent> {
+    use haven_client::input::{MouseButton, MouseEvent};
+    let text = String::from_utf8_lossy(params);
+    let mut fields = text.split(';').map(|f| f.parse::<u32>().ok());
+    let code = fields.next()??;
+    let col = fields.next()??;
+    let row = fields.next()??;
+
+    let mut mods = Modifiers::empty();
+    if code & 4 != 0 {
+        mods |= Modifiers::SHIFT;
+    }
+    if code & 8 != 0 {
+        mods |= Modifiers::ALT;
+    }
+    if code & 16 != 0 {
+        mods |= Modifiers::CTRL;
+    }
+    let motion = code & 32 != 0;
+    let button = match code & 0b1100_0011 {
+        0 => MouseButton::Left,
+        1 => MouseButton::Middle,
+        2 => MouseButton::Right,
+        3 => MouseButton::None,
+        64 => MouseButton::WheelUp,
+        65 => MouseButton::WheelDown,
+        _ => return None,
+    };
+    Some(MouseEvent {
+        button,
+        // The wire is one-based and everything above it is not.
+        col: col.saturating_sub(1).min(u16::MAX as u32) as u16,
+        row: row.saturating_sub(1).min(u16::MAX as u32) as u16,
+        pressed,
+        motion,
+        mods,
+    })
+}
+
 /// How long to wait for the rest of a sequence before deciding a lone `ESC`
 /// was the Escape key. A blind timeout on every Escape is what makes vim feel
 /// soggy inside tmux, so a buffered follow-on byte short-circuits it.
@@ -232,6 +276,15 @@ impl Decoder {
             return Decoded::Ignore;
         }
 
+        // SGR mouse (1006), which is what `raw.rs` asks the host for.
+        if params_raw.first() == Some(&b'<') && matches!(final_byte, b'M' | b'm') {
+            self.take(total);
+            return match mouse_event(&params_raw[1..], final_byte == b'M') {
+                Some(event) => Decoded::Event(InputEvent::Mouse(event)),
+                None => Decoded::Ignore,
+            };
+        }
+
         let text = String::from_utf8_lossy(params_raw);
         let fields: Vec<&str> = text.split(';').collect();
         let number = |i: usize| -> u32 { fields.get(i).and_then(|f| f.parse().ok()).unwrap_or(0) };
@@ -331,6 +384,78 @@ fn utf8_len(first: u8) -> usize {
         0xe0..=0xef => 3,
         0xf0..=0xf7 => 4,
         _ => 1,
+    }
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+    use haven_client::input::MouseButton;
+
+    fn decode(bytes: &[u8]) -> Vec<InputEvent> {
+        let mut d = Decoder::default();
+        d.push(bytes);
+        let mut out = Vec::new();
+        while let Some(event) = d.next_event() {
+            out.push(event);
+        }
+        out
+    }
+
+    fn mouse(bytes: &[u8]) -> haven_client::input::MouseEvent {
+        match decode(bytes).into_iter().next() {
+            Some(InputEvent::Mouse(m)) => m,
+            other => panic!("not a mouse event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_sgr_press_decodes_to_zero_based_cells() {
+        let m = mouse(b"\x1b[<0;5;3M");
+        assert_eq!((m.col, m.row), (4, 2), "the wire is one-based and we are not");
+        assert_eq!(m.button, MouseButton::Left);
+        assert!(m.pressed);
+        assert!(!m.motion);
+    }
+
+    #[test]
+    fn a_release_is_the_lowercase_final_byte() {
+        let m = mouse(b"\x1b[<2;1;1m");
+        assert_eq!(m.button, MouseButton::Right);
+        assert!(!m.pressed);
+    }
+
+    #[test]
+    fn the_button_byte_is_taken_apart_in_the_right_order() {
+        // Ctrl + drag: 0 (left) + 16 (ctrl) + 32 (motion) = 48. Masking in
+        // the wrong order reads this as a middle click.
+        let m = mouse(b"\x1b[<48;1;1M");
+        assert_eq!(m.button, MouseButton::Left);
+        assert!(m.motion);
+        assert!(m.mods.contains(Modifiers::CTRL));
+    }
+
+    #[test]
+    fn the_wheel_decodes() {
+        assert_eq!(mouse(b"\x1b[<64;1;1M").button, MouseButton::WheelUp);
+        assert_eq!(mouse(b"\x1b[<65;1;1M").button, MouseButton::WheelDown);
+    }
+
+    #[test]
+    fn a_bare_hover_has_no_button() {
+        // 3 + 32: motion with nothing held, which 1003 reports.
+        let m = mouse(b"\x1b[<35;1;1M");
+        assert_eq!(m.button, MouseButton::None);
+        assert!(m.motion);
+    }
+
+    #[test]
+    fn a_mouse_report_is_never_mistaken_for_keys() {
+        // Before this was parsed, these bytes fell through to the key path
+        // and typed rubbish into the pane.
+        let events = decode(b"\x1b[<0;5;3M");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], InputEvent::Mouse(_)));
     }
 }
 

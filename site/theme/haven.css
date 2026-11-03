@@ -1,0 +1,61 @@
+/* Light-touch styling on top of mdBook's own themes.
+   Only two things need custom rules: the pill row on the landing page, and
+   making the wide comparison table readable instead of squashed. Everything
+   else is deliberately left to whichever mdBook theme the reader picked. */
+
+.pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 1.4rem 0 1.8rem;
+}
+
+.pill {
+    font-family: var(--mono-font, monospace);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    padding: 0.2rem 0.65rem;
+    border: 1px solid var(--table-border-color, #ccc);
+    border-radius: 999px;
+    color: var(--fg);
+    opacity: 0.85;
+    white-space: nowrap;
+}
+
+.pill b {
+    font-weight: 600;
+    opacity: 1;
+}
+
+/* mdBook centres tables and lets them overflow the content column. The
+   comparison table has seven columns, so it needs to scroll on its own rather
+   than push the page sideways. */
+.content table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    margin: 1.5rem 0;
+}
+
+.content table td,
+.content table th {
+    vertical-align: top;
+}
+
+/* The last column of every table on the comparison page is Haven's own, and is
+   the one a reader is looking for. */
+.content table td:last-child strong {
+    color: var(--links);
+}
+
+/* Terminal sketches are fenced code blocks of box-drawing characters; they must
+   not wrap, and they look wrong at the body text size. */
+.content pre > code {
+    font-size: 0.85em;
+    line-height: 1.45;
+}
+
+/* Keep inline code from breaking mid-identifier in prose. */
+.content :not(pre) > code {
+    white-space: nowrap;
+}

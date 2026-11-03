@@ -11,3 +11,6 @@ flamegraph.svg
 .sw[a-p]
 *.swp
 a.out
+
+# mdbook output
+/site/book

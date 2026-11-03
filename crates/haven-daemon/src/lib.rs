@@ -817,18 +817,20 @@ fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
         // A cursor outside the view is not drawn: a block parked at the edge
         // of a page of history says the wrong thing about where typing goes.
         let cursor = scrolled_cursor(grid.cursor, offset, grid.num_rows());
-        let modes = (
-            pane.emulator.term.modes.app_cursor_keys,
-            pane.emulator.term.modes.bracketed_paste,
-            pane.emulator.term.modes.cursor_visible && cursor.is_some(),
-        );
+        let modes = PaneModes {
+            app_cursor_keys: pane.emulator.term.modes.app_cursor_keys,
+            bracketed_paste: pane.emulator.term.modes.bracketed_paste,
+            cursor_visible: pane.emulator.term.modes.cursor_visible && cursor.is_some(),
+            mouse: mouse_mode(&pane.emulator.term.modes),
+        };
         if state.modes != Some(modes) {
             state.modes = Some(modes);
             let _ = client.framed.queue(&ServerMsg::Modes {
                 pane: rect.pane,
-                app_cursor_keys: modes.0,
-                bracketed_paste: modes.1,
-                cursor_visible: modes.2,
+                app_cursor_keys: modes.app_cursor_keys,
+                bracketed_paste: modes.bracketed_paste,
+                mouse: modes.mouse,
+                cursor_visible: modes.cursor_visible,
             });
         }
 
@@ -889,6 +891,30 @@ fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
                 .framed
                 .queue(&ServerMsg::Title { pane: rect.pane, title: title.unwrap_or_default() });
         }
+    }
+}
+
+/// What a pane's modes amount to for one client, which is what gets diffed
+/// against what that client was last told.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PaneModes {
+    pub app_cursor_keys: bool,
+    pub bracketed_paste: bool,
+    pub cursor_visible: bool,
+    pub mouse: haven_proto::MouseMode,
+}
+
+fn mouse_mode(modes: &haven_core::term::Modes) -> haven_proto::MouseMode {
+    use haven_core::term::MouseReport;
+    use haven_proto::MouseTracking;
+    haven_proto::MouseMode {
+        tracking: match modes.mouse_report {
+            MouseReport::Off => MouseTracking::Off,
+            MouseReport::Click => MouseTracking::Click,
+            MouseReport::ButtonEvent => MouseTracking::ButtonEvent,
+            MouseReport::AnyEvent => MouseTracking::AnyEvent,
+        },
+        sgr: modes.mouse_sgr,
     }
 }
 

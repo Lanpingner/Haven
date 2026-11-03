@@ -5,8 +5,10 @@
 - [How it compares](./comparison.md)
 - [Run modes](./modes.md)
 - [Keys and commands](./keys.md)
+  - [The command line](./commands.md)
 - [Themes and configuration](./themes.md)
 - [Honest status](./status.md)
+  - [Notes from the bug log](./bug-log.md)
 - [Architecture](./architecture.md)
 - [Build it](./build.md)
 

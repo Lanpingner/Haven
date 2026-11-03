@@ -20,13 +20,49 @@ other.
 | `PageUp` / `PageDown` | read back through the pane's history |
 | `Home` / `End` | the oldest row / back to the live screen |
 | `e` / `E` / `t` | even-horizontal / even-vertical / tiled layout |
+| `[` / `]` | enter copy mode / paste the newest buffer |
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree |
 | `Ctrl+A` | send a literal `Ctrl+A` |
 
+`Shift` plus an arrow resizes, the same as `H` `J` `K` `L`. `PageUp` moves
+`PAGE_ROWS` — nearly a screenful — rather than the pane's own height, because
+the key table has no way to know how tall the pane is; the daemon clamps it to
+the history that exists.
+
 The prefix table is fixed for now; configurable bindings and a modal key stack
 are part of the unfinished half of M4.
+
+## Copy mode
+
+`Ctrl+A` `[` goes up into the history and `]` brings text back, which is how
+tmux spells it. The keys inside are vi's:
+
+| Key | Does |
+|---|---|
+| `h` `j` `k` `l` or arrows | move the cursor |
+| `0` / `$` | start / end of the line |
+| `w` / `b` | next / previous word |
+| `Ctrl+U` / `Ctrl+D` | half a page up / down |
+| `PageUp` / `PageDown` | a page |
+| `g` / `G` | the oldest row / back to the live screen |
+| `/` / `?` | search forward / backward |
+| `n` / `N` | the next match / the previous one |
+| `v` or `Space` | start a selection |
+| `y` or `Enter` | copy it and leave |
+| `q` or `Esc` | leave |
+
+The split of work is the interesting part. **The mode is the client's**, like
+the session tree, because it needs the view the frontend is drawing.
+**Extraction and search are the daemon's**, because only the daemon has the
+history to extract from or search.
+
+The coordinates differ for the same reason: the cursor is in view coordinates,
+because that is where it is drawn, while a selection's anchor is in history
+coordinates — selecting more than a screenful means scrolling, and a
+view-relative anchor would slide out from under the selection as soon as it
+did.
 
 ## Scrollback
 

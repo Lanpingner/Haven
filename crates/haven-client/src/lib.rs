@@ -103,6 +103,8 @@ pub struct Client<F, T> {
     pub chooser: Option<chooser::Chooser>,
     /// Copy mode, while it is up. Modal: it owns the keyboard.
     pub copy: Option<copy::CopyMode>,
+    /// The rule being dragged, and whether it runs vertically.
+    dragging: Option<(PaneId, bool)>,
     /// Copied text, newest first. tmux calls these paste buffers; the name
     /// is worth keeping because the behaviour is the same.
     pub buffers: Vec<String>,
@@ -142,6 +144,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             chooser: None,
             copy: None,
             buffers: Vec::new(),
+            dragging: None,
             fatal: None,
             sessions: Vec::new(),
             attached: false,
@@ -328,6 +331,123 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         }
         next.resettle();
         self.chooser = Some(next);
+    }
+
+    /// One mouse event.
+    ///
+    /// A pane that asked for mouse reporting gets it, and everything else is
+    /// the multiplexer's: the wheel reads history, a click moves focus, and a
+    /// drag on the rule between two panes resizes them. The pane under the
+    /// *pointer* decides, not the focused one — reading or clicking in one
+    /// pane while typing in another is the ordinary case.
+    fn mouse(&mut self, event: input::MouseEvent) -> Result<Tick, TransportError> {
+        if self.copy.is_some() || self.chooser.is_some() {
+            return Ok(Tick::Idle);
+        }
+        let under = self.pane_at(event.col, event.row);
+
+        if let Some(pane) = under {
+            let mode = self.frame.pane(pane).map(|p| p.mouse).unwrap_or_default();
+            if mode.tracking != haven_proto::MouseTracking::Off {
+                let Some(rect) = self.frame.pane(pane).map(|p| p.rect) else {
+                    return Ok(Tick::Idle);
+                };
+                let local = input::MouseEvent {
+                    col: event.col - rect.col,
+                    row: event.row - rect.row,
+                    ..event
+                };
+                let bytes = local.encode(mode);
+                if bytes.is_empty() {
+                    return Ok(Tick::Idle);
+                }
+                // A click still moves focus: a program that wants the mouse
+                // has no way to tell the mux it should be the one typed at.
+                if event.pressed && !event.motion && self.focus != Some(pane) {
+                    self.transport.send(ClientMsg::Action(Action::SelectPane(pane.0)))?;
+                }
+                self.transport.send(ClientMsg::Input { pane, bytes })?;
+                return Ok(Tick::Idle);
+            }
+        }
+
+        match event.button {
+            MouseButton::WheelUp | MouseButton::WheelDown => {
+                let delta =
+                    if event.button == MouseButton::WheelUp { WHEEL_ROWS } else { -WHEEL_ROWS };
+                let Some(pane) = under.or(self.focus) else { return Ok(Tick::Idle) };
+                self.transport.send(ClientMsg::Scroll { pane, delta })?;
+                Ok(Tick::Idle)
+            }
+            MouseButton::Left if event.pressed && !event.motion => {
+                match under {
+                    Some(pane) if self.focus != Some(pane) => {
+                        self.transport.send(ClientMsg::Action(Action::SelectPane(pane.0)))?;
+                        Ok(Tick::Idle)
+                    }
+                    // Not on a pane means on a rule between panes: remember
+                    // which one, so the drag that follows knows what to move.
+                    None => {
+                        self.dragging = self.edge_at(event.col, event.row);
+                        Ok(Tick::Idle)
+                    }
+                    _ => Ok(Tick::Idle),
+                }
+            }
+            MouseButton::Left if !event.pressed => {
+                self.dragging = None;
+                Ok(Tick::Idle)
+            }
+            _ if event.motion => self.drag(event),
+            _ => Ok(Tick::Idle),
+        }
+    }
+
+    /// Which pane a rule belongs to, and which way it runs: the pane above or
+    /// to the left of it, since that is the one a resize acts on.
+    fn edge_at(&self, col: u16, row: u16) -> Option<(PaneId, bool)> {
+        for pane in self.frame.panes.values() {
+            let r = &pane.rect;
+            let right = r.col + r.cols;
+            let bottom = r.row + r.rows;
+            if col == right && row >= r.row && row < bottom {
+                return Some((pane.id, true));
+            }
+            if row == bottom && col >= r.col && col < r.col + r.cols {
+                return Some((pane.id, false));
+            }
+        }
+        None
+    }
+
+    /// Continue a drag on a rule. Resizing is a nudge per cell crossed rather
+    /// than an absolute position, because the daemon's layout is weighted and
+    /// has no notion of "put the edge here".
+    fn drag(&mut self, event: input::MouseEvent) -> Result<Tick, TransportError> {
+        let Some((pane, vertical)) = self.dragging else { return Ok(Tick::Idle) };
+        let Some(rect) = self.frame.pane(pane).map(|p| p.rect) else { return Ok(Tick::Idle) };
+        let (edge, at) = if vertical {
+            (rect.col + rect.cols, event.col)
+        } else {
+            (rect.row + rect.rows, event.row)
+        };
+        if at == edge {
+            return Ok(Tick::Idle);
+        }
+        let grow = at > edge;
+        let action = match (vertical, grow) {
+            (true, true) => Action::ResizeRight,
+            (true, false) => Action::ResizeLeft,
+            (false, true) => Action::ResizeDown,
+            (false, false) => Action::ResizeUp,
+        };
+        // The resize applies to the focused pane, so the dragged one has to
+        // be focused first or the wrong edge moves.
+        if self.focus != Some(pane) {
+            self.transport.send(ClientMsg::Action(Action::SelectPane(pane.0)))?;
+        }
+        self.transport.send(ClientMsg::Action(action))?;
+        Ok(Tick::Idle)
     }
 
     /// Which pane covers a screen cell, if any.
@@ -547,21 +667,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 self.transport.send(ClientMsg::Input { pane, bytes: text.into_bytes() })?;
                 Ok(Tick::Idle)
             }
-            InputEvent::Mouse(mouse) => {
-                // A wheel over a pane scrolls that pane's history. Which
-                // pane is *under the pointer*, not which has focus: reading
-                // one pane while typing in another is the ordinary case.
-                let rows = match mouse.button {
-                    MouseButton::WheelUp => WHEEL_ROWS,
-                    MouseButton::WheelDown => -WHEEL_ROWS,
-                    _ => return Ok(Tick::Idle),
-                };
-                let Some(pane) = self.pane_at(mouse.col, mouse.row).or(self.focus) else {
-                    return Ok(Tick::Idle);
-                };
-                self.transport.send(ClientMsg::Scroll { pane, delta: rows })?;
-                Ok(Tick::Idle)
-            }
+            InputEvent::Mouse(mouse) => self.mouse(mouse),
             InputEvent::Focus(_) => Ok(Tick::Idle),
         }
     }
@@ -588,8 +694,8 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 self.frame.apply_tables(&tables);
                 false
             }
-            ServerMsg::Modes { pane, app_cursor_keys, bracketed_paste, cursor_visible } => {
-                self.frame.set_modes(pane, app_cursor_keys, bracketed_paste, cursor_visible);
+            ServerMsg::Modes { pane, app_cursor_keys, bracketed_paste, cursor_visible, mouse } => {
+                self.frame.set_modes(pane, app_cursor_keys, bracketed_paste, cursor_visible, mouse);
                 // Mirror DECCKM into the encoder: only the pane knows it, and
                 // without it arrow keys type letters.
                 if Some(pane) == self.focus {
