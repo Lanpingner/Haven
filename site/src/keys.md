@@ -93,6 +93,13 @@ table's name, so a mode of your own says which one it is.
 `switch-table` refuses a name no table answers to: arming one would swallow
 every key and answer none of them.
 
+**A root binding fires whatever is armed.** Pressing the prefix and then
+changing your mind must not disable the keys that work without one, so an
+armed table falls through to `root` when it has no binding of its own. A key
+that matches nothing at all says so on the bar rather than vanishing — a
+keystroke that does nothing and reports nothing looks exactly like a broken
+binding, which is how this went unnoticed.
+
 ## Bindings are data
 
 The built-in table is the default *value* of the config's table, not a `match`

@@ -1264,6 +1264,15 @@ linear on sampling exactly as the target converts back on write. A mask is
 unaffected: white is white in both, and alpha is never gamma-encoded.
 
 **Bugs this work surfaced, worth remembering:**
+- A root binding was blocked while a table was armed. `Ctrl+A` and then a
+  change of mind left the prefix armed, so `Alt+C` was looked up in the
+  prefix table, missed, and was swallowed — doing nothing and reporting
+  nothing, which is indistinguishable from a broken binding. A root binding
+  means "this acts with no prefix"; an armed table must not disable it.
+- `FrameModel::notice` was set in five places and drawn in none. Every "say
+  so" written for a search that found nothing, a tab that did not match, or
+  a save that failed was true only in the test. It takes the bar now, and
+  the next keystroke is where it stops being true.
 - The modes raw mode pushes were a `OnceLock`, which was correct while raw
   mode was entered exactly once. The capability probe enters it first, so
   every later restore used the probe's modes and `haven tui` never left the

@@ -67,6 +67,9 @@ pub enum Intercepted {
     /// Show a menu the composition root built, since only it knows what the
     /// commands are. Title, then label-and-command pairs.
     OpenMenu { title: String, entries: Vec<(String, String)>, filterable: bool },
+    /// Swallowed, and worth saying why. A key that does nothing and reports
+    /// nothing is indistinguishable from a broken binding.
+    Notice(String),
     /// Number every pane until the next keystroke.
     DisplayPanes,
     /// Go to the tab whose name contains this.
@@ -661,6 +664,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             &status_bar::BarState {
                 scroll: self.frame.scroll(),
                 copy: self.copy.as_ref().map(|c| c.label()),
+                notice: self.frame.notice.clone(),
             },
         ) {
             self.frame.widgets.push(bar);
@@ -770,6 +774,11 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 Ok(Tick::Redraw)
             }
             InputEvent::Key(key) => {
+                // A notice describes the last thing that happened, so the
+                // next keystroke is where it stops being true.
+                if key.state == input::KeyState::Press {
+                    self.frame.notice = None;
+                }
                 // The chooser and copy mode are modal and own the keyboard
                 // while they are up, so they are consulted before the key
                 // table rather than after.
@@ -789,6 +798,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 self.key_filter = filter;
                 match verdict {
                     Some(Intercepted::Consumed) => return Ok(Tick::Redraw),
+                    Some(Intercepted::Notice(text)) => {
+                        self.frame.notice = Some(text);
+                        return Ok(Tick::Redraw);
+                    }
                     Some(Intercepted::Act(action)) => {
                         self.transport.send(ClientMsg::Action(action))?;
                         return Ok(Tick::Idle);

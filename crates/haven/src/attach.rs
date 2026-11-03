@@ -134,7 +134,11 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode, &Bindings) -> Intercepted {
                 if !bindings.sticky(&name) {
                     *mode = Mode::Normal;
                 }
-                return match bindings.command(&name, event) {
+                // `_or_root` because a root binding means "this acts with
+                // no prefix", and an armed table blocking it is surprising:
+                // pressing the prefix and then changing your mind must not
+                // disable `Alt+C`.
+                return match bindings.command_or_root(&name, event) {
                     Some(command) => act(command, mode, bindings),
                     // An unbound key in an armed table does nothing rather
                     // than leaking into the pane. Escape leaves a sticky
@@ -143,8 +147,14 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode, &Bindings) -> Intercepted {
                     None => {
                         if matches!(event.key, Key::Named(NamedKey::Escape)) {
                             *mode = Mode::Normal;
+                            return Intercepted::Consumed;
                         }
-                        Intercepted::Consumed
+                        // Say so. Swallowing it silently is what made a
+                        // stray prefix look like a broken binding.
+                        Intercepted::Notice(format!(
+                            "{} is not bound in {name}",
+                            bindings::label(event)
+                        ))
                     }
                 };
             }
@@ -593,12 +603,13 @@ mod tests {
             Intercepted::Act(Wire::SplitColumns { program: None })
         );
 
-        // And an unbound key does nothing rather than reaching the pane.
+        // And an unbound key does not reach the pane — but it says so,
+        // rather than being swallowed in silence.
         filter(&key(Key::Char('b'), Modifiers::CTRL), &mut mode, &bindings);
-        assert_eq!(
-            filter(&key(Key::Char('%'), Modifiers::SHIFT), &mut mode, &bindings),
-            Intercepted::Consumed
-        );
+        match filter(&key(Key::Char('%'), Modifiers::SHIFT), &mut mode, &bindings) {
+            Intercepted::Notice(text) => assert!(text.contains('%'), "{text:?}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -731,6 +742,36 @@ mod tests {
                 assert!(prompted.contains(&&"rename-window".to_string()));
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_root_binding_still_fires_with_the_prefix_armed() {
+        // The one that cost an evening: `Ctrl+A` and then a change of mind
+        // left the prefix armed, so `Alt+C` was swallowed by the prefix
+        // table and did nothing, silently.
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode, &keys());
+        assert_eq!(mode.table(), Some("prefix"));
+        assert_eq!(
+            filter(&key(Key::Char('c'), Modifiers::ALT), &mut mode, &keys()),
+            Intercepted::ChooseShell
+        );
+        assert_eq!(mode, Mode::Normal, "the prefix should be spent either way");
+    }
+
+    #[test]
+    fn an_unbound_key_after_the_prefix_names_itself() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode, &keys());
+        match filter(&key(Key::Char('~'), Modifiers::empty()), &mut mode, &keys()) {
+            Intercepted::Notice(text) => {
+                assert!(text.contains('~'), "it should name the key: {text:?}");
+                assert!(text.contains("prefix"), "and the table: {text:?}");
+            }
+            other => panic!("silently swallowed: {other:?}"),
         }
     }
 

@@ -39,6 +39,10 @@ pub struct BarState {
     pub scroll: Option<(u32, u32)>,
     /// Copy mode's label, when it is up.
     pub copy: Option<String>,
+    /// Something to tell the user, until the next keystroke. It outranks
+    /// everything else on the right of the bar: it is the answer to a thing
+    /// that just happened, and the rest is standing information.
+    pub notice: Option<String>,
 }
 
 /// What the client is currently doing, shown on the right of the bar.
@@ -282,8 +286,15 @@ pub fn build(
     let right = right_text(status, now_unix, theme);
     // Reading history is a mode, and an interface that does not say so leaves
     // you wondering why the screen stopped moving.
-    // Most urgent first: what you are typing, then what key is armed, then
-    // where in the history you are.
+    // Most urgent first: an answer to what just happened, then what you are
+    // typing, then what key is armed, then where in the history you are.
+    if let Some(notice) = &state.notice {
+        let mut spans = Spans::new(cols);
+        spans.push(" ", theme.bar.style());
+        spans.push(&format!(" {notice} "), theme.bar_alert.style());
+        spans.fill(theme.bar.style());
+        return Some(widget(size, spans.finish()));
+    }
     let alert = match (state.copy.as_ref(), mode.table(), state.scroll) {
         (Some(label), _, _) => Some(format!(" {label} ")),
         // The table's own name, so a mode of your own says which one it is
@@ -541,6 +552,22 @@ mod tests {
     }
 
     #[test]
+    fn a_notice_takes_the_whole_bar_and_outranks_everything() {
+        // It is the answer to something that just happened; the session name
+        // and the clock are standing information and can wait a keystroke.
+        let state = BarState {
+            scroll: Some((7, 40)),
+            copy: Some("COPY".into()),
+            notice: Some("A-c is not bound in prefix".into()),
+        };
+        let line = text(
+            &build(size(60, 24), Some(&status()), &Mode::Normal, 1000, &theme(), &state).unwrap(),
+        );
+        assert!(line.contains("A-c is not bound in prefix"), "{line:?}");
+        assert!(!line.contains("SCROLL"), "the notice should have the row to itself: {line:?}");
+    }
+
+    #[test]
     fn reading_history_is_shown_in_the_bar() {
         // A screen that stopped moving with nothing saying why is the thing
         // this avoids.
@@ -551,7 +578,7 @@ mod tests {
                 &Mode::Normal,
                 1000,
                 &theme(),
-                &BarState { scroll: Some((7, 40)), copy: None },
+                &BarState { scroll: Some((7, 40)), ..Default::default() },
             )
             .unwrap(),
         );

@@ -91,6 +91,27 @@ impl Chord {
     }
 }
 
+/// A chord written the way a config would write it, for telling someone
+/// which key they just pressed to no effect.
+pub fn label(event: &KeyEvent) -> String {
+    let mut out = String::new();
+    if event.mods.contains(Modifiers::CTRL) {
+        out.push_str("C-");
+    }
+    if event.mods.contains(Modifiers::ALT) {
+        out.push_str("A-");
+    }
+    if event.mods.contains(Modifiers::SUPER) {
+        out.push_str("D-");
+    }
+    match &event.key {
+        Key::Char(' ') => out.push_str("Space"),
+        Key::Char(c) => out.push(*c),
+        Key::Named(named) => out.push_str(&format!("{named:?}")),
+    }
+    out
+}
+
 /// Named key tables.
 ///
 /// `root` is consulted with nothing armed and `prefix` after the prefix key,
@@ -138,6 +159,15 @@ impl Bindings {
 
     pub fn root(&self) -> &[(Chord, String)] {
         self.tables.get(ROOT).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// What a key would do in a table, falling back to `root`.
+    ///
+    /// A root binding means "this acts with no prefix", and an armed table
+    /// blocking it is surprising: pressing the prefix and then changing your
+    /// mind should not disable `Alt+C`. This is what makes that true.
+    pub fn command_or_root(&self, table: &str, event: &KeyEvent) -> Option<&str> {
+        self.command(table, event).or_else(|| self.command(ROOT, event))
     }
 
     pub fn is_prefix(&self, event: &KeyEvent) -> bool {
@@ -299,6 +329,38 @@ mod tests {
             assert!(!seen.contains(&chord), "{spec:?} is bound twice in the defaults");
             seen.push(chord);
         }
+    }
+
+    #[test]
+    fn a_root_binding_survives_an_armed_table() {
+        // Pressing the prefix and then changing your mind must not disable
+        // the keys that work without one. This cost an evening to find:
+        // `Alt+C` after a stray `Ctrl+A` did nothing and said nothing.
+        let b = Bindings::default();
+        let alt_c = event(Key::Char('c'), Modifiers::ALT);
+        assert_eq!(b.command(PREFIX, &alt_c), None, "it is not in the prefix table");
+        assert_eq!(b.command_or_root(PREFIX, &alt_c), Some("choose-shell"));
+    }
+
+    #[test]
+    fn the_armed_table_still_wins_where_both_bind_a_key() {
+        let b = Bindings::default().with(None, ROOT, &[("x".into(), "new-window".into())]).with(
+            None,
+            PREFIX,
+            &[("x".into(), "kill-pane".into())],
+        );
+        assert_eq!(
+            b.command_or_root(PREFIX, &event(Key::Char('x'), Modifiers::empty())),
+            Some("kill-pane")
+        );
+    }
+
+    #[test]
+    fn a_chord_can_say_its_own_name() {
+        assert_eq!(label(&event(Key::Char('c'), Modifiers::ALT)), "A-c");
+        assert_eq!(label(&event(Key::Char('a'), Modifiers::CTRL)), "C-a");
+        assert_eq!(label(&event(Key::Named(NamedKey::PageUp), Modifiers::empty())), "PageUp");
+        assert_eq!(label(&event(Key::Char(' '), Modifiers::empty())), "Space");
     }
 
     #[test]
