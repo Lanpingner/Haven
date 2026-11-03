@@ -16,12 +16,16 @@ struct Quad {
     // Atlas rect as (u0, v0, u1, v1); ignored by the solid pipeline.
     @location(2) uv: vec4<f32>,
     @location(3) color: vec4<f32>,
+    // 1 for a coverage mask that takes the cell's foreground; 0 for a glyph
+    // that brought its own colours.
+    @location(4) tint: f32,
 };
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) tint: f32,
 };
 
 @vertex
@@ -46,6 +50,7 @@ fn vs_main(@builtin(vertex_index) index: u32, quad: Quad) -> VsOut {
         mix(quad.uv.y, quad.uv.w, corner.y),
     );
     out.color = quad.color;
+    out.tint = quad.tint;
     return out;
 }
 
@@ -59,8 +64,11 @@ fn fs_solid(in: VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_glyph(in: VsOut) -> @location(0) vec4<f32> {
-    // The atlas holds coverage, not colour: the glyph takes the cell's
-    // foreground and only its alpha comes from the mask.
-    let coverage = textureSample(atlas_texture, atlas_sampler, in.uv).r;
-    return vec4<f32>(in.color.rgb, in.color.a * coverage);
+    let texel = textureSample(atlas_texture, atlas_sampler, in.uv);
+    // A coverage mask is stored white, so its rgb is 1 and taking the cell's
+    // foreground is a multiply. A colour glyph keeps its own rgb and only
+    // its alpha follows the cell, which is what makes DIM dim an emoji
+    // without draining the colour out of it.
+    let rgb = mix(texel.rgb, in.color.rgb, in.tint);
+    return vec4<f32>(rgb, in.color.a * texel.a);
 }

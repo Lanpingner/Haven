@@ -1081,9 +1081,8 @@ Updated as milestones land, so the plan above does not drift from the tree.
   have meant building it in the wrong place and moving it.
 
 **Not started:** plugins (M3.5), live daemon upgrade (M5.9), fidelity tiers
-end-to-end (M6.5), sixel/kitty graphics. Ligatures and colour emoji need
-shaping and `COLR`/bitmap glyph support respectively; bold and italic faces
-are in.
+end-to-end (M6.5), sixel/kitty graphics. Ligatures need a shaping engine;
+bold, italic and colour faces are in.
 
 **Still missing against tmux**, deliberately and with reasons: hooks and the
 `run-shell`/`if-shell` family, which are a scripting language rather than a
@@ -1250,6 +1249,19 @@ wrong means keys that do nothing and where every implementing terminal
 answers; elsewhere silence keeps the environment's guess, because answering
 `DA1` and nothing else is common and reading that as "no styled underlines"
 takes a working feature away.
+
+Colour glyphs render in their own colours. The rasterizer already asked for
+`ColorOutline` and `ColorBitmap` sources and then flattened the result to
+coverage, so an emoji came out as a grey blob in the foreground colour. The
+atlas is RGBA now and a coverage mask is stored as white with the coverage as
+alpha, which lets one texture serve both: the shader's only question is
+whether to tint, carried as one float per quad. A second texture for colour
+glyphs would have meant a second bind group and a pipeline switch in the
+middle of a line of text, to save four megabytes.
+
+The atlas is `Rgba8UnormSrgb`, so a colour glyph's bytes are converted to
+linear on sampling exactly as the target converts back on write. A mask is
+unaffected: white is white in both, and alpha is never gamma-encoded.
 
 **Bugs this work surfaced, worth remembering:**
 - The modes raw mode pushes were a `OnceLock`, which was correct while raw

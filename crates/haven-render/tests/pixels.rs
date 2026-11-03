@@ -306,3 +306,65 @@ fn a_grid_larger_than_the_device_allows_is_cropped_not_fatal() {
     r.render(&screen, (0, 0), &haven_core::Palette::default(), CursorShape::Block);
     assert!(r.read_pixels().is_ok(), "a clamped renderer could not read back");
 }
+
+#[test]
+fn a_colour_glyph_keeps_its_own_colours_instead_of_the_foreground() {
+    // The bug this is here for: a `COLR`/`CBDT` glyph flattened to coverage
+    // and tinted renders every emoji as a grey blob in the text colour.
+    //
+    // Znamenny notation is the one colour font most Linux boxes carry; a
+    // machine without it skips, like every other font-dependent test here.
+    let Some(mut r) = renderer(6, 1) else { return };
+    let mark = '\u{1cf00}';
+    if !r.can_draw(mark) {
+        eprintln!("skipping: no colour font installed");
+        return;
+    }
+
+    // Foreground forced to pure green, so anything red can only have come
+    // from the glyph itself.
+    let green = Style { fg: Color::Rgb(Rgb::new(0, 255, 0)), ..Default::default() };
+    let mut screen = blank_screen(6, 1);
+    screen[0][0] = ScreenCell::new(mark.to_string(), green);
+    r.render(&screen, (5, 5), &Palette::default(), CursorShape::Block);
+    let pixels = r.read_pixels().unwrap();
+
+    let cell = r.cell_metrics();
+    let mut reddest = 0i32;
+    for y in 0..cell.height.min(r.size().1) {
+        for x in 0..cell.width.min(r.size().0) {
+            let p = r.pixel(&pixels, x, y);
+            reddest = reddest.max(p[0] as i32 - p[1] as i32);
+        }
+    }
+    assert!(
+        reddest > 40,
+        "the glyph was painted in the foreground instead of its own colours \
+         (reddest pixel was only {reddest} redder than it is green)"
+    );
+}
+
+#[test]
+fn an_ordinary_glyph_still_takes_the_foreground() {
+    // The other half of the same decision: a coverage mask must still be
+    // tinted, or every letter comes out white.
+    let Some(mut r) = renderer(4, 1) else { return };
+    let blue = Style { fg: Color::Rgb(Rgb::new(0, 0, 255)), ..Default::default() };
+    let mut screen = blank_screen(4, 1);
+    screen[0][0] = ScreenCell::new("M", blue);
+    r.render(&screen, (3, 3), &Palette::default(), CursorShape::Block);
+    let pixels = r.read_pixels().unwrap();
+
+    let cell = r.cell_metrics();
+    let mut bluest = [0u8; 4];
+    for y in 0..cell.height.min(r.size().1) {
+        for x in 0..cell.width.min(r.size().0) {
+            let p = r.pixel(&pixels, x, y);
+            if p[2] > bluest[2] {
+                bluest = p;
+            }
+        }
+    }
+    assert!(bluest[2] > 100, "the glyph did not take the foreground: {bluest:?}");
+    assert!(bluest[0] < 80 && bluest[1] < 80, "it came out white rather than blue: {bluest:?}");
+}

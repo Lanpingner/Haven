@@ -6,7 +6,7 @@ bindings, save and restore, shell integration, themes and a GPU window all
 work.
 
 The [design plan](./plan.md) tracks this milestone by milestone, updated as
-work lands so the document cannot drift from the tree. 523 tests, zero clippy
+work lands so the document cannot drift from the tree. 530 tests, zero clippy
 warnings, `cargo test --workspace` green.
 
 ## Working
@@ -51,7 +51,8 @@ warnings, `cargo test --workspace` green.
 - **Key tables and a command palette** — named tables, a table of your own that
   stays armed, and every command as a list you narrow by typing.
 - **Real bold and italic faces**, with an oblique shear for families that have
-  no italic cut.
+  no italic cut, and **colour glyphs** — emoji and any `COLR`/`CBDT`/`sbix`
+  face — in their own colours rather than tinted with the foreground.
 - **An interactive capability probe** — one batch of queries ending in `DA1`,
   so a terminal that implements none of them costs one reply rather than one
   timeout per capability, cached per `TERM`.
@@ -64,8 +65,8 @@ warnings, `cargo test --workspace` green.
 - **Plugins.** The WASM host and the WIT world are specified in §15 of the plan
   and nothing is built.
 - **Live daemon upgrade.** A new binary currently needs the daemon restarted.
-- **Ligatures and colour emoji** in the GPU window. Bold and italic faces are
-  in; ligatures need shaping and colour emoji need bitmap and `COLR` glyphs.
+- **Ligatures** in the GPU window, which need a shaping engine. Bold, italic
+  and colour faces are in.
 - **Sixel and the kitty graphics protocol** — post-1.0, though the cell model
   reserves a per-pane placement list from the start, because retrofitting image
   placements into a scrolling, reflowing grid is the kind of change that touches

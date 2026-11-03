@@ -76,11 +76,32 @@ pub struct FaceId(pub u16);
 pub struct Raster {
     pub width: u32,
     pub height: u32,
-    /// Alpha coverage, one byte per pixel.
-    pub alpha: Vec<u8>,
+    /// One byte of coverage per pixel, or four of RGBA when `color`.
+    pub data: Vec<u8>,
+    /// The glyph brought its own colours — an emoji, or any `COLR`, `CBDT`
+    /// or `sbix` face. Such a glyph is drawn as it is rather than tinted
+    /// with the cell's foreground.
+    pub color: bool,
     /// Offset from the cell's baseline origin, in pixels.
     pub left: i32,
     pub top: i32,
+}
+
+impl Raster {
+    /// The glyph as RGBA, which is what the atlas stores.
+    ///
+    /// A coverage mask becomes white with the coverage as alpha, so one
+    /// texture serves both and the shader's only question is whether to tint.
+    pub fn rgba(&self) -> Vec<u8> {
+        if self.color {
+            return self.data.clone();
+        }
+        let mut out = Vec::with_capacity(self.data.len() * 4);
+        for coverage in &self.data {
+            out.extend_from_slice(&[0xff, 0xff, 0xff, *coverage]);
+        }
+        out
+    }
 }
 
 /// Integer cell geometry. Everything downstream positions on this grid.
@@ -490,11 +511,16 @@ impl FontStack {
             )));
         }
         let image = render.render(scaler, glyph)?;
+        // A colour glyph — an emoji, or any `COLR`/`CBDT`/`sbix` face —
+        // arrives as RGBA and must stay that way. Flattening it to coverage
+        // is what makes emoji render as grey blobs in the foreground colour.
+        let color = matches!(image.content, swash::scale::image::Content::Color);
 
         Some(Raster {
             width: image.placement.width,
             height: image.placement.height,
-            alpha: image.data,
+            data: image.data,
+            color,
             left: image.placement.left,
             top: image.placement.top,
         })
@@ -614,8 +640,8 @@ mod style_tests {
         let upright = fonts.rasterize_slanted(face, glyph, false).expect("raster");
         let slanted = fonts.rasterize_slanted(face, glyph, true).expect("raster");
         assert_ne!(
-            (upright.width, upright.alpha.clone()),
-            (slanted.width, slanted.alpha.clone()),
+            (upright.width, upright.data.clone()),
+            (slanted.width, slanted.data.clone()),
             "the shear did nothing"
         );
     }
@@ -714,8 +740,9 @@ mod tests {
         let (face, glyph) = stack.face_for('M').unwrap();
         let raster = stack.rasterize(face, glyph).expect("M rasterizes");
         assert!(raster.width > 0 && raster.height > 0, "{raster:?}");
-        assert_eq!(raster.alpha.len(), (raster.width * raster.height) as usize);
-        assert!(raster.alpha.iter().any(|&a| a > 0), "the mask is empty");
+        assert_eq!(raster.data.len(), (raster.width * raster.height) as usize);
+        assert!(!raster.color, "a Latin letter is a coverage mask, not a colour glyph");
+        assert!(raster.data.iter().any(|&a| a > 0), "the mask is empty");
     }
 
     #[test]
@@ -726,7 +753,7 @@ mod tests {
         // Either no mask at all or an entirely transparent one; both mean the
         // same thing to the atlas.
         if let Some(raster) = raster {
-            assert!(raster.alpha.iter().all(|&a| a == 0) || raster.alpha.is_empty());
+            assert!(raster.data.iter().all(|&a| a == 0) || raster.data.is_empty());
         }
         assert_eq!(stack.cells_for(' '), 1);
     }

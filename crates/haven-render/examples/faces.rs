@@ -9,13 +9,16 @@ use haven_core::term::CursorShape;
 use haven_core::{blank_screen, Attrs, Palette, ScreenCell, Style};
 
 fn main() {
-    let lines: [(&str, Attrs); 4] = [
+    // The last line is a colour face: these are red-and-black Znamenny
+    // notation marks, which is the one `COLR` font most Linux boxes have.
+    let lines: [(&str, Attrs); 5] = [
         ("regular Hamburg", Attrs::empty()),
         ("bold    Hamburg", Attrs::BOLD),
         ("italic  Hamburg", Attrs::ITALIC),
         ("both    Hamburg", Attrs::BOLD | Attrs::ITALIC),
+        ("colour  \u{1cf00}\u{1cf01}\u{1cf02}\u{1cf30}\u{1cf31}", Attrs::empty()),
     ];
-    let (cols, rows) = (24usize, 4usize);
+    let (cols, rows) = (24usize, 5usize);
     let mut screen = blank_screen(cols, rows);
     for (r, (text, attrs)) in lines.iter().enumerate() {
         for (c, ch) in text.chars().enumerate().take(cols) {

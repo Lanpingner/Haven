@@ -197,6 +197,20 @@ place, because it also fires for every `PROMPT_COMMAND` function and names the
 tab after the prompt — so `PS0` plus `history 1` is used instead, which expands
 exactly once per interactive command line.
 
+## Text
+
+Bold, italic and bold-italic use the family's real cuts where it has them and
+a 12-degree shear where it does not. A styled face is consulted only for
+characters the primary family covers — falling through to it for CJK would be
+asking a Latin italic for a glyph it has never had — so a fallback glyph keeps
+its own face and is slanted instead.
+
+Colour glyphs keep their own colours. The atlas is RGBA and a coverage mask is
+stored as white with the coverage as alpha, so one texture serves both and the
+shader's only question is whether to tint. Only a colour glyph's alpha follows
+the cell, which is what makes `DIM` dim an emoji without draining the colour
+out of it.
+
 ## Status bar
 
 The bottom row shows the session name, its tabs with the active one painted,

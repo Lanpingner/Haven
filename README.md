@@ -164,6 +164,16 @@ A session outlives the connection it was made from, so `SSH_AUTH_SOCK`,
 panes opened after that. An existing shell cannot be told — its environment
 was set at exec — so `eval "$(haven show-env)"` in that shell does it.
 
+### Text
+
+Bold, italic and bold-italic use the family's real cuts where it has them,
+and a 12-degree shear where it does not. Colour glyphs — emoji, or any
+`COLR`, `CBDT` or `sbix` face — render in their own colours rather than being
+tinted with the foreground; only their alpha follows the cell, so `DIM` dims
+an emoji without draining the colour out of it.
+
+Ligatures are the one thing still missing here, and need a shaping engine.
+
 ### Mouse
 
 A pane that asked for mouse reporting (1000/1002/1003, SGR or the original

@@ -1,9 +1,15 @@
 //! The glyph atlas. See `docs/PLAN.md` §12.2.
 //!
-//! A shelf packer over one alpha texture. Glyphs are keyed by face, glyph id
+//! A shelf packer over one RGBA texture. Glyphs are keyed by face, glyph id
 //! and pixel size, so a resize re-rasterizes but a repeated character never
 //! does — which is what keeps a full-screen repaint from costing thousands of
 //! rasterizations.
+//!
+//! RGBA rather than coverage alone because a colour glyph — an emoji, or any
+//! `COLR` face — brings its own colours, and a second texture for those would
+//! mean a second bind group and a second draw call in the middle of a line of
+//! text. A coverage mask is stored as white with the coverage as alpha, so
+//! the shader's only question is whether to tint.
 
 use std::collections::HashMap;
 
@@ -47,6 +53,8 @@ pub struct GlyphEntry {
     /// Offset from the pen position, in pixels.
     pub left: i32,
     pub top: i32,
+    /// The glyph carries its own colours and must not be tinted.
+    pub color: bool,
 }
 
 impl GlyphEntry {
@@ -63,7 +71,8 @@ pub struct Upload {
     pub y: u32,
     pub width: u32,
     pub height: u32,
-    pub alpha: Vec<u8>,
+    /// RGBA, four bytes per pixel.
+    pub rgba: Vec<u8>,
 }
 
 struct Shelf {
@@ -133,7 +142,12 @@ impl Atlas {
         }
         // A glyph with no ink needs no space, only an entry.
         if raster.width == 0 || raster.height == 0 {
-            let entry = GlyphEntry { left: raster.left, top: raster.top, ..Default::default() };
+            let entry = GlyphEntry {
+                left: raster.left,
+                top: raster.top,
+                color: raster.color,
+                ..Default::default()
+            };
             self.map.insert(key, entry);
             return entry;
         }
@@ -152,8 +166,12 @@ impl Atlas {
                         // Genuinely larger than the whole atlas. Skip the
                         // glyph: a missing character is a cosmetic problem,
                         // and panicking here would take down the renderer.
-                        let entry =
-                            GlyphEntry { left: raster.left, top: raster.top, ..Default::default() };
+                        let entry = GlyphEntry {
+                            left: raster.left,
+                            top: raster.top,
+                            color: raster.color,
+                            ..Default::default()
+                        };
                         self.map.insert(key, entry);
                         return entry;
                     }
@@ -173,13 +191,14 @@ impl Atlas {
             height: raster.height,
             left: raster.left,
             top: raster.top,
+            color: raster.color,
         };
         self.pending.push(Upload {
             x,
             y,
             width: raster.width,
             height: raster.height,
-            alpha: raster.alpha.clone(),
+            rgba: raster.rgba(),
         });
         self.map.insert(key, entry);
         entry
@@ -223,11 +242,93 @@ impl Atlas {
 }
 
 #[cfg(test)]
+mod colour_tests {
+    use super::*;
+    use crate::font::Raster;
+
+    fn mask(width: u32, height: u32, coverage: u8) -> Raster {
+        Raster {
+            width,
+            height,
+            data: vec![coverage; (width * height) as usize],
+            color: false,
+            left: 0,
+            top: 0,
+        }
+    }
+
+    fn colour(width: u32, height: u32, rgba: [u8; 4]) -> Raster {
+        Raster {
+            width,
+            height,
+            data: rgba.repeat((width * height) as usize),
+            color: true,
+            left: 0,
+            top: 0,
+        }
+    }
+
+    #[test]
+    fn a_mask_becomes_white_with_its_coverage_as_alpha() {
+        // One texture serves both kinds, so a mask has to arrive as RGBA
+        // that a multiply by the foreground turns back into coverage.
+        let rgba = mask(2, 1, 0x80).rgba();
+        assert_eq!(rgba, vec![0xff, 0xff, 0xff, 0x80, 0xff, 0xff, 0xff, 0x80]);
+    }
+
+    #[test]
+    fn a_colour_glyph_keeps_its_own_bytes() {
+        let raster = colour(1, 1, [0x20, 0x40, 0x60, 0xff]);
+        assert_eq!(raster.rgba(), vec![0x20, 0x40, 0x60, 0xff]);
+    }
+
+    #[test]
+    fn the_entry_remembers_which_kind_it_is() {
+        // The renderer has nothing else to go on when deciding whether to
+        // tint, and tinting an emoji grey is the bug this prevents.
+        let mut atlas = Atlas::new(128);
+        let plain = atlas.insert(GlyphKey::new(FaceId(0), 1, 16.0), &mask(4, 4, 0xff));
+        let emoji = atlas.insert(GlyphKey::new(FaceId(0), 2, 16.0), &colour(4, 4, [1, 2, 3, 4]));
+        assert!(!plain.color);
+        assert!(emoji.color);
+    }
+
+    #[test]
+    fn uploads_are_four_bytes_a_pixel_whatever_went_in() {
+        let mut atlas = Atlas::new(128);
+        atlas.insert(GlyphKey::new(FaceId(0), 1, 16.0), &mask(3, 2, 0xff));
+        atlas.insert(GlyphKey::new(FaceId(0), 2, 16.0), &colour(3, 2, [9, 9, 9, 9]));
+        for upload in atlas.take_uploads() {
+            assert_eq!(
+                upload.rgba.len() as u32,
+                upload.width * upload.height * 4,
+                "a row stride that disagrees with the texture corrupts the atlas"
+            );
+        }
+    }
+
+    #[test]
+    fn an_inkless_colour_glyph_is_still_flagged() {
+        let mut atlas = Atlas::new(128);
+        let entry = atlas.insert(GlyphKey::new(FaceId(0), 3, 16.0), &colour(0, 0, [0; 4]));
+        assert!(entry.is_empty());
+        assert!(entry.color);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn raster(width: u32, height: u32) -> Raster {
-        Raster { width, height, alpha: vec![0xff; (width * height) as usize], left: 1, top: 2 }
+        Raster {
+            width,
+            height,
+            data: vec![0xff; (width * height) as usize],
+            color: false,
+            left: 1,
+            top: 2,
+        }
     }
 
     fn key(glyph: u16) -> GlyphKey {

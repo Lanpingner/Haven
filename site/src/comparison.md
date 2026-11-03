@@ -21,6 +21,7 @@ welcome as pull requests against this page.
 | Copy mode & search | selection only | yes | yes | selection only | yes | **yes** — vi keys, search over the whole history |
 | Save & restore | n/a | yes (sessions) | yes | n/a | plugin (`resurrect`) | **built in** — layout, names and directories, with an allowlist for programs |
 | Ligatures / images | no / no | yes / kitty graphics | yes / sixel + kitty | yes / kitty graphics | n/a | **not yet** / not yet (cell model reserves placements) |
+| Colour emoji | no | yes | yes | yes | n/a | **yes** — `COLR`, `CBDT` and `sbix`, untinted |
 | Maturity | stable, packaged | stable, packaged | stable, packaged | stable, packaged | ancient and bulletproof | **v0.0.1**, from source, Linux/X11 tested |
 
 ## What Haven actually buys you
@@ -74,8 +75,8 @@ packaging. Haven's bet is the smaller core and the terminal-side client.
   window has not been exercised there. Windows/ConPTY is unwritten.
 - **No plugins.** Keybindings, key tables and the command palette have landed;
   the WASM host has not.
-- **No ligatures and no colour emoji** in the GPU frontend yet. Bold and
-  italic faces are in.
+- **No ligatures** in the GPU frontend yet; they need a shaping engine. Bold,
+  italic and colour faces are in.
 - **No sixel, no kitty graphics protocol.** Post-1.0 by design, though the cell
   model reserves image placements so retrofitting them does not touch every
   file.

@@ -15,12 +15,16 @@ use crate::font::{CellMetrics, FontError, FontStack};
 
 /// One instance: a rectangle in pixels, a slice of the atlas, and a colour.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct Quad {
     pos: [f32; 2],
     size: [f32; 2],
     uv: [f32; 4],
     color: [f32; 4],
+    /// Zero when the glyph carries its own colours and the foreground must
+    /// not be applied to it. A float rather than a flag because a vertex
+    /// attribute is cheaper to keep as one.
+    tint: f32,
 }
 
 #[repr(C)]
@@ -118,6 +122,10 @@ impl From<FontError> for RenderError {
     }
 }
 
+/// 1024², which at RGBA is 4 MB on the GPU. Coverage alone would be a
+/// quarter of that, and would mean a second texture and a second bind group
+/// for colour glyphs — a pipeline switch in the middle of a line of text, to
+/// save four megabytes.
 const ATLAS_SIZE: u32 = 1024;
 
 /// Which GPU and which graphics API to draw a window with.
@@ -344,7 +352,11 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             // Coverage only: colour emoji get their own texture when they land.
-            format: wgpu::TextureFormat::R8Unorm,
+            // sRGB, so a colour glyph's bytes are converted to linear on
+            // sampling exactly as the target converts back on write. A
+            // coverage mask is unaffected: its colour is white either way,
+            // and alpha is never gamma-encoded.
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -402,6 +414,7 @@ impl Renderer {
                 1 => Float32x2,
                 2 => Float32x4,
                 3 => Float32x4,
+                4 => Float32,
             ],
         };
 
@@ -512,6 +525,14 @@ impl Renderer {
             mapped_at_creation: false,
         });
         Target::Offscreen { texture, view, readback, padded_bytes_per_row: padded }
+    }
+
+    /// Whether any loaded face has a glyph for this character.
+    ///
+    /// For tests that depend on a font being installed, so they can skip
+    /// rather than fail on a machine without it.
+    pub fn can_draw(&mut self, c: char) -> bool {
+        self.fonts.face_for(c).is_some()
     }
 
     pub fn cell_metrics(&self) -> CellMetrics {
@@ -659,6 +680,7 @@ impl Renderer {
             pos: [start as f32 * cw, y],
             size: [(end - start) as f32 * cw, ch],
             uv: [0.0; 4],
+            tint: 1.0,
             color: linear(colour, 1.0),
         });
     }
@@ -688,6 +710,7 @@ impl Renderer {
                         pos: [x + r.x, y + r.y],
                         size: [r.w, r.h],
                         uv: [0.0; 4],
+                        tint: 1.0,
                         color: linear(fg, alpha * r.alpha),
                     });
                 }
@@ -725,21 +748,28 @@ impl Renderer {
             };
             let y =
                 row as f32 * self.cell.height as f32 + self.cell.baseline as f32 - entry.top as f32;
+            // A glyph that brought its own colours keeps them; only its
+            // alpha follows the cell, so DIM still dims an emoji.
+            let tint = if entry.color { 0.0 } else { 1.0 };
+            let colour = if entry.color { [1.0, 1.0, 1.0, alpha] } else { colour };
             self.glyphs.push(Quad {
                 pos: [x, y],
                 size: [entry.width as f32, entry.height as f32],
                 uv: entry.uv,
                 color: colour,
+                tint,
             });
-            if styled.synth_bold {
-                // Synthetic bold: a second pass one pixel over, only where
-                // the family has no bold cut to use instead. Crude next to a
-                // real bold face, and honest about it.
+            // Synthetic bold is a second pass one pixel over, only where the
+            // family has no bold cut to use instead. Crude next to a real
+            // bold face, and honest about it — but never on a colour glyph,
+            // where doubling makes a smeared emoji rather than a bold one.
+            if styled.synth_bold && !entry.color {
                 self.glyphs.push(Quad {
                     pos: [x + 1.0, y],
                     size: [entry.width as f32, entry.height as f32],
                     uv: entry.uv,
                     color: colour,
+                    tint,
                 });
             }
         }
@@ -773,6 +803,7 @@ impl Renderer {
                 pos: [x, y + self.cell.underline_y as f32],
                 size: [width, thickness as f32],
                 uv: [0.0; 4],
+                tint: 1.0,
                 color: linear(colour, 1.0),
             });
         }
@@ -781,6 +812,7 @@ impl Renderer {
                 pos: [x, y + self.cell.baseline as f32 * 0.65],
                 size: [width, self.cell.underline_thickness as f32],
                 uv: [0.0; 4],
+                tint: 1.0,
                 color: linear(fg, 1.0),
             });
         }
@@ -789,6 +821,7 @@ impl Renderer {
                 pos: [x, y],
                 size: [width, self.cell.underline_thickness as f32],
                 uv: [0.0; 4],
+                tint: 1.0,
                 color: linear(fg, 1.0),
             });
         }
@@ -803,10 +836,10 @@ impl Renderer {
                     origin: wgpu::Origin3d { x: upload.x, y: upload.y, z: 0 },
                     aspect: wgpu::TextureAspect::All,
                 },
-                &upload.alpha,
+                &upload.rgba,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(upload.width),
+                    bytes_per_row: Some(upload.width * 4),
                     rows_per_image: Some(upload.height),
                 },
                 wgpu::Extent3d {
