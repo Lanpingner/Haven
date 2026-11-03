@@ -33,6 +33,7 @@ rather than a code change.
 | `f` | find a tab by name |
 | `D` | detach every other client |
 | `Ctrl+S` / `Ctrl+R` | [save](./sessions.md) every session / build back the saved ones |
+| `P` | the command palette |
 | `[` / `]` | enter copy mode / paste the newest buffer |
 | `d` | detach |
 | `:` | open the command line |
@@ -49,9 +50,47 @@ the history that exists.
 | Key | Action |
 |---|---|
 | `Alt+C` | open a pane and [choose what runs in it](./sessions.md#choosing-a-shell) |
+| `Alt+P` | the command palette |
 
-That is the only one shipped, but the *root table* it lives in is the same
-mechanism: `root` in the config binds keys that act with no prefix at all.
+Those two are the defaults, and the *root table* they live in is the same
+mechanism as everything else: `root` in the config binds keys that act with
+no prefix at all.
+
+## The command palette
+
+`Alt+P`, or the prefix and `P`, lists every command and narrows as you type.
+Entries that *start* with what you typed come first — a plain substring match
+puts `display-panes` above `split-v` for "spl", which is correct and useless.
+
+A command that needs an argument opens the [command line](./commands.md) with
+the verb already on it rather than running a bare verb that would do nothing
+or, for `rename-window`, the wrong thing. Which commands those are is decided
+by the parser, not by a list someone has to remember to update.
+
+## Key tables
+
+`root` is consulted with nothing armed and `prefix` after the prefix key.
+Those two always exist. Any other name is a table of your own, and the
+difference that matters is that **a table of your own stays armed**:
+
+```toml
+[keys]
+bind = { "R" = "switch-table resize" }
+
+[keys.table.resize]
+h = "resize-left"
+l = "resize-right"
+Escape = "switch-table root"
+```
+
+One `Ctrl+A` `R`, then as many `h`s as you like. That is the modal part —
+`prefix` is one-shot, as it has always been, and everything else is a table
+that binds `switch-table` to get into and out of it. The bar shows the armed
+table's name, so a mode of your own says which one it is.
+
+`Escape` always leaves a sticky table even if it forgot to bind a way out, and
+`switch-table` refuses a name no table answers to: arming one would swallow
+every key and answer none of them.
 
 ## Bindings are data
 

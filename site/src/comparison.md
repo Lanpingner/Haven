@@ -72,9 +72,10 @@ packaging. Haven's bet is the smaller core and the terminal-side client.
 - **It is v0.0.1.** No binaries, no packages — you build it with cargo.
 - **Linux/X11 is the tested platform.** macOS runs the test suite in CI; the
   window has not been exercised there. Windows/ConPTY is unwritten.
-- **No plugins and no command palette.** Keybindings *are* configurable now,
-  and copy mode has landed; the modal key stack is still owed.
-- **No italics, no ligatures, no colour emoji** in the GPU frontend yet.
+- **No plugins.** Keybindings, key tables and the command palette have landed;
+  the WASM host has not.
+- **No ligatures and no colour emoji** in the GPU frontend yet. Bold and
+  italic faces are in.
 - **No sixel, no kitty graphics protocol.** Post-1.0 by design, though the cell
   model reserves image placements so retrofitting them does not touch every
   file.

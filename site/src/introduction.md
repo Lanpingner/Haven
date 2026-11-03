@@ -87,9 +87,10 @@ triangles. See [run modes](./modes.md).
 ## Status
 
 **Usable, with plenty still ahead.** Sessions, splits, tabs, zoom,
-attach/detach, scrollback, copy mode, shell integration, themes and a GPU window
-all work; `mc`, `vim` and `htop` render correctly. Plugins, configurable
-bindings and the interactive capability probe are not written yet.
+attach/detach, scrollback, copy mode, the mouse, configurable bindings, save
+and restore, shell integration, themes and a GPU window all work; `mc`, `vim`
+and `htop` render correctly. Plugins and live daemon upgrade are not written
+yet.
 
 The [status page](./status.md) lists what exists and what does not, and the
 [design plan](./plan.md) tracks it milestone by milestone so the document cannot

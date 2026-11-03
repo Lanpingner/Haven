@@ -1080,8 +1080,10 @@ Updated as milestones land, so the plan above does not drift from the tree.
   plugins are specified to *run in the daemon* — building the host first would
   have meant building it in the wrong place and moving it.
 
-**Not started:** plugins (M3.5), the modal key table (the rest of M4), live
-daemon upgrade (M5.9), fidelity tiers end-to-end (M6.5), sixel/kitty graphics.
+**Not started:** plugins (M3.5), live daemon upgrade (M5.9), fidelity tiers
+end-to-end (M6.5), sixel/kitty graphics. Ligatures and colour emoji need
+shaping and `COLR`/bitmap glyph support respectively; bold and italic faces
+are in.
 
 **Still missing against tmux**, deliberately and with reasons: hooks and the
 `run-shell`/`if-shell` family, which are a scripting language rather than a
@@ -1091,8 +1093,6 @@ which are a templating language; session groups and linked windows; the clock.
 one already, which is what the option exists to arrange in tmux.
 
 **Known gaps:**
-- Host capability detection is environment-based guessing; the interactive
-  probe with timeouts and per-`TERM` caching is M6.
 - The status line and tab bar are built-in rather than plugins (M3.5 inverts
   that), though both are already pure functions of state.
 - `haven attach` has no detach-and-leave-running key beyond `Ctrl+A d`, and no
@@ -1233,7 +1233,32 @@ written by one version is read by another and must not change shape every
 time the pane tree does. Leaves refer to panes by position, so the file never
 names an id that will not exist again.
 
+The key table is modal now. `root` and `prefix` always exist; any other name
+is a table of your own that *stays armed* until something switches away,
+which is what makes one prefix and six resizes possible. `prefix` keeps its
+one-shot behaviour. `Escape` always leaves a sticky table, and `switch-table`
+refuses a name no table answers to — arming one would swallow every key and
+answer none.
+
+The capability probe writes every query in one batch ending with `DA1`. That
+is the whole design: `DA1` is answered by every terminal, so its reply means
+every other reply that was coming has come, and the deadline is only reached
+by a terminal that answers nothing at all. A per-query timeout would instead
+cost one timeout per capability the host lacks, on exactly the terminals that
+lack the most. Silence is a *no* only for the keyboard protocol, where being
+wrong means keys that do nothing and where every implementing terminal
+answers; elsewhere silence keeps the environment's guess, because answering
+`DA1` and nothing else is common and reading that as "no styled underlines"
+takes a working feature away.
+
 **Bugs this work surfaced, worth remembering:**
+- The modes raw mode pushes were a `OnceLock`, which was correct while raw
+  mode was entered exactly once. The capability probe enters it first, so
+  every later restore used the probe's modes and `haven tui` never left the
+  alternate screen. An atomic is both updatable and safe to read from the
+  signal handler, which a mutex is not.
+- `c` was bound twice in the default key table. Bindings resolve last-wins,
+  which is a feature for a config and a bug in the built-in list.
 - `haven restore` restored nothing on a fresh daemon. The CLI attached before
   asking, and attaching with no session named calls `first_or_create` — so it
   made an empty `haven-1`, and the restore then skipped the saved session of

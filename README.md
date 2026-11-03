@@ -45,6 +45,7 @@ cargo run -p haven -- shell-info
 
 ### Keys
 
+`Alt+P` opens the command palette: every command, narrowed as you type.
 `Alt+C` opens a new pane and asks which shell to run in it — arrows or `j`/`k`
 to move, a digit to pick one outright, `Enter` to take the highlighted one,
 `Esc` to drop it. The list is the daemon's machine's, since that is where the
@@ -79,6 +80,7 @@ then whatever else `/etc/shells` holds.
 | `f` | find a tab by name |
 | `D` | detach every other client |
 | `Ctrl+S` / `Ctrl+R` | save every session / build back the saved ones |
+| `P` | the command palette |
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree: sessions, windows, panes |
@@ -106,6 +108,10 @@ restore_programs = ["vim", "less"]   # what a restore may start again
 prefix = "C-b"             # default C-a
 bind = { "|" = "split-v", "-" = "split-h", "x" = "" }   # empty unbinds
 root = { "C-t" = "new-window", "A-c" = "choose-shell" }   # no prefix needed
+
+[keys.table.resize]        # a table of your own; it stays armed
+h = "resize-left"
+Escape = "switch-table root"
 ```
 
 Key specs are `C-`, `S-`, `A-`/`M-`, `D-` in any order, then a character or a
@@ -198,6 +204,8 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | --- | --- |
 | `split-h [prog]` / `split-v [prog]` | split into rows / columns, optionally running `prog` |
 | `choose-shell` | the shell menu `Alt+C` opens |
+| `command-palette` (`palette`) | every command, narrowed by typing |
+| `switch-table <name>` | arm a key table |
 | `new-window [prog]` (`new-tab`), `next`, `prev` | tabs |
 | `new-session` (`new`) | a new session on this daemon, named `haven-<n>` |
 | `scroll-up`, `scroll-down`, `scroll-end` | as the paging keys do |

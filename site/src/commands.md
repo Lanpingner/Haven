@@ -22,6 +22,8 @@ the other.
 | `copy-mode` (`copy`), `paste-buffer` | enter copy mode / paste the newest buffer |
 | `choose` | the session tree |
 | `choose-shell` | the shell menu `Alt+C` opens |
+| `command-palette` (`palette`) | every command, narrowed by typing |
+| `switch-table <name>` | arm a [key table](./keys.md#key-tables) |
 | `display-panes`, `find-window <text>` | number the panes / go to a tab by name |
 | `send-keys <text>` | type into the pane; `\n` `\t` `\e` `\xNN` are decoded |
 | `synchronize-panes [on\|off]` | type into every pane of the tab at once |
