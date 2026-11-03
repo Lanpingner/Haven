@@ -91,6 +91,7 @@ timestamp moves, so an edit reaches every attached client without a reattach.
 
 ```toml
 theme = "gruvbox"          # a built-in, a file in themes/, or an inline table
+mouse = true               # false hands the mouse back to the host terminal
 
 [keys]
 prefix = "C-b"             # default C-a
@@ -112,8 +113,8 @@ haven run -t 2 -- select-window 3
 
 Anything a key can do, `haven run` can do: both resolve to the same action,
 so there is no second vocabulary for scripts. A synchronized tab is marked
-`≡` on the bar and a tab that rang while you were elsewhere is marked `●`
-and painted — an invisible mode that multiplies every keystroke is a trap,
+`≡` on the bar, a tab that produced output while you were elsewhere is marked
+`○`, and one that rang is marked `●` and painted — an invisible mode that multiplies every keystroke is a trap,
 and a bell you did not see is the one worth seeing.
 
 ### Environment

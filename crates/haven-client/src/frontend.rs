@@ -23,6 +23,12 @@ pub trait Frontend: std::fmt::Debug {
     /// clipboard does nothing: the text is still kept in a paste buffer, so
     /// copy mode works either way.
     fn set_clipboard(&mut self, _text: &str) {}
+    /// Stop or resume asking the host for mouse reports.
+    ///
+    /// Ignoring the events is not enough for a terminal client: the host
+    /// stays in reporting mode, and its own selection goes on being broken
+    /// by a feature the config just turned off.
+    fn set_mouse(&mut self, _on: bool) {}
 }
 
 #[derive(Debug)]

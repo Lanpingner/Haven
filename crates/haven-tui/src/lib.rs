@@ -165,6 +165,19 @@ impl Frontend for TuiFrontend {
         self.decoder.next_event()
     }
 
+    /// Turn the host's mouse reporting off and on.
+    ///
+    /// Ignoring the events would leave the host still reporting them, so its
+    /// own selection would stay broken by a feature that had been switched
+    /// off — which looks exactly like the option not working.
+    fn set_mouse(&mut self, on: bool) {
+        if self.raw.is_none() {
+            return;
+        }
+        let seq: &[u8] = if on { b"\x1b[?1002h\x1b[?1006h" } else { b"\x1b[?1006l\x1b[?1002l" };
+        let _ = raw::write_all(rustix::stdio::stdout(), seq);
+    }
+
     /// `OSC 52`, so a copy inside Haven reaches the clipboard of whatever
     /// terminal Haven is running in — and through it, over ssh.
     fn set_clipboard(&mut self, text: &str) {

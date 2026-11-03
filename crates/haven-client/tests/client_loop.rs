@@ -246,6 +246,7 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
             zoomed: false,
             synchronized: false,
             bell: false,
+            activity: false,
         }],
         active_window: 1,
         started_unix: 0,
@@ -444,6 +445,7 @@ fn find_window_goes_to_the_tab_whose_name_matches() {
         id,
         synchronized: false,
         bell: false,
+        activity: false,
         name: name.into(),
         panes: vec![PaneInfo {
             id,

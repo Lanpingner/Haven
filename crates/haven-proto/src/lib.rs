@@ -183,6 +183,10 @@ pub fn client_environment() -> Vec<(String, String)> {
 /// person types on the command line.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct KeyTable {
+    /// Whether the client handles the mouse at all. It rides with the key
+    /// table because it is the same kind of thing — what the client does
+    /// with input — and sending it alone would be a message for one bool.
+    pub mouse: bool,
     pub prefix: String,
     /// Consulted while the prefix is armed.
     pub prefix_table: Vec<(String, String)>,
@@ -520,6 +524,8 @@ pub struct WindowInfo {
     pub synchronized: bool,
     /// A pane in this window rang while you were somewhere else.
     pub bell: bool,
+    /// A pane in this window produced output while you were elsewhere.
+    pub activity: bool,
     pub name: String,
     /// The panes themselves, not a count: a chooser has to list them, and a
     /// count cannot be navigated.

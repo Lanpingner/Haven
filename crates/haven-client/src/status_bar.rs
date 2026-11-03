@@ -245,11 +245,18 @@ pub fn build(
             let active = w.id == s.active_window;
             let zoom = if w.zoomed { " \u{25a3}" } else { "" };
             let sync = if w.synchronized { " \u{2261}" } else { "" };
-            let bell = if w.bell { " \u{25cf}" } else { "" };
+            // A bell outranks activity: it was asked for, output was not.
+            let bell = match (w.bell, w.activity) {
+                (true, _) => " \u{25cf}",
+                (false, true) => " \u{25cb}",
+                _ => "",
+            };
             let label = format!(" {}:{}{}{}{} ", w.id, w.name, zoom, sync, bell);
             let style = match (active, w.bell) {
                 (true, _) => theme.tab_active.style(),
                 // A rung tab stands out, or the mark is no better than none.
+                // Activity gets a mark but not a colour: it is information,
+                // not a summons, and painting every busy tab is noise.
                 (false, true) => theme.bar_alert.style(),
                 (false, false) => theme.tab.style(),
             };
@@ -405,6 +412,7 @@ mod tests {
                     zoomed: false,
                     synchronized: false,
                     bell: false,
+                    activity: false,
                 },
                 WindowInfo {
                     id: 2,
@@ -414,6 +422,7 @@ mod tests {
                     zoomed: false,
                     synchronized: false,
                     bell: false,
+                    activity: false,
                 },
             ],
             active_window: 1,
@@ -603,6 +612,7 @@ mod suggestion_tests {
                 id: 1,
                 synchronized: false,
                 bell: false,
+                activity: false,
                 name: "w".into(),
                 panes: vec![at(1, 0, 0, 10, 5), at(2, 11, 0, 10, 5)],
                 active_pane: 2,
@@ -632,6 +642,7 @@ mod suggestion_tests {
                 id: 1,
                 synchronized: false,
                 bell: false,
+                activity: false,
                 name: "w".into(),
                 panes: vec![PaneInfo {
                     id: 1,

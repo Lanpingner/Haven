@@ -856,6 +856,7 @@ impl SessionHost {
                 id: w.id.0,
                 synchronized: w.synchronized,
                 bell: w.bell,
+                activity: w.activity,
                 // What the tab is *doing* names it best. An explicit name
                 // wins, then the command the shell reported through OSC 133,
                 // then the title — which is usually a path — and only then

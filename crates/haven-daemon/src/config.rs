@@ -166,6 +166,7 @@ pub struct KeysFile {
 impl KeysFile {
     pub fn table(&self) -> KeyTable {
         KeyTable {
+            mouse: true,
             // Empty means "whatever the client's default is". The daemon has
             // no business holding a copy of that: it would be a second place
             // for it to be wrong.
@@ -176,11 +177,23 @@ impl KeysFile {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Default, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub theme: ThemeSpec,
     pub keys: KeysFile,
+    /// Whether clients handle the mouse at all.
+    ///
+    /// Off hands it back to whatever terminal `haven attach` is running in,
+    /// so its own selection and scrollback work as they did. In a window
+    /// there is no outer terminal, and off simply means no mouse.
+    pub mouse: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { theme: ThemeSpec::default(), keys: KeysFile::default(), mouse: true }
+    }
 }
 
 impl Config {
@@ -269,6 +282,10 @@ impl ConfigWatcher {
         &self.keys
     }
 
+    pub fn mouse(&self) -> bool {
+        self.config.mouse
+    }
+
     /// Re-read if anything moved. Returns whether the theme changed, so the
     /// daemon only pushes when there is something to push.
     pub fn poll(&mut self) -> bool {
@@ -308,7 +325,7 @@ impl ConfigWatcher {
 
         let (theme, problem) = self.config.theme(&self.dir);
         self.theme = theme;
-        self.keys = self.config.keys.table();
+        self.keys = KeyTable { mouse: self.config.mouse, ..self.config.keys.table() };
         if self.problem.is_none() {
             self.problem = problem;
         }
@@ -381,6 +398,27 @@ mod tests {
         // its own copy of that would be a second place for it to be wrong.
         let config = Config::from_toml("").expect("parse");
         assert_eq!(config.keys.table().prefix, "");
+    }
+
+    #[test]
+    fn the_mouse_can_be_switched_off() {
+        let config = Config::from_toml("mouse = false").expect("parse");
+        assert!(!config.mouse);
+        assert!(Config::from_toml("").expect("parse").mouse, "the mouse is on by default");
+    }
+
+    #[test]
+    fn switching_the_mouse_off_is_pushed_to_clients() {
+        let dir = tmp("mouse");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "mouse = true\n").unwrap();
+        let mut w = ConfigWatcher::new(path.clone(), dir.clone());
+        assert!(w.keys().mouse);
+
+        std::fs::write(&path, "mouse = false\n").unwrap();
+        filetime_bump(&path);
+        assert!(w.poll(), "a client still grabbing the mouse would be the bug");
+        assert!(!w.keys().mouse);
     }
 
     #[test]

@@ -1080,9 +1080,15 @@ Updated as milestones land, so the plan above does not drift from the tree.
   plugins are specified to *run in the daemon* — building the host first would
   have meant building it in the wrong place and moving it.
 
-**Not started:** plugins (M3.5), copy mode and the modal key table (the rest
-of M4), live daemon upgrade (M5.9), fidelity tiers end-to-end (M6.5), config
-and theming (M7), sixel/kitty graphics.
+**Not started:** plugins (M3.5), the modal key table (the rest of M4), live
+daemon upgrade (M5.9), fidelity tiers end-to-end (M6.5), sixel/kitty graphics.
+
+**Still missing against tmux**, deliberately and with reasons: hooks and the
+`run-shell`/`if-shell` family, which are a scripting language rather than a
+feature and which `haven run` covers from outside; status-line format strings,
+which are a templating language; session groups and linked windows; the clock.
+`base-index` has nothing to configure — windows and panes are numbered from
+one already, which is what the option exists to arrange in tmux.
 
 **Known gaps:**
 - Host capability detection is environment-based guessing; the interactive

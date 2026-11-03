@@ -214,6 +214,9 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
                     if pane.emulator.term.bell_count > before {
                         events.push(RuntimeEvent::Bell(PaneId(id)));
                     }
+                    // Marking is the session's business — only it knows
+                    // which window you are looking at.
+                    self.session.note_activity(PaneId(id));
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(_) => finished.push(PaneId(id)),

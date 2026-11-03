@@ -342,6 +342,7 @@ mod tests {
                 zoomed: false,
                 synchronized: false,
                 bell: false,
+                activity: false,
             }],
             active_window: 1,
             started_unix: 0,

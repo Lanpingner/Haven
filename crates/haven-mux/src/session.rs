@@ -166,6 +166,7 @@ impl Session {
         // looked", and you are looking.
         if let Some(window) = self.windows.get_mut(index) {
             window.bell = false;
+            window.activity = false;
         }
     }
 
@@ -175,6 +176,19 @@ impl Session {
         for (i, window) in self.windows.iter_mut().enumerate() {
             if window.root.contains(pane) {
                 window.bell = i != active;
+            }
+        }
+    }
+
+    /// Mark the window holding a pane as having produced output.
+    ///
+    /// Only for windows you are not looking at: the active one is producing
+    /// output constantly and marking it would mean nothing.
+    pub fn note_activity(&mut self, pane: PaneId) {
+        let active = self.active;
+        for (i, window) in self.windows.iter_mut().enumerate() {
+            if i != active && window.root.contains(pane) {
+                window.activity = true;
             }
         }
     }

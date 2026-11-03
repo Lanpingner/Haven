@@ -111,6 +111,9 @@ pub struct Client<F, T> {
     pub copy: Option<copy::CopyMode>,
     /// The session's environment, when it has been asked for.
     pub environment: Vec<(String, String)>,
+    /// Whether this client does anything with the mouse at all. Off gives
+    /// it back to the terminal Haven is running in.
+    pub mouse_enabled: bool,
     /// Pane numbers are on screen until the next keystroke.
     showing_panes: bool,
     /// The key table, as the daemon's config describes it.
@@ -156,6 +159,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             chooser: None,
             copy: None,
             buffers: Vec::new(),
+            mouse_enabled: true,
             showing_panes: false,
             environment: Vec::new(),
             bindings: bindings::Bindings::default(),
@@ -360,7 +364,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
     /// *pointer* decides, not the focused one — reading or clicking in one
     /// pane while typing in another is the ordinary case.
     fn mouse(&mut self, event: input::MouseEvent) -> Result<Tick, TransportError> {
-        if self.copy.is_some() || self.chooser.is_some() {
+        if !self.mouse_enabled || self.copy.is_some() || self.chooser.is_some() {
             return Ok(Tick::Idle);
         }
         let under = self.pane_at(event.col, event.row);
@@ -834,6 +838,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 false
             }
             ServerMsg::Keys(table) => {
+                if self.mouse_enabled != table.mouse {
+                    self.mouse_enabled = table.mouse;
+                    self.frontend.set_mouse(table.mouse);
+                }
                 self.bindings = bindings::Bindings::default()
                     .with(Some(&table.prefix), &table.prefix_table, false)
                     .with(None, &table.root, true);

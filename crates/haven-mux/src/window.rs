@@ -20,6 +20,8 @@ pub struct Window {
     /// A pane here rang while the window was not the active one. Cleared on
     /// arrival, which is what makes it mean "since you last looked".
     pub bell: bool,
+    /// A pane here produced output while the window was not the active one.
+    pub activity: bool,
 }
 
 impl Window {
@@ -33,6 +35,7 @@ impl Window {
             last: None,
             synchronized: false,
             bell: false,
+            activity: false,
         }
     }
 
