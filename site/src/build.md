@@ -7,7 +7,7 @@ no packages yet; this is a from-source project for now.
 git clone https://github.com/Lanpingner/Haven
 cd Haven
 
-cargo test --workspace     # 400 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 495 tests, incl. mc/vim/less driven on real ptys
 ```
 
 ## Run it

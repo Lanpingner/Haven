@@ -17,6 +17,9 @@ welcome as pull requests against this page.
 | Multiplexing without a second VT layer | n/a | in-process, GUI-only | yes | in-process, GUI-only | no — it re-parses and re-emits | **yes** — one parser, one grid model |
 | Extensions | none | kittens: Python, in-process, unsandboxed | Lua config & event hooks | none yet | shell scripts | designed: WASM, capability-sandboxed — **not built yet** |
 | Config | TOML, reload | custom `conf`, reload | Lua | custom, reload | `.tmux.conf` | **TOML, live reload, server-side** so SSH sees it too |
+| Configurable keys | yes | yes | yes | yes | yes | **yes** — server-side, live, same vocabulary as the command line |
+| Copy mode & search | selection only | yes | yes | selection only | yes | **yes** — vi keys, search over the whole history |
+| Save & restore | n/a | yes (sessions) | yes | n/a | plugin (`resurrect`) | **built in** — layout, names and directories, with an allowlist for programs |
 | Ligatures / images | no / no | yes / kitty graphics | yes / sixel + kitty | yes / kitty graphics | n/a | **not yet** / not yet (cell model reserves placements) |
 | Maturity | stable, packaged | stable, packaged | stable, packaged | stable, packaged | ancient and bulletproof | **v0.0.1**, from source, Linux/X11 tested |
 
@@ -40,6 +43,8 @@ welcome as pull requests against this page.
 - **Real key events** are the design target — the kitty keyboard protocol in
   both directions, not the 1978 control-code collapse.
 - **GPU text and scrollback** in the same program that owns the panes.
+- **Save and restore built in**, not a plugin you have to find — and with the
+  same allowlist discipline `tmux-resurrect` arrived at, for the same reason.
 
 ### Over kitty
 
@@ -67,16 +72,17 @@ packaging. Haven's bet is the smaller core and the terminal-side client.
 - **It is v0.0.1.** No binaries, no packages — you build it with cargo.
 - **Linux/X11 is the tested platform.** macOS runs the test suite in CI; the
   window has not been exercised there. Windows/ConPTY is unwritten.
-- **No plugins, no configurable keybindings, no command palette.** The prefix
-  table is fixed at `Ctrl+A`.
+- **No plugins and no command palette.** Keybindings *are* configurable now,
+  and copy mode has landed; the modal key stack is still owed.
 - **No italics, no ligatures, no colour emoji** in the GPU frontend yet.
 - **No sixel, no kitty graphics protocol.** Post-1.0 by design, though the cell
   model reserves image placements so retrofitting them does not touch every
   file.
 - **No tmux wire compatibility.** You get tmux's mental model, not its control
   protocol.
-- **Mouse reporting is parsed but not yet encoded back** from a client to an
-  application.
+- **No hooks, `run-shell` or `if-shell`** — a scripting language rather than a
+  feature, and `haven run` covers the need from outside.
+- **No status-line format strings**, session groups or linked windows.
 
 ## What Haven takes from each, deliberately
 

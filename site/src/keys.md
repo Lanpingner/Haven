@@ -1,8 +1,10 @@
 # Keys and commands
 
-`Ctrl+A` is the prefix. Every key resolves to the same declarative action the
-[command line](./commands.md) does, so nothing is reachable one way and not the
-other.
+`Ctrl+A` is the prefix, unless the config says otherwise. Every key resolves to
+the same declarative action the [command line](./commands.md) does, so nothing
+is reachable one way and not the other — and the table itself is
+[data from the config](./themes.md#keys), so a binding is a line in a file
+rather than a code change.
 
 ## Prefix keys
 
@@ -17,9 +19,20 @@ other.
 | `x` | close the pane |
 | `c` / `n` / `p` / `1`-`9` | new tab / next / previous / select |
 | `C` | new session, and move to it |
+| `w` / `;` | the tab / pane you were on before |
+| `,` / `$` | rename this tab / this session |
 | `PageUp` / `PageDown` | read back through the pane's history |
 | `Home` / `End` | the oldest row / back to the live screen |
-| `e` / `E` / `t` | even-horizontal / even-vertical / tiled layout |
+| `e` / `E` / `t` / `Space` | even-horizontal / even-vertical / tiled / next layout |
+| `o` | swap this pane with the next |
+| `{` / `}` | rotate the panes round their places |
+| `!` / `&` | break this pane into its own tab / kill the whole tab |
+| `r` | respawn the pane's program |
+| `S` | synchronize: type into every pane of the tab at once |
+| `q` | number the panes until the next key |
+| `f` | find a tab by name |
+| `D` | detach every other client |
+| `Ctrl+S` / `Ctrl+R` | [save](./sessions.md) every session / build back the saved ones |
 | `[` / `]` | enter copy mode / paste the newest buffer |
 | `d` | detach |
 | `:` | open the command line |
@@ -31,8 +44,31 @@ other.
 the key table has no way to know how tall the pane is; the daemon clamps it to
 the history that exists.
 
-The prefix table is fixed for now; configurable bindings and a modal key stack
-are part of the unfinished half of M4.
+## Without the prefix
+
+| Key | Action |
+|---|---|
+| `Alt+C` | open a pane and [choose what runs in it](./sessions.md#choosing-a-shell) |
+
+That is the only one shipped, but the *root table* it lives in is the same
+mechanism: `root` in the config binds keys that act with no prefix at all.
+
+## Bindings are data
+
+The built-in table is the default *value* of the config's table, not a `match`
+in the source. A configured binding and a built-in one therefore take one path;
+the alternative is a table config can only half override, which is how bindings
+end up with two behaviours depending on which half you hit.
+
+That forced the command vocabulary to cover every bound key. There had been no
+names for moving focus, for resizing, or for sending a literal prefix — so the
+claim that anything a binding can do a typed command can do was not true until
+the table became data. A test now walks the default table and parses every
+command in it, because a typo in data is a key that silently does nothing
+rather than a compile error.
+
+The modal key stack and a command palette are still part of the unfinished half
+of M4.
 
 ## Copy mode
 
@@ -63,6 +99,22 @@ because that is where it is drawn, while a selection's anchor is in history
 coordinates — selecting more than a screenful means scrolling, and a
 view-relative anchor would slide out from under the selection as soon as it
 did.
+
+## The mouse
+
+A pane that asked for mouse reporting — 1000, 1002 or 1003, in the SGR encoding
+or the original one — gets it, in its own coordinates, so `vim`, `mc` and
+`less` respond to clicks and drags. Everything else belongs to the
+multiplexer: the wheel reads history, a click moves focus, and dragging the
+rule between two panes resizes them. **The pane under the pointer decides**,
+not the focused one — reading or clicking in one pane while typing in another
+is the ordinary case.
+
+A click on a pane that wants the mouse still moves focus first, because a
+program holding the mouse has no way to tell the mux it should be the one typed
+at. `mouse = false` in the config hands the mouse back to whatever terminal
+`haven attach` is running in, and really hands it back: the host is told to
+stop reporting, not merely ignored.
 
 ## Scrollback
 
@@ -108,9 +160,25 @@ exactly once per interactive command line.
 
 ## Status bar
 
-The bottom row shows the session name, its tabs with the active one marked (`*`,
-plus `Z` when zoomed), the pane count, how many clients are attached when more
-than one, and how long the session has been open.
+The bottom row shows the session name, its tabs with the active one painted,
+the pane count, how many clients are attached when more than one, and how long
+the session has been open. A tab carries marks for what you would otherwise
+have to go and look for:
+
+| Mark | Means |
+|---|---|
+| `▣` | the tab has a zoomed pane |
+| `≡` | the tab is synchronized — what you type goes to every pane in it |
+| `○` | a pane produced output while you were elsewhere |
+| `●` | a pane rang while you were elsewhere; the tab is painted too |
+
+Both `○` and `●` clear when you arrive, which is what makes them mean "since
+you last looked". Activity gets a mark but not a colour on purpose: it is
+information, not a summons, and painting every busy tab is noise.
+
+The right-hand end shows what the client is doing when it is doing something —
+`PREFIX` while the prefix is armed, `SCROLL 20/38` while reading history,
+`COPY` in copy mode.
 
 The client keeps that row for itself and never offers it to the daemon, so no
 pane is ever laid out underneath it.

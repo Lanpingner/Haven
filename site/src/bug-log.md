@@ -5,6 +5,18 @@ broke, because the interesting failures were never where they looked. A
 selection, kept here because they say more about the program than a feature list
 does.
 
+## Two keys, one of them invisible
+
+`k` at the top of copy mode's view scrolls one row to reveal the row above —
+and the cursor must stay where it is, in *view* coordinates. Re-pinning it to
+the history row it had been on looks more correct and undoes the move the
+scroll was for, so the key appears dead.
+
+The opposite applies to a selection's anchor, which is absolute in the history.
+Selecting more than a screenful means scrolling, and a view-relative anchor
+slides out from under the selection as soon as it does. One cursor, two
+coordinate systems, and swapping them is a bug either way round.
+
 ## A line through every blank cell
 
 `CSI > 4 ; 1 m` is XTMODKEYS — modifyOtherKeys — which fish sends before *every*
@@ -123,3 +135,15 @@ before typing.
   they were text, so honouring one would have put `aGVsbG8=` on the clipboard.
 - `str::replace` with a non-matching pattern is a silent no-op: an edit script
   that does not assert can "succeed" while changing nothing.
+- `haven server run -- prog -x` dropped `-x`. Every other subcommand extends
+  the child's arguments with the trailing ones; the daemon's spawner never did,
+  so the program ran with nothing and looked as though it had ignored them.
+- `raw.rs` had been asking host terminals for mouse reports since M2.5, and the
+  decoder had no case for them — so the replies fell through to the key path
+  and typed rubbish into the pane.
+- `haven restore` restored nothing on a fresh daemon. The CLI attached before
+  asking, and attaching with no session named calls `first_or_create` — so it
+  made an empty `haven-1`, and the restore then skipped the saved session of
+  that name because one was already there.
+- A pane-numbering overlay that any key dismisses is dismissed by the *release*
+  of the key that opened it, a millisecond later. Only presses are keystrokes.
