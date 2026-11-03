@@ -64,6 +64,9 @@ pub enum Intercepted {
     EnterCopy,
     /// Ask the daemon what shells it has, and offer them.
     ChooseShell,
+    /// Show a menu the composition root built, since only it knows what the
+    /// commands are. Title, then label-and-command pairs.
+    OpenMenu { title: String, entries: Vec<(String, String)>, filterable: bool },
     /// Number every pane until the next keystroke.
     DisplayPanes,
     /// Go to the tab whose name contains this.
@@ -247,19 +250,45 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         }
         let Some(menu) = self.menu.as_mut() else { return Ok(Tick::Idle) };
         let chosen = match &event.key {
-            Key::Named(NamedKey::Escape) | Key::Char('q') => {
+            Key::Named(NamedKey::Escape) => {
                 self.menu = None;
                 return Ok(Tick::Redraw);
             }
-            Key::Named(NamedKey::Up) | Key::Char('k') => {
+            Key::Named(NamedKey::Up) => {
                 menu.move_by(-1);
                 None
             }
-            Key::Named(NamedKey::Down) | Key::Char('j') => {
+            Key::Named(NamedKey::Down) => {
                 menu.move_by(1);
                 None
             }
+            // vi keys only where typing is not how you narrow the list.
+            Key::Char('k') if !menu.filterable => {
+                menu.move_by(-1);
+                None
+            }
+            Key::Char('j') if !menu.filterable => {
+                menu.move_by(1);
+                None
+            }
+            Key::Char('q') if !menu.filterable => {
+                self.menu = None;
+                return Ok(Tick::Redraw);
+            }
             Key::Named(NamedKey::Enter) => menu.command().map(str::to_string),
+            Key::Named(NamedKey::Backspace) if menu.filterable => {
+                if menu.filter.pop().is_none() {
+                    self.menu = None;
+                    return Ok(Tick::Redraw);
+                }
+                menu.resettle();
+                None
+            }
+            Key::Char(c) if menu.filterable && !event.mods.contains(input::Modifiers::CTRL) => {
+                menu.filter.push(*c);
+                menu.resettle();
+                None
+            }
             // A digit picks straight away: the numbers are printed beside the
             // entries, and making them only *move* the selection would be a
             // promise half kept.
@@ -268,7 +297,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
             _ => None,
         };
-        if let Some(command) = chosen {
+        if let Some(command) = chosen.filter(|c| !c.is_empty()) {
             self.menu = None;
             self.run_menu_command(&command)?;
         }
@@ -780,6 +809,14 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                         self.transport.send(ClientMsg::ListShells)?;
                         return Ok(Tick::Idle);
                     }
+                    Some(Intercepted::OpenMenu { title, entries, filterable }) => {
+                        let mut menu = menu::Menu::new(title, entries);
+                        if filterable {
+                            menu = menu.filterable();
+                        }
+                        self.menu = Some(menu);
+                        return Ok(Tick::Redraw);
+                    }
                     Some(Intercepted::DisplayPanes) => {
                         self.showing_panes = true;
                         return Ok(Tick::Redraw);
@@ -936,9 +973,12 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     self.mouse_enabled = table.mouse;
                     self.frontend.set_mouse(table.mouse);
                 }
-                self.bindings = bindings::Bindings::default()
-                    .with(Some(&table.prefix), &table.prefix_table, false)
-                    .with(None, &table.root, true);
+                let mut folded =
+                    bindings::Bindings::default().with(Some(&table.prefix), bindings::ROOT, &[]);
+                for (name, entries) in &table.tables {
+                    folded = folded.with(None, name, entries);
+                }
+                self.bindings = folded;
                 false
             }
             ServerMsg::Theme(theme) => {

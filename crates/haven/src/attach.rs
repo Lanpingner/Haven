@@ -9,7 +9,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use haven_client::bindings::{Bindings, Table};
+use haven_client::bindings::{self, Bindings};
 use haven_client::input::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use haven_client::status_bar::Mode;
 use haven_client::{Client, Intercepted, Tick};
@@ -127,34 +127,60 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode, &Bindings) -> Intercepted {
                 *selected = 0;
                 return out;
             }
-            Mode::Prefix => {
-                *mode = Mode::Normal;
-                return match bindings.command(Table::Prefix, event) {
-                    // `command-prompt` is the one binding that opens a mode
-                    // rather than doing something, and it may arrive with
-                    // text to start the line off with.
-                    Some(command) => match keys::parse_command(command) {
-                        Ok(Action::EnterCommand(prefill)) => {
-                            *mode = Mode::command(prefill);
-                            Intercepted::Consumed
+            Mode::Table(name) => {
+                let name = name.clone();
+                // A table of your own stays armed; `prefix` is one-shot, as
+                // it has always been.
+                if !bindings.sticky(&name) {
+                    *mode = Mode::Normal;
+                }
+                return match bindings.command(&name, event) {
+                    Some(command) => act(command, mode, bindings),
+                    // An unbound key in an armed table does nothing rather
+                    // than leaking into the pane. Escape leaves a sticky
+                    // table, or there would be no way out of a table that
+                    // forgot to bind one.
+                    None => {
+                        if matches!(event.key, Key::Named(NamedKey::Escape)) {
+                            *mode = Mode::Normal;
                         }
-                        _ => run_command(command),
-                    },
-                    // An unbound key after the prefix does nothing rather
-                    // than leaking into the pane.
-                    None => Intercepted::Consumed,
+                        Intercepted::Consumed
+                    }
                 };
             }
             Mode::Normal => {}
         }
         if bindings.is_prefix(event) {
-            *mode = Mode::Prefix;
+            *mode = Mode::prefix();
             return Intercepted::Consumed;
         }
-        if let Some(command) = bindings.command(Table::Root, event) {
-            return run_command(command);
+        if let Some(command) = bindings.command(bindings::ROOT, event) {
+            return act(command, mode, bindings);
         }
         Intercepted::Pass
+    }
+}
+
+/// Run a bound command, including the two that change the client's own mode
+/// rather than doing something to a session.
+fn act(command: &str, mode: &mut Mode, bindings: &Bindings) -> Intercepted {
+    match keys::parse_command(command) {
+        // `command-prompt` may arrive with text to start the line off with.
+        Ok(Action::EnterCommand(prefill)) => {
+            *mode = Mode::command(prefill);
+            Intercepted::Consumed
+        }
+        Ok(Action::SwitchTable(name)) => {
+            // A name no table answers to would arm something that swallows
+            // every key and answers none, so a typo goes nowhere instead.
+            *mode = match name.as_str() {
+                bindings::ROOT | "" => Mode::Normal,
+                other if bindings.has(other) => Mode::Table(other.to_string()),
+                _ => Mode::Normal,
+            };
+            Intercepted::Consumed
+        }
+        _ => run_command(command),
     }
 }
 
@@ -174,6 +200,19 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::Copy) => Intercepted::EnterCopy,
         Ok(Action::DisplayPanes) => Intercepted::DisplayPanes,
         Ok(Action::ChooseShell) => Intercepted::ChooseShell,
+        // Both need the client's mode, which a typed line has no access to.
+        Ok(Action::SwitchTable(_)) => Intercepted::Consumed,
+        Ok(Action::CommandPalette) => Intercepted::OpenMenu {
+            title: "command".into(),
+            // Built here because this is where the vocabulary lives. The
+            // client has no idea what a command is, which is what keeps the
+            // menu from being able to offer one the command line cannot run.
+            entries: keys::COMMANDS
+                .iter()
+                .map(|c| ((*c).to_string(), keys::palette_entry(c)))
+                .collect(),
+            filterable: true,
+        },
         Ok(Action::FindWindow(text)) => Intercepted::FindWindow(text),
         Ok(Action::Paste) => Intercepted::Paste,
         // A literal prefix key goes to the pane, which is what `send-prefix`
@@ -432,7 +471,7 @@ mod tests {
         let mut mode = Mode::Normal;
 
         assert_eq!(filter(&ctrl_a(), &mut mode, &keys()), Intercepted::Consumed);
-        assert_eq!(mode, Mode::Prefix, "the status line would show nothing");
+        assert_eq!(mode, Mode::prefix(), "the status line would show nothing");
 
         let act = filter(&key(Key::Char('%'), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(act, Intercepted::Act(Wire::SplitColumns { program: None }));
@@ -451,7 +490,7 @@ mod tests {
             filter(&release(Key::Char('a'), Modifiers::CTRL), &mut mode, &keys()),
             Intercepted::Consumed
         );
-        assert_eq!(mode, Mode::Prefix, "the release disarmed the prefix");
+        assert_eq!(mode, Mode::prefix(), "the release disarmed the prefix");
 
         assert_eq!(
             filter(&key(Key::Char('%'), Modifiers::SHIFT), &mut mode, &keys()),
@@ -518,8 +557,8 @@ mod tests {
         // that says otherwise must win without a code change.
         let bindings = Bindings::default().with(
             Some("C-b"),
+            bindings::PREFIX,
             &[("c".into(), "split-v".into()), ("%".into(), String::new())],
-            false,
         );
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
@@ -530,7 +569,7 @@ mod tests {
             filter(&key(Key::Char('b'), Modifiers::CTRL), &mut mode, &bindings),
             Intercepted::Consumed
         );
-        assert_eq!(mode, Mode::Prefix);
+        assert_eq!(mode, Mode::prefix());
         assert_eq!(
             filter(&key(Key::Char('c'), Modifiers::empty()), &mut mode, &bindings),
             Intercepted::Act(Wire::SplitColumns { program: None })
@@ -546,7 +585,8 @@ mod tests {
 
     #[test]
     fn a_root_binding_acts_without_the_prefix() {
-        let bindings = Bindings::default().with(None, &[("C-t".into(), "new-window".into())], true);
+        let bindings =
+            Bindings::default().with(None, bindings::ROOT, &[("C-t".into(), "new-window".into())]);
         let mut filter = key_filter();
         let mut mode = Mode::Normal;
         assert_eq!(
@@ -593,6 +633,87 @@ mod tests {
             run_command("split-v /usr/bin/fish"),
             Intercepted::Act(Wire::SplitColumns { program: Some("/usr/bin/fish".into()) })
         );
+    }
+
+    #[test]
+    fn a_table_of_your_own_stays_armed_until_something_leaves_it() {
+        // The modal part: `prefix` is one-shot, a table of your own is not,
+        // so a run of resizes needs the prefix once rather than each time.
+        let bindings = Bindings::default()
+            .with(None, "resize", &[("h".into(), "resize-left".into())])
+            .with(None, bindings::PREFIX, &[("R".into(), "switch-table resize".into())]);
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+
+        filter(&ctrl_a(), &mut mode, &bindings);
+        assert_eq!(
+            filter(&key(Key::Char('R'), Modifiers::SHIFT), &mut mode, &bindings),
+            Intercepted::Consumed
+        );
+        assert_eq!(mode.table(), Some("resize"));
+
+        for _ in 0..3 {
+            assert_eq!(
+                filter(&key(Key::Char('h'), Modifiers::empty()), &mut mode, &bindings),
+                Intercepted::Act(Wire::ResizeLeft)
+            );
+            assert_eq!(mode.table(), Some("resize"), "a sticky table must not drop itself");
+        }
+
+        // Escape always leaves, even if the table forgot to bind a way out.
+        filter(&key(Key::Named(NamedKey::Escape), Modifiers::empty()), &mut mode, &bindings);
+        assert_eq!(mode, Mode::Normal);
+    }
+
+    #[test]
+    fn switching_to_a_table_that_does_not_exist_arms_nothing() {
+        // Otherwise a typo arms something that swallows every key and
+        // answers none of them.
+        let bindings = Bindings::default().with(
+            None,
+            bindings::PREFIX,
+            &[("R".into(), "switch-table nosuch".into())],
+        );
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode, &bindings);
+        filter(&key(Key::Char('R'), Modifiers::SHIFT), &mut mode, &bindings);
+        assert_eq!(mode, Mode::Normal);
+    }
+
+    #[test]
+    fn the_palette_offers_every_command_and_nothing_else() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        filter(&ctrl_a(), &mut mode, &keys());
+        match filter(&key(Key::Char('P'), Modifiers::SHIFT), &mut mode, &keys()) {
+            Intercepted::OpenMenu { entries, filterable, .. } => {
+                assert!(filterable, "a list this long is only usable by typing");
+                assert_eq!(entries.len(), keys::COMMANDS.len());
+                // Every entry resolves, because the menu runs it through
+                // exactly the same parser a typed line goes through. The
+                // ones that need an argument open the command line with the
+                // verb already on it rather than running a bare verb that
+                // would do nothing or the wrong thing.
+                for (label, command) in &entries {
+                    assert!(
+                        keys::parse_command(command).is_ok(),
+                        "{label:?} offers {command:?}, which does not parse"
+                    );
+                }
+                let prompted: Vec<&String> = entries
+                    .iter()
+                    .filter(|(_, c)| c.starts_with("command-prompt "))
+                    .map(|(l, _)| l)
+                    .collect();
+                assert!(
+                    prompted.contains(&&"select-window".to_string()),
+                    "select-window needs a number: {prompted:?}"
+                );
+                assert!(prompted.contains(&&"rename-window".to_string()));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

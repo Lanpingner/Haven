@@ -47,6 +47,11 @@ pub enum Action {
     ChooseShell,
     SaveSessions,
     RestoreSessions,
+    /// Every command, as a list you narrow by typing.
+    CommandPalette,
+    /// Arm a named key table. The one modal primitive: everything else is a
+    /// table binding `switch-table` to get into and out of it.
+    SwitchTable(String),
     SendKeys {
         pane: Option<u32>,
         bytes: Vec<u8>,
@@ -97,6 +102,8 @@ pub const PAGE_ROWS: i32 = 20;
 pub const COMMANDS: &[&str] = &[
     "choose",
     "choose-shell",
+    "command-palette",
+    "switch-table",
     "command-prompt",
     "focus-down",
     "focus-left",
@@ -231,6 +238,32 @@ fn wire_edge(edge: Edge) -> haven_proto::Edge {
     }
 }
 
+/// What a palette entry should run for a command name.
+///
+/// Some commands are nothing without an argument — `select-window` needs a
+/// number, `rename-window` with no name *clears* the name — so picking the
+/// bare verb from a list would do nothing or the wrong thing. Those open the
+/// command line with the verb already typed instead. The test is the parser
+/// itself rather than a hand-kept list, so a new command cannot be forgotten.
+pub fn palette_entry(name: &str) -> String {
+    let wants_more = match parse_command(name) {
+        Err(_) => true,
+        Ok(action) => matches!(
+            action,
+            Action::Rename { .. }
+                | Action::FindWindow(_)
+                | Action::SendKeys { .. }
+                | Action::SwitchTable(_)
+                | Action::EnterCommand(_)
+        ),
+    };
+    if wants_more {
+        format!("command-prompt {name} ")
+    } else {
+        name.to_string()
+    }
+}
+
 /// Everything after the verb, or `None` when there is nothing.
 fn optional(line: &str, verb: &str) -> Option<String> {
     let rest = rest_of(line, verb);
@@ -254,6 +287,8 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         // tmux's names, plus the ones someone who calls them tabs will try.
         "new-window" | "neww" | "new-tab" => Action::NewWindow { program: optional(line, verb) },
         "choose-shell" | "shells" => Action::ChooseShell,
+        "palette" | "command-palette" => Action::CommandPalette,
+        "switch-table" | "table" => Action::SwitchTable(rest_of(line, verb)),
         "save-sessions" | "save" => Action::SaveSessions,
         "restore-sessions" | "restore" => Action::RestoreSessions,
         "new-session" | "new" => Action::NewSession,
@@ -378,7 +413,11 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::DetachOthers => P::DetachOthers,
         // Both are the client's: one draws an overlay, the other searches a
         // listing the client already holds.
-        Action::DisplayPanes | Action::FindWindow(_) | Action::ChooseShell => return None,
+        Action::DisplayPanes
+        | Action::FindWindow(_)
+        | Action::ChooseShell
+        | Action::CommandPalette
+        | Action::SwitchTable(_) => return None,
         Action::NextLayout => P::NextLayout,
         Action::SaveSessions => P::SaveSessions,
         Action::RestoreSessions => P::RestoreSessions,
@@ -412,7 +451,7 @@ pub fn split_direction(action: &Action) -> Option<(Direction, Option<String>)> {
 mod tests {
     use super::*;
 
-    use haven_client::bindings::{Bindings, Table};
+    use haven_client::bindings::{Bindings, PREFIX};
     use haven_client::input::{KeyEvent, Modifiers};
 
     fn key(c: char) -> KeyEvent {
@@ -421,7 +460,7 @@ mod tests {
 
     /// Resolve a key through the default table exactly as the client does.
     fn bound(event: &KeyEvent) -> Option<Action> {
-        Bindings::default().command(Table::Prefix, event).and_then(|c| parse_command(c).ok())
+        Bindings::default().command(PREFIX, event).and_then(|c| parse_command(c).ok())
     }
 
     #[test]

@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -188,10 +188,10 @@ pub struct KeyTable {
     /// with input — and sending it alone would be a message for one bool.
     pub mouse: bool,
     pub prefix: String,
-    /// Consulted while the prefix is armed.
-    pub prefix_table: Vec<(String, String)>,
-    /// Consulted with no prefix at all.
-    pub root: Vec<(String, String)>,
+    /// Named tables. `prefix` is consulted while the prefix is armed, `root`
+    /// with nothing armed, and any other name is a table of its own that
+    /// `switch-table` can arm.
+    pub tables: Vec<(String, Vec<(String, String)>)>,
 }
 
 /// What a pane has asked to hear about the mouse: DEC modes 1000/1002/1003

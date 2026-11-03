@@ -91,39 +91,67 @@ impl Chord {
     }
 }
 
-/// The whole table: what arms the prefix, what a key does after it, and what
-/// a key does on its own.
+/// Named key tables.
+///
+/// `root` is consulted with nothing armed and `prefix` after the prefix key,
+/// which are the two every terminal multiplexer has. Any other name is a
+/// table of your own, reached with `switch-table` — which is what makes the
+/// key handling modal rather than one-shot: a table can stay armed, so a
+/// sequence of keys can mean something without a prefix before each.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Bindings {
     pub prefix: Chord,
-    /// Consulted while the prefix is armed.
-    pub prefix_table: Vec<(Chord, String)>,
-    /// Consulted with no prefix, before the keystroke reaches the pane.
-    pub root: Vec<(Chord, String)>,
+    /// Keyed by table name. `root` and `prefix` are always present.
+    pub tables: std::collections::BTreeMap<String, Vec<(Chord, String)>>,
 }
 
+/// The two tables that always exist, by the names a config uses for them.
+pub const ROOT: &str = "root";
+pub const PREFIX: &str = "prefix";
+
 impl Bindings {
-    pub fn command(&self, table: Table, event: &KeyEvent) -> Option<&str> {
-        let entries = match table {
-            Table::Prefix => &self.prefix_table,
-            Table::Root => &self.root,
-        };
+    pub fn command(&self, table: &str, event: &KeyEvent) -> Option<&str> {
+        let entries = self.tables.get(table)?;
         // Last wins, so a config's binding overrides the default it repeats
         // without having to unbind it first.
         entries.iter().rev().find(|(chord, _)| chord.matches(event)).map(|(_, cmd)| cmd.as_str())
+    }
+
+    /// Whether a table exists, so `switch-table` can refuse a typo instead
+    /// of arming a table that will swallow every key and answer none.
+    pub fn has(&self, table: &str) -> bool {
+        self.tables.contains_key(table)
+    }
+
+    /// Whether a table holds the keystroke down until something matches.
+    ///
+    /// `prefix` is one-shot, as it has always been: a key after it acts and
+    /// the table is dropped. A table of your own stays until something
+    /// switches away, which is what makes it a mode.
+    pub fn sticky(&self, table: &str) -> bool {
+        table != PREFIX && table != ROOT
+    }
+
+    pub fn prefix_table(&self) -> &[(Chord, String)] {
+        self.tables.get(PREFIX).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    pub fn root(&self) -> &[(Chord, String)] {
+        self.tables.get(ROOT).map(Vec::as_slice).unwrap_or_default()
     }
 
     pub fn is_prefix(&self, event: &KeyEvent) -> bool {
         self.prefix.matches(event)
     }
 
-    /// Fold a config's entries onto the defaults. An empty command unbinds.
-    pub fn with(mut self, prefix: Option<&str>, table: &[(String, String)], root: bool) -> Self {
+    /// Fold a config's entries onto a named table. An empty command unbinds,
+    /// and a table that does not exist yet is made.
+    pub fn with(mut self, prefix: Option<&str>, table: &str, entries: &[(String, String)]) -> Self {
         if let Some(chord) = prefix.and_then(Chord::parse) {
             self.prefix = chord;
         }
-        let into = if root { &mut self.root } else { &mut self.prefix_table };
-        for (spec, command) in table {
+        let into = self.tables.entry(table.to_string()).or_default();
+        for (spec, command) in entries {
             let Some(chord) = Chord::parse(spec) else { continue };
             if command.trim().is_empty() {
                 into.retain(|(c, _)| *c != chord);
@@ -133,12 +161,6 @@ impl Bindings {
         }
         self
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Table {
-    Prefix,
-    Root,
 }
 
 /// The built-in table. These are the defaults the README documents, written
@@ -182,7 +204,9 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     // tmux-resurrect's keys, because the muscle memory is worth importing.
     ("C-s", "save-sessions"),
     ("C-r", "restore-sessions"),
-    ("c", "new-window"),
+    // Capital P: `p` is already the previous tab, and last-wins would have
+    // quietly taken it away.
+    ("P", "command-palette"),
     ("h", "focus-left"),
     ("j", "focus-down"),
     ("k", "focus-up"),
@@ -217,22 +241,27 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
 
 impl Default for Bindings {
     fn default() -> Self {
-        Self {
-            prefix: Chord::parse(DEFAULT_PREFIX).expect("the default prefix must parse"),
-            prefix_table: DEFAULT_BINDINGS
+        let parse = |table: &[(&str, &str)]| -> Vec<(Chord, String)> {
+            table
                 .iter()
                 .filter_map(|(spec, cmd)| Some((Chord::parse(spec)?, (*cmd).to_string())))
-                .collect(),
-            // One root binding by default: a new pane running a shell you
-            // pick. It is on Alt rather than the prefix because it is the
-            // one thing here that is faster than typing the command.
-            root: vec![(
-                Chord::parse("A-c").expect("the default root binding must parse"),
-                "choose-shell".to_string(),
-            )],
+                .collect()
+        };
+        Self {
+            prefix: Chord::parse(DEFAULT_PREFIX).expect("the default prefix must parse"),
+            tables: [
+                (PREFIX.to_string(), parse(DEFAULT_BINDINGS)),
+                (ROOT.to_string(), parse(DEFAULT_ROOT)),
+            ]
+            .into_iter()
+            .collect(),
         }
     }
 }
+
+/// Bound with no prefix at all. Two by default, both things that are faster
+/// than typing the command they stand for.
+pub const DEFAULT_ROOT: &[(&str, &str)] = &[("A-c", "choose-shell"), ("A-p", "command-palette")];
 
 #[cfg(test)]
 mod tests {
@@ -250,10 +279,22 @@ mod tests {
             assert!(Chord::parse(spec).is_some(), "{spec:?} does not parse");
         }
         assert_eq!(
-            Bindings::default().prefix_table.len(),
+            Bindings::default().prefix_table().len(),
             DEFAULT_BINDINGS.len(),
             "a default binding was dropped"
         );
+    }
+
+    #[test]
+    fn no_default_binding_is_quietly_overridden_by_another() {
+        // The table resolves last-wins, so a key listed twice silently loses
+        // its first meaning. That is a feature for a config and a bug here.
+        let mut seen: Vec<Chord> = Vec::new();
+        for (spec, _) in DEFAULT_BINDINGS {
+            let chord = Chord::parse(spec).expect("parses");
+            assert!(!seen.contains(&chord), "{spec:?} is bound twice in the defaults");
+            seen.push(chord);
+        }
     }
 
     #[test]
@@ -303,56 +344,49 @@ mod tests {
     fn the_defaults_resolve_the_keys_the_readme_documents() {
         let b = Bindings::default();
         assert!(b.is_prefix(&event(Key::Char('a'), Modifiers::CTRL)));
+        assert_eq!(b.command(PREFIX, &event(Key::Char('%'), Modifiers::SHIFT)), Some("split-v"));
         assert_eq!(
-            b.command(Table::Prefix, &event(Key::Char('%'), Modifiers::SHIFT)),
-            Some("split-v")
-        );
-        assert_eq!(
-            b.command(Table::Prefix, &event(Key::Char('c'), Modifiers::empty())),
+            b.command(PREFIX, &event(Key::Char('c'), Modifiers::empty())),
             Some("new-window")
         );
         assert_eq!(
-            b.command(Table::Prefix, &event(Key::Char('C'), Modifiers::SHIFT)),
+            b.command(PREFIX, &event(Key::Char('C'), Modifiers::SHIFT)),
             Some("new-session")
         );
         assert_eq!(
-            b.command(Table::Prefix, &event(Key::Char('4'), Modifiers::empty())),
+            b.command(PREFIX, &event(Key::Char('4'), Modifiers::empty())),
             Some("select-window 4")
         );
-        assert_eq!(b.command(Table::Prefix, &event(Key::Char('~'), Modifiers::empty())), None);
+        assert_eq!(b.command(PREFIX, &event(Key::Char('~'), Modifiers::empty())), None);
     }
 
     #[test]
     fn a_configured_binding_overrides_the_default_it_repeats() {
-        let b = Bindings::default().with(None, &[("c".into(), "new-session".into())], false);
+        let b = Bindings::default().with(None, PREFIX, &[("c".into(), "new-session".into())]);
         assert_eq!(
-            b.command(Table::Prefix, &event(Key::Char('c'), Modifiers::empty())),
+            b.command(PREFIX, &event(Key::Char('c'), Modifiers::empty())),
             Some("new-session")
         );
     }
 
     #[test]
     fn an_empty_command_unbinds() {
-        let b = Bindings::default().with(None, &[("x".into(), String::new())], false);
-        assert_eq!(b.command(Table::Prefix, &event(Key::Char('x'), Modifiers::empty())), None);
+        let b = Bindings::default().with(None, PREFIX, &[("x".into(), String::new())]);
+        assert_eq!(b.command(PREFIX, &event(Key::Char('x'), Modifiers::empty())), None);
     }
 
     #[test]
     fn the_prefix_itself_can_be_changed() {
-        let b = Bindings::default().with(Some("C-b"), &[], false);
+        let b = Bindings::default().with(Some("C-b"), PREFIX, &[]);
         assert!(b.is_prefix(&event(Key::Char('b'), Modifiers::CTRL)));
         assert!(!b.is_prefix(&event(Key::Char('a'), Modifiers::CTRL)));
     }
 
     #[test]
     fn a_root_binding_is_kept_apart_from_the_prefix_table() {
-        let b = Bindings::default().with(None, &[("C-t".into(), "new-window".into())], true);
+        let b = Bindings::default().with(None, ROOT, &[("C-t".into(), "new-window".into())]);
         let key = event(Key::Char('t'), Modifiers::CTRL);
-        assert_eq!(b.command(Table::Root, &key), Some("new-window"));
-        assert_eq!(
-            b.command(Table::Prefix, &key),
-            None,
-            "a root binding leaked into the prefix table"
-        );
+        assert_eq!(b.command(ROOT, &key), Some("new-window"));
+        assert_eq!(b.command(PREFIX, &key), None, "a root binding leaked into the prefix table");
     }
 }

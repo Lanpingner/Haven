@@ -46,8 +46,10 @@ pub struct BarState {
 pub enum Mode {
     #[default]
     Normal,
-    /// The prefix key was pressed and the next key is a command.
-    Prefix,
+    /// A key table is armed and the next key is looked up in it. `prefix`
+    /// is the one-shot case that has always existed; a table of your own
+    /// stays armed, which is what makes the key handling modal.
+    Table(String),
     /// A command is being typed: the text so far, what it could become, and
     /// which of those is highlighted.
     ///
@@ -67,6 +69,18 @@ impl Mode {
             Self::Command { text, .. } => Some(text),
             _ => None,
         }
+    }
+
+    /// The armed table, if one is.
+    pub fn table(&self) -> Option<&str> {
+        match self {
+            Self::Table(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    pub fn prefix() -> Self {
+        Self::Table(crate::bindings::PREFIX.to_string())
     }
 }
 
@@ -270,9 +284,11 @@ pub fn build(
     // you wondering why the screen stopped moving.
     // Most urgent first: what you are typing, then what key is armed, then
     // where in the history you are.
-    let alert = match (state.copy.as_ref(), *mode == Mode::Prefix, state.scroll) {
+    let alert = match (state.copy.as_ref(), mode.table(), state.scroll) {
         (Some(label), _, _) => Some(format!(" {label} ")),
-        (_, true, _) => Some(" PREFIX ".to_string()),
+        // The table's own name, so a mode of your own says which one it is
+        // rather than all of them saying `PREFIX`.
+        (_, Some(name), _) => Some(format!(" {} ", name.to_uppercase())),
         (_, _, Some((offset, total))) => Some(format!(" SCROLL {offset}/{total} ")),
         _ => None,
     };
@@ -548,7 +564,7 @@ mod tests {
             &build(
                 size(60, 24),
                 Some(&status()),
-                &Mode::Prefix,
+                &Mode::prefix(),
                 1000,
                 &theme(),
                 &BarState::default(),

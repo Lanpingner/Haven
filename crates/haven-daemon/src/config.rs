@@ -161,6 +161,11 @@ pub struct KeysFile {
     /// prefix gets `C-t` for a new tab.
     #[serde(default)]
     pub root: BTreeMap<String, String>,
+    /// Tables of your own, each armed by `switch-table <name>` and staying
+    /// armed until something switches away. `[keys.table.resize]` with
+    /// `h`/`j`/`k`/`l` in it is the obvious use.
+    #[serde(default)]
+    pub table: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl KeysFile {
@@ -171,8 +176,18 @@ impl KeysFile {
             // no business holding a copy of that: it would be a second place
             // for it to be wrong.
             prefix: self.prefix.clone().unwrap_or_default(),
-            prefix_table: self.bind.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-            root: self.root.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            tables: std::iter::once((
+                "prefix".to_string(),
+                self.bind.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            ))
+            .chain(std::iter::once((
+                "root".to_string(),
+                self.root.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            )))
+            .chain(self.table.iter().map(|(name, entries)| {
+                (name.clone(), entries.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            }))
+            .collect(),
         }
     }
 }
@@ -417,10 +432,35 @@ mod tests {
         )
         .expect("parse");
         let table = config.keys.table();
+        let named = |name: &str| -> Vec<(String, String)> {
+            table.tables.iter().find(|(n, _)| n == name).map(|(_, e)| e.clone()).unwrap_or_default()
+        };
         assert_eq!(table.prefix, "C-b");
-        assert!(table.prefix_table.contains(&("|".into(), "split-v".into())));
-        assert!(table.prefix_table.contains(&("x".into(), String::new())), "unbind was dropped");
-        assert_eq!(table.root, vec![("C-t".into(), "new-window".into())]);
+        assert!(named("prefix").contains(&("|".into(), "split-v".into())));
+        assert!(named("prefix").contains(&("x".into(), String::new())), "unbind was dropped");
+        assert_eq!(named("root"), vec![("C-t".into(), "new-window".into())]);
+    }
+
+    #[test]
+    fn a_table_of_your_own_rides_alongside_the_two_built_in_ones() {
+        let config = Config::from_toml(
+            r#"
+            [keys.table.resize]
+            h = "resize-left"
+            Escape = "switch-table root"
+            "#,
+        )
+        .expect("parse");
+        let table = config.keys.table();
+        let names: Vec<&str> = table.tables.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"prefix") && names.contains(&"root"), "{names:?}");
+        let resize = table
+            .tables
+            .iter()
+            .find(|(n, _)| n == "resize")
+            .map(|(_, e)| e.clone())
+            .expect("the table is missing");
+        assert!(resize.contains(&("h".into(), "resize-left".into())));
     }
 
     #[test]
@@ -458,12 +498,20 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(&path, "[keys]\nbind = { v = \"split-v\" }\n").unwrap();
         let mut w = ConfigWatcher::new(path.clone(), dir.clone());
-        assert_eq!(w.keys().prefix_table, vec![("v".to_string(), "split-v".to_string())]);
+        let prefix = |w: &ConfigWatcher| -> Vec<(String, String)> {
+            w.keys()
+                .tables
+                .iter()
+                .find(|(n, _)| n == "prefix")
+                .map(|(_, e)| e.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(prefix(&w), vec![("v".to_string(), "split-v".to_string())]);
 
         std::fs::write(&path, "[keys]\nbind = { v = \"split-h\" }\n").unwrap();
         filetime_bump(&path);
         assert!(w.poll(), "a changed binding must reach attached clients");
-        assert_eq!(w.keys().prefix_table, vec![("v".to_string(), "split-h".to_string())]);
+        assert_eq!(prefix(&w), vec![("v".to_string(), "split-h".to_string())]);
     }
 
     #[test]

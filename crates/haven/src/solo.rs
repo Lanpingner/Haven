@@ -20,7 +20,7 @@ use haven_vtwrite::{Caps, RenderCell, Serializer, Snapshot};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 
 use crate::keys::{self, Action};
-use haven_client::bindings::{Bindings, Table};
+use haven_client::bindings::{self, Bindings};
 use haven_mux::layout::Direction;
 
 /// One row at the bottom for the status line.
@@ -66,11 +66,11 @@ pub fn run(cfg: PtyConfig, host: HostCaps) -> io::Result<()> {
             haven_daemon::default_theme_dir(),
         );
         let table = config.keys().clone();
-        Bindings::default().with(Some(&table.prefix), &table.prefix_table, false).with(
-            None,
-            &table.root,
-            true,
-        )
+        let mut folded = Bindings::default().with(Some(&table.prefix), bindings::ROOT, &[]);
+        for (name, entries) in &table.tables {
+            folded = folded.with(None, name, entries);
+        }
+        folded
     };
     let mut buf = [0u8; 65536];
     let mut dirty = true;
@@ -123,7 +123,7 @@ pub fn run(cfg: PtyConfig, host: HostCaps) -> io::Result<()> {
                         // The same table the attached client uses. Two key
                         // tables would be two behaviours for one keymap.
                         match bindings
-                            .command(Table::Prefix, &key)
+                            .command(bindings::PREFIX, &key)
                             .and_then(|c| keys::parse_command(c).ok())
                         {
                             Some(Action::Detach) => return Ok(()),
@@ -241,6 +241,9 @@ fn apply<F: FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>(
         | Action::DisplayPanes
         | Action::FindWindow(_)
         | Action::ChooseShell
+        | Action::CommandPalette
+        // Standalone has no client-side mode machine to switch.
+        | Action::SwitchTable(_)
         // Standalone is one session that dies with the process; there is
         // nothing for a save file to bring back.
         | Action::SaveSessions
