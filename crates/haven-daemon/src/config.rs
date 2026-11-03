@@ -36,6 +36,7 @@ pub struct ThemeFile {
     pub panel_border: Option<PairFile>,
     pub panel_title: Option<PairFile>,
     pub panel_dim: Option<PairFile>,
+    pub pane_border: Option<PairFile>,
     pub selection: Option<PairFile>,
     pub glyphs: Option<Glyphs>,
 }
@@ -117,6 +118,7 @@ impl ThemeFile {
         role!(panel_border);
         role!(panel_title);
         role!(panel_dim);
+        role!(pane_border);
         role!(selection);
         if let Some(glyphs) = &self.glyphs {
             theme.glyphs = glyphs.clone();

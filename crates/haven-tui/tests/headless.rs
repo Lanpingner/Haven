@@ -67,9 +67,10 @@ fn a_pane_cannot_draw_outside_its_rectangle() {
     pane(&mut frame, 1, (0, 0, 5, 2), &["this text is far too long"]);
 
     let screen = render_and_parse(&mut frontend, &frame);
-    // Clipped at 5 columns, and the separator marks where the pane ends —
-    // nothing of the overflowing text reaches past it.
-    assert_eq!(screen.lines().next().unwrap(), "this │", "pane overflowed its rect");
+    // Clipped at 5 columns. There is no separator: a gap is only a rule when
+    // there is a pane on each side of it, and here there is nothing to the
+    // right at all.
+    assert_eq!(screen.lines().next().unwrap(), "this", "pane overflowed its rect");
 }
 
 #[test]

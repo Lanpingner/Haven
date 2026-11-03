@@ -1138,6 +1138,17 @@ prompt, so `PS0` plus `history 1` is used instead. It is expanded exactly
 once per interactive command line, which is the gate wanted.
 
 **Bugs this work surfaced, worth remembering:**
+- Panes stacked one above another had nothing between them. The layout
+  reserves a cell between neighbours in both directions (`SEPARATOR`), but
+  the client's compositor only ever drew the vertical rule, so a row split
+  showed as a blank line and read as two panes running together. Standalone
+  mode had drawn both all along, which is why it never came up. Rules are now
+  decided from a map of which cells a pane covers: a gap is a rule only where
+  there is a pane on each side of it — which is also what keeps the row the
+  status line sits on from growing one — and the arms come from the
+  neighbouring gap cells, so four panes meet at a `┼` however the splits were
+  nested. The glyphs and the colour come from the theme, as everything the
+  interface draws must; `plain` therefore gets `+`, not a hole.
 - Requesting `Limits::downlevel_defaults()` caps textures at 2048 *whatever
   the hardware can do*, so a window 2088 pixels tall could not be given a
   surface and wgpu aborted the process — a validation error cannot be caught.

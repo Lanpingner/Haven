@@ -108,6 +108,10 @@ pub struct FrameModel {
     pub status: Option<haven_proto::SessionStatus>,
     /// Out-of-band message to show the user (version skew, server gone).
     pub notice: Option<String>,
+    /// What the interface is painted with, as the daemon last sent it. It
+    /// lives on the frame because compositing draws with it and a frontend
+    /// is handed nothing else.
+    pub theme: haven_proto::theme::Theme,
     /// Bumped whenever anything changed, for frontends that cache aggressively.
     pub generation: u64,
 }
@@ -122,6 +126,7 @@ impl FrameModel {
             status: None,
             focus: None,
             notice: None,
+            theme: haven_proto::theme::Theme::default(),
             generation: 0,
         }
     }
@@ -274,7 +279,6 @@ pub fn composite(frame: &FrameModel) -> (Screen, (usize, usize)) {
 
     for pane in frame.panes.values() {
         place(&mut screen, &pane.rect, &pane.rows, cols);
-        separator(&mut screen, &pane.rect, cols, rows);
         if Some(pane.id) == frame.focus {
             cursor = (
                 (pane.rect.row as usize + pane.cursor.row).min(rows.saturating_sub(1)),
@@ -282,6 +286,8 @@ pub fn composite(frame: &FrameModel) -> (Screen, (usize, usize)) {
             );
         }
     }
+    // After every pane, because a rule is decided by what its neighbours are.
+    separators(&mut screen, frame, cols, rows);
     for widget in &frame.widgets {
         place(&mut screen, &widget.rect, &widget.rows, cols);
     }
@@ -304,17 +310,87 @@ fn place(screen: &mut Screen, rect: &PaneRect, rows: &[FrameRow], cols: usize) {
     }
 }
 
-/// A vertical rule to the right of every pane that does not reach the edge.
-fn separator(screen: &mut Screen, rect: &PaneRect, cols: usize, rows: usize) {
-    let right = rect.col as usize + rect.cols as usize;
-    if right >= cols {
+/// Rules in the gaps the layout leaves between panes.
+///
+/// `haven_mux::SEPARATOR` reserves one cell between neighbours in *both*
+/// directions, but only the vertical one was ever drawn: stacked panes ran
+/// into each other across a blank row. A gap is a rule only where there is a
+/// pane on each side of it, which is also what keeps the row the status line
+/// sits on from growing one.
+///
+/// Junctions come from the neighbouring gap cells rather than from the pane
+/// tree, so a four-way meeting is a cross however the splits were nested.
+fn separators(screen: &mut Screen, frame: &FrameModel, cols: usize, rows: usize) {
+    if cols == 0 || rows == 0 {
         return;
     }
-    for r in 0..rect.rows as usize {
-        let row = rect.row as usize + r;
-        if row < rows {
-            screen[row][right] = ScreenCell::new("│", Style::default());
+    let mut covered = vec![vec![false; cols]; rows];
+    for pane in frame.panes.values() {
+        let rect = &pane.rect;
+        let last_row = (rect.row as usize + rect.rows as usize).min(rows);
+        let last_col = (rect.col as usize + rect.cols as usize).min(cols);
+        for row in covered.iter_mut().take(last_row).skip(rect.row as usize) {
+            for cell in row.iter_mut().take(last_col).skip(rect.col as usize) {
+                *cell = true;
+            }
         }
+    }
+
+    let between = |a: Option<bool>, b: Option<bool>| a == Some(true) && b == Some(true);
+    let at = |grid: &[Vec<bool>], row: usize, col: usize| grid[row][col];
+    let mut vertical = vec![vec![false; cols]; rows];
+    let mut horizontal = vec![vec![false; cols]; rows];
+    for row in 0..rows {
+        for col in 0..cols {
+            if covered[row][col] {
+                continue;
+            }
+            vertical[row][col] = between(
+                col.checked_sub(1).map(|c| at(&covered, row, c)),
+                (col + 1 < cols).then(|| at(&covered, row, col + 1)),
+            );
+            horizontal[row][col] = between(
+                row.checked_sub(1).map(|r| at(&covered, r, col)),
+                (row + 1 < rows).then(|| at(&covered, row + 1, col)),
+            );
+        }
+    }
+
+    let g = &frame.theme.glyphs;
+    let style = frame.theme.pane_border.style();
+    for row in 0..rows {
+        for col in 0..cols {
+            if covered[row][col] {
+                continue;
+            }
+            // A rule always spans its own cell end to end; it gains the other
+            // axis from the rules that run into it. The cell where four panes
+            // meet is in neither run — nothing is beside it and nothing is
+            // above it — so it is drawn from its neighbours alone.
+            let up = vertical[row][col] || (row > 0 && vertical[row - 1][col]);
+            let down = vertical[row][col] || (row + 1 < rows && vertical[row + 1][col]);
+            let left = horizontal[row][col] || (col > 0 && horizontal[row][col - 1]);
+            let right = horizontal[row][col] || (col + 1 < cols && horizontal[row][col + 1]);
+            let arms = u8::from(up) + u8::from(down) + u8::from(left) + u8::from(right);
+            if !vertical[row][col] && !horizontal[row][col] && arms < 2 {
+                continue;
+            }
+            screen[row][col] = ScreenCell::new(rule(g, up, down, left, right), style);
+        }
+    }
+}
+
+/// The glyph for a rule with these arms. Every one of them comes from the
+/// theme: a terminal whose font has no box drawing gets `+`, not a hole.
+fn rule(g: &haven_proto::theme::Glyphs, up: bool, down: bool, left: bool, right: bool) -> &str {
+    match (up, down, left, right) {
+        (true, true, true, true) => &g.cross,
+        (true, true, true, false) => &g.tee_left,
+        (true, true, false, true) => &g.tee_right,
+        (true, false, true, true) => &g.tee_up,
+        (false, true, true, true) => &g.tee_down,
+        (_, _, true, true) => &g.horizontal,
+        _ => &g.vertical,
     }
 }
 
@@ -415,6 +491,91 @@ mod tests {
         frame.apply_layout(&layout(&[(1, 0, 0, 10, 1)]));
         frame.apply_snapshot(PaneId(1), &[RowRle::encode(&row)], Cursor::default(), 1);
         assert_eq!(frame.pane_text(PaneId(1)), "a漢\n");
+    }
+
+    /// The screen as characters, so a rule is readable in the assertion.
+    fn picture(frame: &FrameModel) -> Vec<String> {
+        composite(frame)
+            .0
+            .iter()
+            .map(|row| row.iter().map(|c| c.text.clone()).collect::<String>())
+            .collect()
+    }
+
+    fn filled(frame: &mut FrameModel, panes: &[(u32, u16, u16, u16, u16)]) {
+        frame.apply_layout(&layout(panes));
+        for &(id, _, _, cols, rows) in panes {
+            let row = cells(&"x".repeat(cols as usize));
+            let rows = (0..rows).map(|_| RowRle::encode(&row)).collect::<Vec<_>>();
+            frame.apply_snapshot(PaneId(id), &rows, Cursor::default(), 1);
+        }
+    }
+
+    #[test]
+    fn stacked_panes_are_divided_by_a_rule_not_a_blank_row() {
+        // The layout reserves the row; nothing used to draw in it, so two
+        // panes above one another just ran together.
+        let mut frame = FrameModel::new(CellSize { cols: 5, rows: 5, ..Default::default() });
+        filled(&mut frame, &[(1, 0, 0, 5, 2), (2, 0, 3, 5, 2)]);
+        assert_eq!(picture(&frame)[2], "─────", "the gap row was left blank");
+    }
+
+    #[test]
+    fn side_by_side_panes_are_divided_by_a_rule() {
+        let mut frame = FrameModel::new(CellSize { cols: 5, rows: 2, ..Default::default() });
+        filled(&mut frame, &[(1, 0, 0, 2, 2), (2, 3, 0, 2, 2)]);
+        assert_eq!(picture(&frame), vec!["xx│xx".to_string(), "xx│xx".to_string()]);
+    }
+
+    #[test]
+    fn four_panes_meet_at_a_cross() {
+        // The cell where four panes meet is in neither run — no pane beside
+        // it, none above it — so it is only right if junctions are resolved
+        // from the neighbouring rules.
+        let mut frame = FrameModel::new(CellSize { cols: 5, rows: 5, ..Default::default() });
+        filled(&mut frame, &[(1, 0, 0, 2, 2), (2, 3, 0, 2, 2), (3, 0, 3, 2, 2), (4, 3, 3, 2, 2)]);
+        assert_eq!(picture(&frame)[2], "──┼──");
+    }
+
+    #[test]
+    fn a_rule_that_stops_at_another_becomes_a_tee() {
+        // One tall pane on the left, two stacked on the right.
+        let mut frame = FrameModel::new(CellSize { cols: 5, rows: 5, ..Default::default() });
+        filled(&mut frame, &[(1, 0, 0, 2, 5), (2, 3, 0, 2, 2), (3, 3, 3, 2, 2)]);
+        assert_eq!(picture(&frame)[2], "xx├──");
+    }
+
+    #[test]
+    fn the_row_the_status_line_sits_on_does_not_become_a_rule() {
+        // A pane one row short of the screen leaves a row free. It is not a
+        // gap between panes, and a rule there would be drawn under the bar.
+        let mut frame = FrameModel::new(CellSize { cols: 4, rows: 3, ..Default::default() });
+        filled(&mut frame, &[(1, 0, 0, 4, 2)]);
+        assert_eq!(picture(&frame)[2], "    ", "a rule was drawn where no pane follows");
+    }
+
+    #[test]
+    fn rules_are_painted_with_the_theme_not_a_hardcoded_colour() {
+        use haven_proto::theme::{Pair, Theme};
+        let mut frame = FrameModel::new(CellSize { cols: 5, rows: 2, ..Default::default() });
+        frame.theme = Theme {
+            pane_border: Pair::new(haven_core::Color::Indexed(3), haven_core::Color::Indexed(1)),
+            ..Theme::default()
+        };
+        filled(&mut frame, &[(1, 0, 0, 2, 2), (2, 3, 0, 2, 2)]);
+        let cell = composite(&frame).0[0][2].clone();
+        assert_eq!(cell.style.fg, haven_core::Color::Indexed(3));
+        assert_eq!(cell.style.bg, haven_core::Color::Indexed(1));
+    }
+
+    #[test]
+    fn an_ascii_theme_draws_rules_it_can_actually_show() {
+        use haven_proto::theme::Theme;
+        let mut frame = FrameModel::new(CellSize { cols: 5, rows: 5, ..Default::default() });
+        frame.theme = Theme::plain();
+        filled(&mut frame, &[(1, 0, 0, 2, 2), (2, 3, 0, 2, 2), (3, 0, 3, 2, 2), (4, 3, 3, 2, 2)]);
+        assert_eq!(picture(&frame)[2], "--+--");
+        assert_eq!(picture(&frame)[0], "xx|xx");
     }
 
     #[test]

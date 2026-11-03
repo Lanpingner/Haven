@@ -52,6 +52,7 @@ impl Pair {
 /// drawing needs different characters, not different colours — and because
 /// the ASCII set is how the interface stays usable over a bad SSH link.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Glyphs {
     pub top_left: String,
     pub top_right: String,
@@ -59,6 +60,15 @@ pub struct Glyphs {
     pub bottom_right: String,
     pub horizontal: String,
     pub vertical: String,
+    /// Where the rules between panes meet. Named for the way the stem points:
+    /// `tee_left` is the one whose stem runs left out of a vertical rule.
+    /// Without these a cross between four panes is drawn as a bare `|`, and
+    /// the horizontal rule appears to stop dead at it.
+    pub tee_left: String,
+    pub tee_right: String,
+    pub tee_up: String,
+    pub tee_down: String,
+    pub cross: String,
     /// Tree guides in the chooser.
     pub branch: String,
     pub last_branch: String,
@@ -82,6 +92,11 @@ impl Default for Glyphs {
             bottom_right: "┘".into(),
             horizontal: "─".into(),
             vertical: "│".into(),
+            tee_left: "┤".into(),
+            tee_right: "├".into(),
+            tee_up: "┴".into(),
+            tee_down: "┬".into(),
+            cross: "┼".into(),
             branch: "├─".into(),
             last_branch: "└─".into(),
             trunk: "│ ".into(),
@@ -101,6 +116,11 @@ impl Glyphs {
             bottom_right: "+".into(),
             horizontal: "-".into(),
             vertical: "|".into(),
+            tee_left: "+".into(),
+            tee_right: "+".into(),
+            tee_up: "+".into(),
+            tee_down: "+".into(),
+            cross: "+".into(),
             branch: "|-".into(),
             last_branch: "`-".into(),
             trunk: "| ".into(),
@@ -131,6 +151,10 @@ pub struct Theme {
     pub panel_border: Pair,
     pub panel_title: Pair,
     pub panel_dim: Pair,
+    /// The rules the layout leaves between panes. Its background stays the
+    /// terminal's own: the gap is between panes, not a surface of its own,
+    /// and a panel colour there reads as a stripe down the screen.
+    pub pane_border: Pair,
     pub selection: Pair,
     pub glyphs: Glyphs,
 }
@@ -194,6 +218,7 @@ impl Theme {
             panel_border: Pair::new(Color::Indexed(12), Color::Indexed(0)),
             panel_title: Pair::new(Color::Indexed(12), Color::Indexed(0)).bold(),
             panel_dim: Pair::new(Color::Indexed(8), Color::Indexed(0)),
+            pane_border: Pair::new(Color::Indexed(8), Color::Default),
             selection: Pair::new(Color::Indexed(0), Color::Indexed(12)).bold(),
             glyphs: Glyphs::default(),
         }
@@ -215,6 +240,7 @@ impl Theme {
             panel_border: Pair::new(Color::Default, Color::Default),
             panel_title: Pair::new(Color::Default, Color::Default).bold(),
             panel_dim: Pair::new(Color::Default, Color::Default),
+            pane_border: Pair::new(Color::Default, Color::Default),
             selection: Pair::new(Color::Default, Color::Default).bold(),
             glyphs: Glyphs::ascii(),
         }
@@ -238,6 +264,7 @@ impl Theme {
             panel_border: Pair::new(accent, surface),
             panel_title: Pair::new(accent, surface).bold(),
             panel_dim: Pair::new(faint, surface),
+            pane_border: Pair::new(faint, Color::Default),
             selection: Pair::new(ink, accent).bold(),
             glyphs: Glyphs::default(),
         }
