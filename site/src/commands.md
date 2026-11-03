@@ -21,7 +21,7 @@ the other.
 | `scroll-up`, `scroll-down`, `scroll-top`, `scroll-end` | as the paging keys do |
 | `copy-mode` (`copy`), `paste-buffer` | enter copy mode / paste the newest buffer |
 | `choose` | the session tree |
-| `choose-shell` | the shell menu `Alt+C` opens |
+| `choose-shell [verb]` | the shell menu; `verb` is what to do with the pick, `new-window` by default |
 | `command-palette` (`palette`) | every command, narrowed by typing |
 | `switch-table <name>` | arm a [key table](./keys.md#key-tables) |
 | `display-panes`, `find-window <text>` | number the panes / go to a tab by name |

@@ -1264,6 +1264,14 @@ linear on sampling exactly as the target converts back on write. A mask is
 unaffected: white is white in both, and alpha is never gamma-encoded.
 
 **Bugs this work surfaced, worth remembering:**
+- `$SHELL` is inherited from whatever started the daemon, so a pane opened
+  as bash in a session started under fish reported fish — and everything
+  that spawns a subshell through `$SHELL`, from `vim :sh` to `git`, got the
+  wrong one. Corrected only for a program that *is* a shell: `haven -- mc`
+  must not claim `SHELL=/usr/bin/mc`.
+- The shell menu split the window while `c` made a tab everywhere else, so
+  one letter meant two things. It makes a tab now, and what to do with the
+  pick travels with the request rather than being baked into the menu.
 - A root binding was blocked while a table was armed. `Ctrl+A` and then a
   change of mind left the prefix armed, so `Alt+C` was looked up in the
   prefix table, missed, and was swallowed — doing nothing and reporting

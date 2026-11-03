@@ -240,7 +240,9 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     // Also on the prefix, not only on `Alt+C`. A feature reachable solely
     // through a modifier combination is at the mercy of whatever else on the
     // desktop wants that combination.
+    // `g` makes a tab, like `c`; `G` makes a pane, like `%`.
     ("g", "choose-shell"),
+    ("G", "choose-shell split-v"),
     ("h", "focus-left"),
     ("j", "focus-down"),
     ("k", "focus-up"),

@@ -62,8 +62,9 @@ pub enum Intercepted {
     Scroll(i32),
     /// Enter copy mode on the focused pane.
     EnterCopy,
-    /// Ask the daemon what shells it has, and offer them.
-    ChooseShell,
+    /// Ask the daemon what shells it has, and run the one picked with this
+    /// command — `new-window` for a tab, `split-v` for a pane.
+    ChooseShell(String),
     /// Show a menu the composition root built, since only it knows what the
     /// commands are. Title, then label-and-command pairs.
     OpenMenu { title: String, entries: Vec<(String, String)>, filterable: bool },
@@ -125,6 +126,9 @@ pub struct Client<F, T> {
     /// Whether this client does anything with the mouse at all. Off gives
     /// it back to the terminal Haven is running in.
     pub mouse_enabled: bool,
+    /// What to do with the shell picked from the menu, held between asking
+    /// the daemon for the list and the list arriving.
+    pub shell_verb: String,
     /// Pane numbers are on screen until the next keystroke.
     showing_panes: bool,
     /// The key table, as the daemon's config describes it.
@@ -171,6 +175,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             copy: None,
             menu: None,
             buffers: Vec::new(),
+            shell_verb: "new-window".into(),
             mouse_enabled: true,
             showing_panes: false,
             environment: Vec::new(),
@@ -818,7 +823,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                         self.enter_copy();
                         return Ok(Tick::Redraw);
                     }
-                    Some(Intercepted::ChooseShell) => {
+                    Some(Intercepted::ChooseShell(verb)) => {
+                        // Remembered until the listing arrives: the daemon
+                        // answers with shells, not with what to do with one.
+                        self.shell_verb = verb;
                         self.transport.send(ClientMsg::ListShells)?;
                         return Ok(Tick::Idle);
                     }
@@ -965,13 +973,15 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             ServerMsg::Shells(shells) => {
                 // The listing is what the menu was opened for; until it
                 // arrives there is nothing to show.
+                let verb = self.shell_verb.clone();
+                let where_ = if verb.starts_with("split") { "pane" } else { "tab" };
                 self.menu = Some(menu::Menu::new(
-                    "run in a new pane",
+                    format!("run in a new {where_}"),
                     shells
                         .iter()
                         .map(|path| {
                             let name = path.rsplit('/').next().unwrap_or(path).to_string();
-                            (format!("{name:<8} {path}"), format!("split-v {path}"))
+                            (format!("{name:<8} {path}"), format!("{verb} {path}"))
                         })
                         .collect(),
                 ));

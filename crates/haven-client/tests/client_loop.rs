@@ -487,7 +487,7 @@ fn find_window_goes_to_the_tab_whose_name_matches() {
 }
 
 #[test]
-fn the_shell_listing_becomes_a_menu_of_splits() {
+fn the_shell_listing_becomes_a_menu_that_does_what_was_asked() {
     // The daemon answers with its own machine's shells, because that is
     // where the pane will be spawned.
     let server = ScriptedTransport::new([
@@ -498,13 +498,34 @@ fn the_shell_listing_becomes_a_menu_of_splits() {
     let mut client = Client::new(frontend, server);
     client.tick().unwrap();
 
+    // A new tab by default, because the keys that offer a shell are the
+    // ones that make tabs; `c` has meant a tab everywhere else all along.
     let menu = client.menu.as_ref().expect("no menu was opened");
     assert_eq!(menu.entries.len(), 2);
     assert!(menu.entries[0].0.starts_with("fish"), "the label should lead with the name");
-    assert_eq!(menu.entries[0].1, "split-v /usr/bin/fish");
+    assert_eq!(menu.entries[0].1, "new-window /usr/bin/fish");
+    assert!(menu.title.contains("tab"), "the title should say where it will go: {}", menu.title);
     // And it is on screen: a modal nobody can see is a hang.
     assert!(
         client.frame.widgets.iter().any(|w| w.kind == haven_client::WidgetKind::Overlay),
         "the menu was not drawn"
     );
+}
+
+#[test]
+fn the_shell_menu_can_be_asked_for_a_pane_instead() {
+    // The same menu, a different verb: what to do with the pick travels
+    // with the request rather than being baked into the menu.
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Shells(vec!["/bin/bash".into()]),
+    ]);
+    let frontend = ScriptedFrontend::new(size(20, 6), []);
+    let mut client = Client::new(frontend, server);
+    client.shell_verb = "split-v".into();
+    client.tick().unwrap();
+
+    let menu = client.menu.as_ref().expect("no menu");
+    assert_eq!(menu.entries[0].1, "split-v /bin/bash");
+    assert!(menu.title.contains("pane"), "{}", menu.title);
 }

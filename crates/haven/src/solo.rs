@@ -253,7 +253,7 @@ fn apply<F: FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>(
         Action::DetachOthers
         | Action::DisplayPanes
         | Action::FindWindow(_)
-        | Action::ChooseShell
+        | Action::ChooseShell(_)
         | Action::CommandPalette
         // Standalone has no client-side mode machine to switch.
         | Action::SwitchTable(_)

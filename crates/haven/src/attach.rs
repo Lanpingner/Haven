@@ -209,7 +209,7 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::Scroll(rows)) => Intercepted::Scroll(rows),
         Ok(Action::Copy) => Intercepted::EnterCopy,
         Ok(Action::DisplayPanes) => Intercepted::DisplayPanes,
-        Ok(Action::ChooseShell) => Intercepted::ChooseShell,
+        Ok(Action::ChooseShell(verb)) => Intercepted::ChooseShell(verb),
         // Both need the client's mode, which a typed line has no access to.
         Ok(Action::SwitchTable(_)) => Intercepted::Consumed,
         Ok(Action::CommandPalette) => Intercepted::OpenMenu {
@@ -644,13 +644,27 @@ mod tests {
         let mut mode = Mode::Normal;
         assert_eq!(
             filter(&key(Key::Char('c'), Modifiers::ALT), &mut mode, &keys()),
-            Intercepted::ChooseShell
+            Intercepted::ChooseShell("new-window".into())
         );
         assert_eq!(mode, Mode::Normal, "a root binding must not arm anything");
         // Without alt it is an ordinary key and belongs to the pane.
         assert_eq!(
             filter(&key(Key::Char('c'), Modifiers::empty()), &mut mode, &keys()),
             Intercepted::Pass
+        );
+    }
+
+    #[test]
+    fn offering_a_shell_defaults_to_a_tab_like_every_other_c() {
+        // `c` is the new tab, so the key that offers a shell makes one too.
+        // It used to split, which meant one `c` meant two different things.
+        assert_eq!(
+            keys::parse_command("choose-shell"),
+            Ok(keys::Action::ChooseShell("new-window".into()))
+        );
+        assert_eq!(
+            keys::parse_command("choose-shell split-v"),
+            Ok(keys::Action::ChooseShell("split-v".into()))
         );
     }
 
@@ -756,7 +770,7 @@ mod tests {
         assert_eq!(mode.table(), Some("prefix"));
         assert_eq!(
             filter(&key(Key::Char('c'), Modifiers::ALT), &mut mode, &keys()),
-            Intercepted::ChooseShell
+            Intercepted::ChooseShell("new-window".into())
         );
         assert_eq!(mode, Mode::Normal, "the prefix should be spent either way");
     }

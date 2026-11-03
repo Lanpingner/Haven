@@ -43,8 +43,10 @@ pub enum Action {
     RespawnPane {
         program: Option<String>,
     },
-    /// Offer the daemon's shells, and open a pane running the one picked.
-    ChooseShell,
+    /// Offer the daemon's shells, and run the one picked with this command.
+    /// `new-window` by default, so the key that offers a shell does the same
+    /// thing as the key that makes a tab.
+    ChooseShell(String),
     SaveSessions,
     RestoreSessions,
     /// Every command, as a list you narrow by typing.
@@ -286,7 +288,10 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         "split-v" | "vsplit" | "vs" => Action::SplitColumns { program: optional(line, verb) },
         // tmux's names, plus the ones someone who calls them tabs will try.
         "new-window" | "neww" | "new-tab" => Action::NewWindow { program: optional(line, verb) },
-        "choose-shell" | "shells" => Action::ChooseShell,
+        "choose-shell" | "shells" => Action::ChooseShell(match optional(line, verb) {
+            Some(verb) => verb,
+            None => "new-window".to_string(),
+        }),
         "palette" | "command-palette" => Action::CommandPalette,
         "switch-table" | "table" => Action::SwitchTable(rest_of(line, verb)),
         "save-sessions" | "save" => Action::SaveSessions,
@@ -415,7 +420,7 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         // listing the client already holds.
         Action::DisplayPanes
         | Action::FindWindow(_)
-        | Action::ChooseShell
+        | Action::ChooseShell(_)
         | Action::CommandPalette
         | Action::SwitchTable(_) => return None,
         Action::NextLayout => P::NextLayout,

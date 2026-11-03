@@ -299,6 +299,26 @@ pub fn all() -> Vec<Box<dyn Shell>> {
     vec![Box::new(FishShell), Box::new(ZshShell), Box::new(BashShell)]
 }
 
+/// Whether a path is a shell rather than some other program.
+///
+/// `/etc/shells` is the list the system keeps for exactly this question, and
+/// the names Haven has integration for are checked too, since a shell built
+/// from source is often in neither.
+pub fn is_shell(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    if ["fish", "zsh", "bash", "sh", "dash", "nu", "elvish", "ksh", "tcsh", "csh"].contains(&name) {
+        return true;
+    }
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let target = real(path);
+    std::fs::read_to_string("/etc/shells").is_ok_and(|text| {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .any(|l| real(Path::new(l)) == target)
+    })
+}
+
 /// Pick the implementation for a program path, falling back to [`GenericShell`].
 pub fn for_program(program: &Path) -> Box<dyn Shell> {
     all().into_iter().find(|s| s.matches(program)).unwrap_or_else(|| {
@@ -387,6 +407,12 @@ pub fn launch_config(
 ) -> (PtyConfig, Box<dyn Shell>, Injection) {
     let path = resolve(program);
     let shell = for_program(&path);
+    // `$SHELL` is inherited from whatever started the daemon, so a pane
+    // opened as bash from a session started under fish would say fish — and
+    // everything that spawns a subshell through `$SHELL`, from `vim :sh` to
+    // `git`, would get the wrong one. It is only corrected for a program
+    // that *is* a shell: `haven -- mc` must not claim `SHELL=/usr/bin/mc`.
+    let shell_var = is_shell(&path).then(|| path.clone());
 
     let ctx = IntegrationCtx { program: path.clone(), ..ctx.clone() };
     let mut cfg = PtyConfig {
@@ -406,6 +432,10 @@ pub fn launch_config(
         ..Default::default()
     };
 
+    if let Some(path) = shell_var {
+        cfg.env.push(("SHELL".into(), path.into_os_string()));
+    }
+
     let injection = if integrate {
         // An integration failure must be harmless, never fatal: a shell with no
         // marks is merely less capable, a shell that will not start is a bug.
@@ -414,6 +444,57 @@ pub fn launch_config(
         Injection::Unsupported
     };
     (cfg, shell, injection)
+}
+
+#[cfg(test)]
+mod shell_var_tests {
+    use super::*;
+
+    fn env_of(cfg: &PtyConfig, key: &str) -> Option<String> {
+        cfg.env.iter().find(|(k, _)| k == key).map(|(_, v)| v.to_string_lossy().into_owned())
+    }
+
+    fn ctx() -> IntegrationCtx {
+        IntegrationCtx {
+            program: PathBuf::from("/bin/sh"),
+            dir: std::env::temp_dir(),
+            login: false,
+            home: None,
+        }
+    }
+
+    #[test]
+    fn a_pane_says_which_shell_it_is_actually_running() {
+        // Inherited from whatever started the daemon otherwise, so a bash
+        // pane in a session started under fish reported fish — and anything
+        // spawning a subshell through `$SHELL` got the wrong one.
+        let Some(bash) = ["/bin/bash", "/usr/bin/bash"].iter().map(Path::new).find(|p| p.is_file())
+        else {
+            return;
+        };
+        let (cfg, _, _) = launch_config(Some(bash), false, false, &ctx());
+        assert_eq!(env_of(&cfg, "SHELL").as_deref(), bash.to_str());
+    }
+
+    #[test]
+    fn a_program_that_is_not_a_shell_does_not_claim_to_be_one() {
+        // `haven -- mc` must not leave `SHELL=/usr/bin/mc` behind for every
+        // program in the pane to trip over.
+        let Some(mc) = ["/usr/bin/mc", "/bin/mc"].iter().map(Path::new).find(|p| p.is_file())
+        else {
+            return;
+        };
+        let (cfg, _, _) = launch_config(Some(mc), false, false, &ctx());
+        assert_eq!(env_of(&cfg, "SHELL"), None);
+    }
+
+    #[test]
+    fn shells_are_recognised_by_name_and_by_etc_shells() {
+        assert!(is_shell(Path::new("/usr/bin/fish")));
+        assert!(is_shell(Path::new("/some/where/zsh")));
+        assert!(!is_shell(Path::new("/usr/bin/mc")));
+        assert!(!is_shell(Path::new("/usr/bin/vim")));
+    }
 }
 
 #[cfg(test)]

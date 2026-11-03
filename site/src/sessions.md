@@ -88,10 +88,21 @@ that will not exist again.
 
 ## Choosing a shell
 
-`Alt+C` — no prefix — opens a new pane and asks what to run in it, and so
+`Alt+C` — no prefix — opens a new **tab** and asks what to run in it, and so
 does `Ctrl+A` `g`. Two ways in on purpose: a feature reachable only through
 a modifier combination is at the mercy of whatever else on the desktop wants
-that combination. Arrows or
+that combination.
+
+A tab, because `c` has meant a tab everywhere else all along and one letter
+should not mean two things. `Ctrl+A` `G` opens a pane instead, and
+`choose-shell <verb>` takes any command that accepts a program —
+`choose-shell split-h`, say.
+
+The pane is told which shell it is running: `$SHELL` is inherited from
+whatever started the daemon, so a bash tab opened from a session started
+under fish used to report fish, and everything that spawns a subshell
+through `$SHELL` got the wrong one. It is only corrected for a program that
+*is* a shell, so `haven -- mc` does not leave `SHELL=/usr/bin/mc` behind. Arrows or
 `j`/`k` to move, a digit to take one outright, `Enter` for the highlighted one,
 `Esc` to drop it.
 

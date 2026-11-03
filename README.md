@@ -46,7 +46,8 @@ cargo run -p haven -- shell-info
 ### Keys
 
 `Alt+P` opens the command palette: every command, narrowed as you type.
-`Alt+C` opens a new pane and asks which shell to run in it — arrows or `j`/`k`
+`Alt+C` opens a new tab and asks which shell to run in it — the same thing
+`c` does, with a choice. `Ctrl+A` `G` does it as a pane instead — arrows or `j`/`k`
 to move, a digit to pick one outright, `Enter` to take the highlighted one,
 `Esc` to drop it. The list is the daemon's machine's, since that is where the
 pane is spawned: your shell first, then the ones Haven has integration for,
@@ -81,7 +82,7 @@ then whatever else `/etc/shells` holds.
 | `D` | detach every other client |
 | `Ctrl+S` / `Ctrl+R` | save every session / build back the saved ones |
 | `P` | the command palette |
-| `g` | open a pane and choose what runs in it |
+| `g` / `G` | new tab / new pane, choosing what runs in it |
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree: sessions, windows, panes |
@@ -214,7 +215,7 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | Command | Does |
 | --- | --- |
 | `split-h [prog]` / `split-v [prog]` | split into rows / columns, optionally running `prog` |
-| `choose-shell` | the shell menu `Alt+C` opens |
+| `choose-shell [verb]` | the shell menu; `verb` is what to do with the pick, `new-window` by default |
 | `command-palette` (`palette`) | every command, narrowed by typing |
 | `switch-table <name>` | arm a key table |
 | `new-window [prog]` (`new-tab`), `next`, `prev` | tabs |
