@@ -10,7 +10,7 @@ use haven_client::{Client, NullFrontend};
 use haven_daemon::{Daemon, ResizePolicy};
 use haven_proto::transport::SocketTransport;
 use haven_proto::{Action, CellSize, ClientMsg, PaneId, SessionId, Transport, TransportError};
-use haven_pty::{Pty, PtyConfig, PtySize};
+use haven_pty::{Pty, PtyConfig};
 
 type TestClient = Client<NullFrontend, SocketTransport>;
 
@@ -19,8 +19,11 @@ fn size(cols: u16, rows: u16) -> CellSize {
 }
 
 /// Panes running a quiet shell that echoes what it is told.
-fn spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
-    Box::new(|size| {
+fn spawner(
+    _env: haven_daemon::SessionEnv,
+) -> Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>> {
+    Box::new(|request| {
+        let size = request.size;
         Pty::spawn(&PtyConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "while read l; do echo \"got:$l\"; done".into()],
@@ -33,8 +36,11 @@ fn spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PtySize) -> io::Resu
 /// Panes whose shell reports what it runs, the way a shell with integration
 /// does. Typing the escape directly cannot work: the tty echoes control
 /// characters in caret notation, so no real `ESC` ever reaches the emulator.
-fn marking_spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
-    Box::new(|size| {
+fn marking_spawner(
+    _env: haven_daemon::SessionEnv,
+) -> Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>> {
+    Box::new(|request| {
+        let size = request.size;
         Pty::spawn(&PtyConfig {
             program: Some("/bin/sh".into()),
             args: vec![
@@ -191,7 +197,7 @@ fn an_action_from_a_client_splits_the_session() {
     let mut client = attach(&mut daemon, 40, 10);
     settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
 
-    send_action(&mut client, Action::SplitColumns).unwrap();
+    send_action(&mut client, Action::SplitColumns { program: None }).unwrap();
     assert!(
         settle(&mut daemon, &mut [&mut client], |c| c[0].frame.panes.len() == 2),
         "split never arrived: {} panes",
@@ -282,8 +288,11 @@ fn a_new_session_can_be_named() {
 
 /// A pane that prints numbered lines on demand, so history has content a
 /// test can recognise by eye.
-fn counting_spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
-    Box::new(|size| {
+fn counting_spawner(
+    _env: haven_daemon::SessionEnv,
+) -> Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>> {
+    Box::new(|request| {
+        let size = request.size;
         Pty::spawn(&PtyConfig {
             program: Some("/bin/sh".into()),
             args: vec![
@@ -482,8 +491,11 @@ fn a_search_that_finds_nothing_says_so() {
 
 /// A pane that prints one variable from its own environment, so a test can
 /// see what it was actually given rather than what it was meant to be given.
-fn env_spawner(env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PtySize) -> io::Result<Pty>> {
-    Box::new(move |size| {
+fn env_spawner(
+    env: haven_daemon::SessionEnv,
+) -> Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>> {
+    Box::new(move |request| {
+        let size = request.size;
         Pty::spawn(&PtyConfig {
             program: Some("/bin/sh".into()),
             args: vec![
@@ -530,7 +542,7 @@ fn a_pane_opened_after_a_reattach_gets_the_new_agent_socket() {
         })
         .expect("reattach");
     settle(&mut daemon, &mut [&mut client], |_| false);
-    send_action(&mut client, Action::SplitColumns).expect("split");
+    send_action(&mut client, Action::SplitColumns { program: None }).expect("split");
     assert!(
         settle(&mut daemon, &mut [&mut client], |c| {
             c[0].frame.panes.values().any(|p| {
@@ -569,7 +581,7 @@ fn synchronized_panes_type_into_every_pane_at_once() {
     let mut daemon = daemon();
     let mut client = attach(&mut daemon, 40, 8);
     settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
-    send_action(&mut client, Action::SplitColumns).expect("split");
+    send_action(&mut client, Action::SplitColumns { program: None }).expect("split");
     settle(&mut daemon, &mut [&mut client], |c| c[0].frame.panes.len() == 2);
     let panes: Vec<PaneId> = client.frame.panes.values().map(|p| p.id).collect();
 
@@ -593,7 +605,7 @@ fn a_bell_marks_the_tab_you_were_not_looking_at() {
     let mut client = attach(&mut daemon, 40, 8);
     settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
     // A second tab, then back to the first, so the bell rings out of sight.
-    send_action(&mut client, Action::NewWindow).expect("new window");
+    send_action(&mut client, Action::NewWindow { program: None }).expect("new window");
     settle(&mut daemon, &mut [&mut client], |c| {
         c[0].frame.status.as_ref().is_some_and(|s| s.windows.len() == 2)
     });
@@ -636,7 +648,8 @@ fn colours_survive_the_round_trip_through_the_protocol() {
     use haven_core::{Color, Rgb};
 
     let mut daemon = Daemon::detached(|_env| {
-        Box::new(|size| {
+        Box::new(|request| {
+            let size = request.size;
             Pty::spawn(&PtyConfig {
                 program: Some("/bin/sh".into()),
                 args: vec![
@@ -679,7 +692,7 @@ fn the_status_reaches_the_client_and_follows_the_layout() {
 
     // Splitting must be reflected: a status pinned to the first layout would
     // leave the pane count permanently wrong.
-    send_action(&mut client, Action::SplitColumns).expect("split");
+    send_action(&mut client, Action::SplitColumns { program: None }).expect("split");
     assert!(
         settle(&mut daemon, &mut [&mut client], |c| c[0].frame.status.as_ref().is_some_and(|s| s
             .windows[0]

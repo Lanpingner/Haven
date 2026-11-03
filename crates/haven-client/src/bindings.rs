@@ -179,6 +179,7 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("q", "display-panes"),
     ("f", "command-prompt find-window "),
     ("D", "detach-others"),
+    ("c", "new-window"),
     ("h", "focus-left"),
     ("j", "focus-down"),
     ("k", "focus-up"),
@@ -219,7 +220,13 @@ impl Default for Bindings {
                 .iter()
                 .filter_map(|(spec, cmd)| Some((Chord::parse(spec)?, (*cmd).to_string())))
                 .collect(),
-            root: Vec::new(),
+            // One root binding by default: a new pane running a shell you
+            // pick. It is on Alt rather than the prefix because it is the
+            // one thing here that is faster than typing the command.
+            root: vec![(
+                Chord::parse("A-c").expect("the default root binding must parse"),
+                "choose-shell".to_string(),
+            )],
         }
     }
 }

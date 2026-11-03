@@ -485,3 +485,26 @@ fn find_window_goes_to_the_tab_whose_name_matches() {
         "a search that found nothing must say so"
     );
 }
+
+#[test]
+fn the_shell_listing_becomes_a_menu_of_splits() {
+    // The daemon answers with its own machine's shells, because that is
+    // where the pane will be spawned.
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Shells(vec!["/usr/bin/fish".into(), "/bin/bash".into()]),
+    ]);
+    let frontend = ScriptedFrontend::new(size(20, 6), []);
+    let mut client = Client::new(frontend, server);
+    client.tick().unwrap();
+
+    let menu = client.menu.as_ref().expect("no menu was opened");
+    assert_eq!(menu.entries.len(), 2);
+    assert!(menu.entries[0].0.starts_with("fish"), "the label should lead with the name");
+    assert_eq!(menu.entries[0].1, "split-v /usr/bin/fish");
+    // And it is on screen: a modal nobody can see is a hang.
+    assert!(
+        client.frame.widgets.iter().any(|w| w.kind == haven_client::WidgetKind::Overlay),
+        "the menu was not drawn"
+    );
+}

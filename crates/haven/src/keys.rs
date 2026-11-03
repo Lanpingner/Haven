@@ -11,13 +11,21 @@ use haven_mux::NamedLayout;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Action {
-    SplitColumns,
-    SplitRows,
+    /// A program to run instead of the session's usual shell, when one was
+    /// named. `split-v fish` is the whole of it.
+    SplitColumns {
+        program: Option<String>,
+    },
+    SplitRows {
+        program: Option<String>,
+    },
     Focus(Edge),
     Resize(Edge),
     ClosePane,
     ToggleZoom,
-    NewWindow,
+    NewWindow {
+        program: Option<String>,
+    },
     /// Make a session and move to it.
     NewSession,
     LastWindow,
@@ -32,7 +40,11 @@ pub enum Action {
         columns: bool,
     },
     CloseWindow,
-    RespawnPane,
+    RespawnPane {
+        program: Option<String>,
+    },
+    /// Offer the daemon's shells, and open a pane running the one picked.
+    ChooseShell,
     SendKeys {
         pane: Option<u32>,
         bytes: Vec<u8>,
@@ -82,6 +94,7 @@ pub const PAGE_ROWS: i32 = 20;
 /// see it offered rather than be told it does not exist after the fact.
 pub const COMMANDS: &[&str] = &[
     "choose",
+    "choose-shell",
     "command-prompt",
     "focus-down",
     "focus-left",
@@ -214,6 +227,12 @@ fn wire_edge(edge: Edge) -> haven_proto::Edge {
     }
 }
 
+/// Everything after the verb, or `None` when there is nothing.
+fn optional(line: &str, verb: &str) -> Option<String> {
+    let rest = rest_of(line, verb);
+    (!rest.is_empty()).then_some(rest)
+}
+
 /// Everything after the verb, kept whole: a name is not a list of words.
 fn rest_of(line: &str, verb: &str) -> String {
     line.trim().strip_prefix(verb).map(|rest| rest.trim().to_string()).unwrap_or_default()
@@ -226,10 +245,11 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
     };
     let arg = parts.next();
     Ok(match verb {
-        "split-h" | "splitw" | "sp" => Action::SplitRows,
-        "split-v" | "vsplit" | "vs" => Action::SplitColumns,
+        "split-h" | "splitw" | "sp" => Action::SplitRows { program: optional(line, verb) },
+        "split-v" | "vsplit" | "vs" => Action::SplitColumns { program: optional(line, verb) },
         // tmux's names, plus the ones someone who calls them tabs will try.
-        "new-window" | "neww" | "new-tab" => Action::NewWindow,
+        "new-window" | "neww" | "new-tab" => Action::NewWindow { program: optional(line, verb) },
+        "choose-shell" | "shells" => Action::ChooseShell,
         "new-session" | "new" => Action::NewSession,
         "next" | "next-window" | "next-tab" => Action::NextWindow,
         "last" | "last-window" | "last-tab" => Action::LastWindow,
@@ -255,7 +275,7 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
             Action::JoinPane { window, columns }
         }
         "kill-window" | "killw" | "kill-tab" => Action::CloseWindow,
-        "respawn-pane" | "respawnp" => Action::RespawnPane,
+        "respawn-pane" | "respawnp" => Action::RespawnPane { program: optional(line, verb) },
         "send-keys" | "send" => Action::SendKeys {
             pane: None,
             // `\n`, `\t`, `\e` and `\xNN` are decoded, so a script can send
@@ -323,8 +343,8 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
 pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
     use haven_proto::Action as P;
     Some(match action {
-        Action::SplitColumns => P::SplitColumns,
-        Action::SplitRows => P::SplitRows,
+        Action::SplitColumns { program } => P::SplitColumns { program },
+        Action::SplitRows { program } => P::SplitRows { program },
         Action::Focus(Edge::Left) => P::FocusLeft,
         Action::Focus(Edge::Right) => P::FocusRight,
         Action::Focus(Edge::Up) => P::FocusUp,
@@ -335,7 +355,7 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::Resize(Edge::Down) => P::ResizeDown,
         Action::ClosePane => P::ClosePane,
         Action::ToggleZoom => P::ToggleZoom,
-        Action::NewWindow => P::NewWindow,
+        Action::NewWindow { program } => P::NewWindow { program },
         Action::NextWindow => P::NextWindow,
         Action::PreviousWindow => P::PreviousWindow,
         Action::SelectWindow(n) => P::SelectWindow(n as u16),
@@ -346,13 +366,13 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         Action::BreakPane => P::BreakPane,
         Action::JoinPane { window, columns } => P::JoinPane { window, columns },
         Action::CloseWindow => P::CloseWindow,
-        Action::RespawnPane => P::RespawnPane,
+        Action::RespawnPane { program } => P::RespawnPane { program },
         Action::SendKeys { pane, bytes } => P::SendKeys { pane, bytes },
         Action::SynchronizePanes { on } => P::SynchronizePanes { on },
         Action::DetachOthers => P::DetachOthers,
         // Both are the client's: one draws an overlay, the other searches a
         // listing the client already holds.
-        Action::DisplayPanes | Action::FindWindow(_) => return None,
+        Action::DisplayPanes | Action::FindWindow(_) | Action::ChooseShell => return None,
         Action::NextLayout => P::NextLayout,
         Action::Rename { window, name } => P::Rename { window, name },
         Action::ApplyLayout(NamedLayout::EvenHorizontal) => P::EvenHorizontal,
@@ -371,11 +391,11 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
     })
 }
 
-/// The direction a split action implies.
-pub fn split_direction(action: Action) -> Option<Direction> {
+/// The direction a split action implies, and what it should run.
+pub fn split_direction(action: &Action) -> Option<(Direction, Option<String>)> {
     match action {
-        Action::SplitColumns => Some(Direction::Columns),
-        Action::SplitRows => Some(Direction::Rows),
+        Action::SplitColumns { program } => Some((Direction::Columns, program.clone())),
+        Action::SplitRows { program } => Some((Direction::Rows, program.clone())),
         _ => None,
     }
 }
@@ -406,8 +426,8 @@ mod tests {
 
     #[test]
     fn prefix_bindings_resolve_to_actions() {
-        assert_eq!(bound(&key('%')), Some(Action::SplitColumns));
-        assert_eq!(bound(&key('"')), Some(Action::SplitRows));
+        assert_eq!(bound(&key('%')), Some(Action::SplitColumns { program: None }));
+        assert_eq!(bound(&key('"')), Some(Action::SplitRows { program: None }));
         assert_eq!(bound(&key('z')), Some(Action::ToggleZoom));
         assert_eq!(bound(&key('l')), Some(Action::Focus(Edge::Right)));
         assert_eq!(bound(&key('L')), Some(Action::Resize(Edge::Right)));
@@ -471,13 +491,13 @@ mod tests {
         // Anything a binding can do must be expressible to the daemon, or the
         // same keymap would behave differently attached and standalone.
         for action in [
-            Action::SplitColumns,
-            Action::SplitRows,
+            Action::SplitColumns { program: None },
+            Action::SplitRows { program: None },
             Action::Focus(Edge::Left),
             Action::Resize(Edge::Down),
             Action::ClosePane,
             Action::ToggleZoom,
-            Action::NewWindow,
+            Action::NewWindow { program: None },
             Action::NextWindow,
             Action::PreviousWindow,
             Action::SelectWindow(3),
@@ -495,9 +515,29 @@ mod tests {
 
     #[test]
     fn split_direction_only_answers_for_splits() {
-        assert_eq!(split_direction(Action::SplitColumns), Some(Direction::Columns));
-        assert_eq!(split_direction(Action::SplitRows), Some(Direction::Rows));
-        assert_eq!(split_direction(Action::ToggleZoom), None);
+        assert_eq!(
+            split_direction(&Action::SplitColumns { program: None }),
+            Some((Direction::Columns, None))
+        );
+        assert_eq!(
+            split_direction(&Action::SplitRows { program: Some("fish".into()) }),
+            Some((Direction::Rows, Some("fish".into()))),
+            "the program a split was asked to run must survive"
+        );
+        assert_eq!(split_direction(&Action::ToggleZoom), None);
+    }
+
+    #[test]
+    fn a_split_can_name_what_it_runs() {
+        assert_eq!(
+            parse_command("split-v /usr/bin/fish"),
+            Ok(Action::SplitColumns { program: Some("/usr/bin/fish".into()) })
+        );
+        assert_eq!(parse_command("split-v"), Ok(Action::SplitColumns { program: None }));
+        assert_eq!(
+            parse_command("new-window /bin/sh"),
+            Ok(Action::NewWindow { program: Some("/bin/sh".into()) })
+        );
     }
 
     #[test]

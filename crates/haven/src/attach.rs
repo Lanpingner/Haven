@@ -173,6 +173,7 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::Scroll(rows)) => Intercepted::Scroll(rows),
         Ok(Action::Copy) => Intercepted::EnterCopy,
         Ok(Action::DisplayPanes) => Intercepted::DisplayPanes,
+        Ok(Action::ChooseShell) => Intercepted::ChooseShell,
         Ok(Action::FindWindow(text)) => Intercepted::FindWindow(text),
         Ok(Action::Paste) => Intercepted::Paste,
         // A literal prefix key goes to the pane, which is what `send-prefix`
@@ -404,7 +405,7 @@ mod tests {
         assert_eq!(mode, Mode::Prefix, "the status line would show nothing");
 
         let act = filter(&key(Key::Char('%'), Modifiers::empty()), &mut mode, &keys());
-        assert_eq!(act, Intercepted::Act(Wire::SplitColumns));
+        assert_eq!(act, Intercepted::Act(Wire::SplitColumns { program: None }));
         assert_eq!(mode, Mode::Normal, "the prefix stayed armed");
     }
 
@@ -424,7 +425,7 @@ mod tests {
 
         assert_eq!(
             filter(&key(Key::Char('%'), Modifiers::SHIFT), &mut mode, &keys()),
-            Intercepted::Act(Wire::SplitColumns)
+            Intercepted::Act(Wire::SplitColumns { program: None })
         );
     }
 
@@ -452,7 +453,7 @@ mod tests {
         filter(&ctrl_a(), &mut mode, &keys());
         assert_eq!(
             filter(&key(Key::Char('c'), Modifiers::empty()), &mut mode, &keys()),
-            Intercepted::Act(Wire::NewWindow)
+            Intercepted::Act(Wire::NewWindow { program: None })
         );
     }
 
@@ -502,7 +503,7 @@ mod tests {
         assert_eq!(mode, Mode::Prefix);
         assert_eq!(
             filter(&key(Key::Char('c'), Modifiers::empty()), &mut mode, &bindings),
-            Intercepted::Act(Wire::SplitColumns)
+            Intercepted::Act(Wire::SplitColumns { program: None })
         );
 
         // And an unbound key does nothing rather than reaching the pane.
@@ -520,7 +521,7 @@ mod tests {
         let mut mode = Mode::Normal;
         assert_eq!(
             filter(&key(Key::Char('t'), Modifiers::CTRL), &mut mode, &bindings),
-            Intercepted::Act(Wire::NewWindow)
+            Intercepted::Act(Wire::NewWindow { program: None })
         );
         assert_eq!(mode, Mode::Normal, "a root binding must not arm anything");
     }
@@ -536,6 +537,32 @@ mod tests {
                 "{spec:?} is bound to {command:?}, which is not a command"
             );
         }
+    }
+
+    #[test]
+    fn alt_c_offers_a_shell_without_the_prefix() {
+        let mut filter = key_filter();
+        let mut mode = Mode::Normal;
+        assert_eq!(
+            filter(&key(Key::Char('c'), Modifiers::ALT), &mut mode, &keys()),
+            Intercepted::ChooseShell
+        );
+        assert_eq!(mode, Mode::Normal, "a root binding must not arm anything");
+        // Without alt it is an ordinary key and belongs to the pane.
+        assert_eq!(
+            filter(&key(Key::Char('c'), Modifiers::empty()), &mut mode, &keys()),
+            Intercepted::Pass
+        );
+    }
+
+    #[test]
+    fn a_menu_entry_resolves_to_a_split_that_names_its_program() {
+        // The menu holds command strings and nothing else, so this is the
+        // only place that decides what one means.
+        assert_eq!(
+            run_command("split-v /usr/bin/fish"),
+            Intercepted::Act(Wire::SplitColumns { program: Some("/usr/bin/fish".into()) })
+        );
     }
 
     #[test]
@@ -575,7 +602,7 @@ mod tests {
 
         let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode, &keys());
         // The same action the `%` binding produces: one vocabulary, two ways in.
-        assert_eq!(out, Intercepted::Act(Wire::SplitColumns));
+        assert_eq!(out, Intercepted::Act(Wire::SplitColumns { program: None }));
         assert_eq!(mode, Mode::Normal);
     }
 
@@ -628,7 +655,7 @@ mod tests {
         filter(&key(Key::Named(NamedKey::Down), Modifiers::empty()), &mut mode, &keys());
         assert_eq!(mode.command_text(), Some("split-v"));
         let out = filter(&key(Key::Named(NamedKey::Enter), Modifiers::empty()), &mut mode, &keys());
-        assert_eq!(out, Intercepted::Act(Wire::SplitColumns));
+        assert_eq!(out, Intercepted::Act(Wire::SplitColumns { program: None }));
     }
 
     #[test]

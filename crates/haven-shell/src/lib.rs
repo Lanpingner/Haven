@@ -307,6 +307,46 @@ pub fn for_program(program: &Path) -> Box<dyn Shell> {
     })
 }
 
+/// Every shell this machine will admit to having, most useful first.
+///
+/// Three sources, in order: the shell you are already using, the ones Haven
+/// has integration for, and whatever else `/etc/shells` lists. The order
+/// matters more than the contents — `/etc/shells` is also where `git-shell`
+/// and the systemd fallback live, which are real shells nobody means to
+/// pick, and dropping them would be guessing at a list the system owns.
+pub fn available() -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let add = |found: &mut Vec<PathBuf>, path: PathBuf| {
+        if !path.is_file() {
+            return;
+        }
+        // Resolved before the duplicate check: /bin is a symlink to /usr/bin
+        // on most systems now, so the same shell appears twice under two
+        // names unless they are compared by what they point at.
+        let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let target = real(&path);
+        if !found.iter().any(|p| real(p) == target) {
+            found.push(path);
+        }
+    };
+
+    add(&mut found, resolve(None));
+    for name in ["fish", "zsh", "bash", "sh", "nu", "elvish", "dash", "ksh", "tcsh"] {
+        for dir in ["/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"] {
+            add(&mut found, Path::new(dir).join(name));
+        }
+    }
+    if let Ok(text) = std::fs::read_to_string("/etc/shells") {
+        for line in text.lines() {
+            let line = line.trim();
+            if !line.is_empty() && !line.starts_with('#') {
+                add(&mut found, PathBuf::from(line));
+            }
+        }
+    }
+    found
+}
+
 /// Resolution order from `docs/PLAN.md` §9.2: config, then `$SHELL`, then the
 /// passwd entry, then `/bin/sh`. The passwd lookup matters because `$SHELL` is
 /// frequently stale or absent under display managers.

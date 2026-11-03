@@ -66,9 +66,14 @@ fn main() {
 
     let shift = find(0xffe1).map(|(k, _)| k).expect("no shift key");
     let ctrl = find(0xffe3).map(|(k, _)| k).expect("no control key");
+    let alt = find(0xffe9).map(|(k, _)| k).expect("no alt key");
 
     for item in spec.split(',') {
-        let (want_ctrl, ch) = match item.strip_prefix("C-") {
+        let (want_ctrl, item) = match item.strip_prefix("C-") {
+            Some(rest) => (true, rest),
+            None => (false, item),
+        };
+        let (want_alt, ch) = match item.strip_prefix("A-") {
             Some(rest) => (true, rest),
             None => (false, item),
         };
@@ -97,11 +102,17 @@ fn main() {
         if want_ctrl {
             fake(&conn, KEY_PRESS, ctrl);
         }
+        if want_alt {
+            fake(&conn, KEY_PRESS, alt);
+        }
         if want_shift {
             fake(&conn, KEY_PRESS, shift);
         }
         fake(&conn, KEY_PRESS, code);
         fake(&conn, KEY_RELEASE, code);
+        if want_alt {
+            fake(&conn, KEY_RELEASE, alt);
+        }
         if want_shift {
             fake(&conn, KEY_RELEASE, shift);
         }

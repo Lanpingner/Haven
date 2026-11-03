@@ -21,7 +21,7 @@ use haven_proto::{
     Action, CellSize, ClientCaps, ClientMsg, PaneId, RowRle, ServerMsg, SessionId, Tables,
     PROTOCOL_VERSION,
 };
-use haven_pty::{Pty, PtySize};
+use haven_pty::Pty;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 
 pub mod config;
@@ -39,7 +39,7 @@ pub enum ResizePolicy {
     Latest,
 }
 
-type Spawner = Box<dyn FnMut(PtySize) -> io::Result<Pty>>;
+type Spawner = Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>;
 
 /// A session's share of the attaching client's environment.
 ///
@@ -332,6 +332,11 @@ impl Daemon {
                 let id = self.create_session(name, caps, &env)?;
                 self.join(index, id, caps);
             }
+            ClientMsg::ListShells => {
+                let shells: Vec<String> =
+                    haven_shell::available().iter().map(|p| p.display().to_string()).collect();
+                let _ = self.clients[index].framed.queue(&ServerMsg::Shells(shells));
+            }
             ClientMsg::ShowEnvironment => {
                 let env = self
                     .clients
@@ -574,12 +579,12 @@ impl Daemon {
         let Some(host) = self.host_of(index) else { return Ok(()) };
         let runtime = &mut host.runtime;
         let ended = match action {
-            Action::SplitColumns => {
-                runtime.split(Direction::Columns)?;
+            Action::SplitColumns { program } => {
+                runtime.split(Direction::Columns, program.map(Into::into))?;
                 false
             }
-            Action::SplitRows => {
-                runtime.split(Direction::Rows)?;
+            Action::SplitRows { program } => {
+                runtime.split(Direction::Rows, program.map(Into::into))?;
                 false
             }
             Action::FocusLeft => !runtime.focus(Edge::Left)?,
@@ -595,8 +600,8 @@ impl Daemon {
                 runtime.toggle_zoom()?;
                 false
             }
-            Action::NewWindow => {
-                runtime.new_window()?;
+            Action::NewWindow { program } => {
+                runtime.new_window(program.map(Into::into))?;
                 false
             }
             Action::NextWindow => {
@@ -665,8 +670,8 @@ impl Daemon {
                 window.synchronized = on.unwrap_or(!window.synchronized);
                 false
             }
-            Action::RespawnPane => {
-                runtime.respawn_active()?;
+            Action::RespawnPane { program } => {
+                runtime.respawn_active(program.map(Into::into))?;
                 false
             }
             Action::NextLayout => {

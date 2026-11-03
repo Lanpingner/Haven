@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -294,6 +294,9 @@ pub enum ClientMsg {
     /// Control-mode queries, which the CLI is built on: anything `haven ls`
     /// can do, a script can do (`docs/PLAN.md` §14.2).
     ListSessions,
+    /// What shells the *daemon's* machine has. Asked for rather than guessed
+    /// at by the client, because the pane is spawned where the daemon is.
+    ListShells,
     /// The session's current environment, for a shell that was started
     /// before the latest attach and cannot be told any other way.
     ShowEnvironment,
@@ -315,8 +318,15 @@ pub enum Edge {
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Action {
-    SplitColumns,
-    SplitRows,
+    /// `program` runs instead of the session's usual shell. The path is the
+    /// daemon's to interpret: a session may be on another machine, where the
+    /// client's idea of where `fish` lives means nothing.
+    SplitColumns {
+        program: Option<String>,
+    },
+    SplitRows {
+        program: Option<String>,
+    },
     FocusLeft,
     FocusRight,
     FocusUp,
@@ -327,7 +337,9 @@ pub enum Action {
     ResizeDown,
     ClosePane,
     ToggleZoom,
-    NewWindow,
+    NewWindow {
+        program: Option<String>,
+    },
     NextWindow,
     PreviousWindow,
     SelectWindow(u16),
@@ -370,7 +382,9 @@ pub enum Action {
     /// dead ssh session is still holding it to a size nothing wants.
     DetachOthers,
     /// Start a fresh program in the active pane.
-    RespawnPane,
+    RespawnPane {
+        program: Option<String>,
+    },
     /// The next named layout, cycling.
     NextLayout,
     /// Rename the active window, or the session when `window` is false. An
@@ -436,6 +450,8 @@ pub enum ServerMsg {
         pane: PaneId,
         row: Option<u32>,
     },
+    /// Answer to [`ClientMsg::ListShells`], most useful first.
+    Shells(Vec<String>),
     /// Answer to [`ClientMsg::ShowEnvironment`].
     Environment(Vec<(String, String)>),
     /// The key table. Sent on attach and whenever the config changes, for

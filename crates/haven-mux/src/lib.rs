@@ -10,6 +10,6 @@ pub mod session;
 pub mod window;
 
 pub use layout::{neighbour, Child, Direction, Edge, PaneNode, SEPARATOR};
-pub use runtime::{MuxRuntime, PaneRuntime, RuntimeEvent};
+pub use runtime::{MuxRuntime, PaneRequest, PaneRuntime, RuntimeEvent};
 pub use session::{Session, SessionEvent};
 pub use window::{NamedLayout, Window};

@@ -12,6 +12,7 @@ pub mod copy;
 pub mod frame;
 pub mod frontend;
 pub mod input;
+pub mod menu;
 pub mod status_bar;
 
 /// Themes live in the protocol crate: the daemon owns the configuration and
@@ -61,6 +62,8 @@ pub enum Intercepted {
     Scroll(i32),
     /// Enter copy mode on the focused pane.
     EnterCopy,
+    /// Ask the daemon what shells it has, and offer them.
+    ChooseShell,
     /// Number every pane until the next keystroke.
     DisplayPanes,
     /// Go to the tab whose name contains this.
@@ -109,6 +112,8 @@ pub struct Client<F, T> {
     pub chooser: Option<chooser::Chooser>,
     /// Copy mode, while it is up. Modal: it owns the keyboard.
     pub copy: Option<copy::CopyMode>,
+    /// A list of things to pick, while one is up. Modal like the chooser.
+    pub menu: Option<menu::Menu>,
     /// The session's environment, when it has been asked for.
     pub environment: Vec<(String, String)>,
     /// Whether this client does anything with the mouse at all. Off gives
@@ -158,6 +163,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             mode: status_bar::Mode::Normal,
             chooser: None,
             copy: None,
+            menu: None,
             buffers: Vec::new(),
             mouse_enabled: true,
             showing_panes: false,
@@ -231,6 +237,57 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             _ => {}
         }
         Ok(Tick::Redraw)
+    }
+
+    /// One keystroke while a menu is up.
+    fn menu_key(&mut self, event: &input::KeyEvent) -> Result<Tick, TransportError> {
+        use input::{Key, KeyState, NamedKey};
+        if event.state == KeyState::Release {
+            return Ok(Tick::Idle);
+        }
+        let Some(menu) = self.menu.as_mut() else { return Ok(Tick::Idle) };
+        let chosen = match &event.key {
+            Key::Named(NamedKey::Escape) | Key::Char('q') => {
+                self.menu = None;
+                return Ok(Tick::Redraw);
+            }
+            Key::Named(NamedKey::Up) | Key::Char('k') => {
+                menu.move_by(-1);
+                None
+            }
+            Key::Named(NamedKey::Down) | Key::Char('j') => {
+                menu.move_by(1);
+                None
+            }
+            Key::Named(NamedKey::Enter) => menu.command().map(str::to_string),
+            // A digit picks straight away: the numbers are printed beside the
+            // entries, and making them only *move* the selection would be a
+            // promise half kept.
+            Key::Char(c) if c.is_ascii_digit() => {
+                menu.pick_digit(*c).then(|| menu.command().unwrap_or_default().to_string())
+            }
+            _ => None,
+        };
+        if let Some(command) = chosen {
+            self.menu = None;
+            self.run_menu_command(&command)?;
+        }
+        Ok(Tick::Redraw)
+    }
+
+    /// What a menu entry resolves to. The client cannot parse a command — the
+    /// vocabulary lives above it — so the filter is asked, exactly as it is
+    /// for a typed line.
+    fn run_menu_command(&mut self, command: &str) -> Result<(), TransportError> {
+        let Some(mut filter) = self.key_filter.take() else { return Ok(()) };
+        let mut mode = status_bar::Mode::command(command.to_string());
+        let verdict =
+            filter(&input::KeyEvent::named(input::NamedKey::Enter), &mut mode, &self.bindings);
+        self.key_filter = Some(filter);
+        match verdict {
+            Intercepted::Act(action) => self.transport.send(ClientMsg::Action(action)),
+            _ => Ok(()),
+        }
     }
 
     /// Enter copy mode on the focused pane.
@@ -583,6 +640,11 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         {
             self.frame.widgets.push(box_);
         }
+        if let Some(widget) =
+            self.menu.as_ref().and_then(|m| m.widget(self.frame.size, &self.frame.theme))
+        {
+            self.frame.widgets.push(widget);
+        }
         if self.showing_panes {
             self.frame.widgets.extend(status_bar::pane_numbers(
                 self.frame.status.as_ref(),
@@ -685,6 +747,9 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 if self.chooser.is_some() {
                     return self.chooser_key(&key);
                 }
+                if self.menu.is_some() {
+                    return self.menu_key(&key);
+                }
                 if self.copy.is_some() {
                     return self.copy_key(&key);
                 }
@@ -710,6 +775,10 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     Some(Intercepted::EnterCopy) => {
                         self.enter_copy();
                         return Ok(Tick::Redraw);
+                    }
+                    Some(Intercepted::ChooseShell) => {
+                        self.transport.send(ClientMsg::ListShells)?;
+                        return Ok(Tick::Idle);
                     }
                     Some(Intercepted::DisplayPanes) => {
                         self.showing_panes = true;
@@ -831,6 +900,21 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     // Saying nothing would look like a key that did nothing.
                     None => self.frame.notice = Some("not found".into()),
                 }
+                true
+            }
+            ServerMsg::Shells(shells) => {
+                // The listing is what the menu was opened for; until it
+                // arrives there is nothing to show.
+                self.menu = Some(menu::Menu::new(
+                    "run in a new pane",
+                    shells
+                        .iter()
+                        .map(|path| {
+                            let name = path.rsplit('/').next().unwrap_or(path).to_string();
+                            (format!("{name:<8} {path}"), format!("split-v {path}"))
+                        })
+                        .collect(),
+                ));
                 true
             }
             ServerMsg::Environment(env) => {

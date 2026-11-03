@@ -118,7 +118,30 @@ impl<F> MuxRuntime<F> {
     }
 }
 
-impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
+/// What a pane needs to be started.
+///
+/// A struct rather than a size, because a pane may be asked to run something
+/// other than the session's usual program — choosing a shell for a new pane
+/// is the whole reason — and threading that through as a second positional
+/// argument would be a bool's worth of meaning in a `PathBuf`'s clothing.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct PaneRequest {
+    pub size: PtySize,
+    /// Run this instead of the session's default program.
+    pub program: Option<std::path::PathBuf>,
+}
+
+impl PaneRequest {
+    pub fn new(size: PtySize) -> Self {
+        Self { size, program: None }
+    }
+
+    pub fn running(program: Option<std::path::PathBuf>) -> Self {
+        Self { size: PtySize { cols: 1, rows: 1, ..Default::default() }, program }
+    }
+}
+
+impl<F: FnMut(PaneRequest) -> io::Result<Pty>> MuxRuntime<F> {
     /// Start a session with one pane.
     pub fn new(id: SessionId, name: &str, size: CellSize, mut spawn: F) -> io::Result<Self> {
         let (session, first) = Session::new(id, name);
@@ -129,7 +152,7 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
             pixel_width: size.pixel_width,
             pixel_height: size.pixel_height,
         };
-        panes.insert(first.0, make_pane(&mut spawn, pane_size)?);
+        panes.insert(first.0, make_pane(&mut spawn, PaneRequest::new(pane_size))?);
         let mut runtime = Self { session, panes, size, spawn, layout_index: 0 };
         runtime.sync_sizes()?;
         Ok(runtime)
@@ -262,20 +285,22 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
         Ok(())
     }
 
-    pub fn split(&mut self, dir: Direction) -> io::Result<Option<PaneId>> {
+    pub fn split(
+        &mut self,
+        dir: Direction,
+        program: Option<std::path::PathBuf>,
+    ) -> io::Result<Option<PaneId>> {
         let Some((pane, _)) = self.session.split_active(dir, 0.5) else { return Ok(None) };
-        let runtime =
-            make_pane(&mut self.spawn, PtySize { cols: 1, rows: 1, ..Default::default() })?;
+        let runtime = make_pane(&mut self.spawn, PaneRequest::running(program))?;
         self.panes.insert(pane.0, runtime);
         // The new pane's real size comes from the solver, not from the caller.
         self.sync_sizes()?;
         Ok(Some(pane))
     }
 
-    pub fn new_window(&mut self) -> io::Result<PaneId> {
+    pub fn new_window(&mut self, program: Option<std::path::PathBuf>) -> io::Result<PaneId> {
         let (_, pane, _) = self.session.new_window();
-        let runtime =
-            make_pane(&mut self.spawn, PtySize { cols: 1, rows: 1, ..Default::default() })?;
+        let runtime = make_pane(&mut self.spawn, PaneRequest::running(program))?;
         self.panes.insert(pane.0, runtime);
         self.sync_sizes()?;
         Ok(pane)
@@ -383,14 +408,14 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
 
     /// Start a fresh program in the active pane, keeping its place in the
     /// layout. The old child is hung up first, so a wedged one really goes.
-    pub fn respawn_active(&mut self) -> io::Result<bool> {
+    pub fn respawn_active(&mut self, program: Option<std::path::PathBuf>) -> io::Result<bool> {
         let pane = self.session.active_pane();
         let Some(old) = self.panes.get_mut(&pane.0) else { return Ok(false) };
         let size = old.pty.size();
         if old.exited.is_none() {
             let _ = old.pty.hangup(Duration::from_millis(100));
         }
-        let fresh = make_pane(&mut self.spawn, size)?;
+        let fresh = make_pane(&mut self.spawn, PaneRequest { size, program })?;
         self.panes.insert(pane.0, fresh);
         self.sync_sizes()?;
         Ok(true)
@@ -446,11 +471,12 @@ impl<F: FnMut(PtySize) -> io::Result<Pty>> MuxRuntime<F> {
     }
 }
 
-fn make_pane<F: FnMut(PtySize) -> io::Result<Pty>>(
+fn make_pane<F: FnMut(PaneRequest) -> io::Result<Pty>>(
     spawn: &mut F,
-    size: PtySize,
+    request: PaneRequest,
 ) -> io::Result<PaneRuntime> {
-    let pty = spawn(size)?;
+    let size = request.size;
+    let pty = spawn(request)?;
     Ok(PaneRuntime {
         pty,
         emulator: Emulator::new(size.cols as usize, size.rows as usize),

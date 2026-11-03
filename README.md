@@ -45,6 +45,12 @@ cargo run -p haven -- shell-info
 
 ### Keys
 
+`Alt+C` opens a new pane and asks which shell to run in it — arrows or `j`/`k`
+to move, a digit to pick one outright, `Enter` to take the highlighted one,
+`Esc` to drop it. The list is the daemon's machine's, since that is where the
+pane is spawned: your shell first, then the ones Haven has integration for,
+then whatever else `/etc/shells` holds.
+
 `Ctrl+A` then:
 
 | Key | Action |
@@ -96,7 +102,7 @@ mouse = true               # false hands the mouse back to the host terminal
 [keys]
 prefix = "C-b"             # default C-a
 bind = { "|" = "split-v", "-" = "split-h", "x" = "" }   # empty unbinds
-root = { "C-t" = "new-window" }                          # no prefix needed
+root = { "C-t" = "new-window", "A-c" = "choose-shell" }   # no prefix needed
 ```
 
 Key specs are `C-`, `S-`, `A-`/`M-`, `D-` in any order, then a character or a
@@ -162,8 +168,9 @@ same actions the keys do, so nothing is reachable one way and not the other.
 
 | Command | Does |
 | --- | --- |
-| `split-h` / `split-v` | split into rows / columns |
-| `new-window` (`new-tab`), `next`, `prev` | tabs |
+| `split-h [prog]` / `split-v [prog]` | split into rows / columns, optionally running `prog` |
+| `choose-shell` | the shell menu `Alt+C` opens |
+| `new-window [prog]` (`new-tab`), `next`, `prev` | tabs |
 | `new-session` (`new`) | a new session on this daemon, named `haven-<n>` |
 | `scroll-up`, `scroll-down`, `scroll-end` | as the paging keys do |
 | `copy-mode`, `paste-buffer` | as `[` and `]` do |

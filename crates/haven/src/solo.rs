@@ -14,7 +14,7 @@ use haven_client::input::{InputEvent, KeyEncoder};
 use haven_core::{Grid, Style, StyleTable};
 use haven_mux::{MuxRuntime, RuntimeEvent};
 use haven_proto::{CellSize, PaneId, PaneRect};
-use haven_pty::{Pty, PtyConfig, PtySize};
+use haven_pty::{Pty, PtyConfig};
 use haven_tui::{raw, Decoder, HostCaps, Pushed, RawMode};
 use haven_vtwrite::{Caps, RenderCell, Serializer, Snapshot};
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
@@ -44,8 +44,8 @@ pub fn run(cfg: PtyConfig, host: HostCaps) -> io::Result<()> {
 
     let mut screen = CellSize { cols, rows, pixel_width: px, pixel_height: py };
     let mut mux =
-        MuxRuntime::new(haven_proto::SessionId(1), "haven", pane_area(screen), move |size| {
-            spawn_pane(&cfg, size)
+        MuxRuntime::new(haven_proto::SessionId(1), "haven", pane_area(screen), move |request| {
+            spawn_pane(&cfg, request)
         })?;
 
     let mut serializer = Serializer::new(Caps {
@@ -181,14 +181,14 @@ pub fn run(cfg: PtyConfig, host: HostCaps) -> io::Result<()> {
 }
 
 /// Apply an action. Returns true when the session is over.
-fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
+fn apply<F: FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>(
     mux: &mut MuxRuntime<F>,
     action: Action,
 ) -> io::Result<bool> {
     match action {
-        Action::SplitColumns | Action::SplitRows => {
-            let dir = keys::split_direction(action).expect("split action");
-            mux.split(dir)?;
+        Action::SplitColumns { .. } | Action::SplitRows { .. } => {
+            let (dir, program) = keys::split_direction(&action).expect("split action");
+            mux.split(dir, program.map(Into::into))?;
         }
         Action::Focus(edge) => {
             mux.focus(edge)?;
@@ -198,8 +198,8 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
         }
         Action::ClosePane => return mux.close_active(),
         Action::ToggleZoom => mux.toggle_zoom()?,
-        Action::NewWindow => {
-            mux.new_window()?;
+        Action::NewWindow { program } => {
+            mux.new_window(program.map(Into::into))?;
         }
         Action::NextWindow => mux.next_window()?,
         Action::PreviousWindow => mux.previous_window()?,
@@ -227,15 +227,20 @@ fn apply<F: FnMut(PtySize) -> io::Result<Pty>>(
             mux.join_pane(window, dir)?;
         }
         Action::CloseWindow => return mux.close_window(),
-        Action::RespawnPane => {
-            mux.respawn_active()?;
+        Action::RespawnPane { program } => {
+            mux.respawn_active(program.map(Into::into))?;
         }
         Action::SendKeys { pane, bytes } => {
             let target = pane.map(haven_proto::PaneId).unwrap_or_else(|| mux.session.active_pane());
             mux.send_to(target, &bytes)?;
         }
         // Standalone has one client and no overlay of its own.
-        Action::DetachOthers | Action::DisplayPanes | Action::FindWindow(_) => {}
+        // Standalone has one client, no overlay of its own, and the shell it
+        // was started with.
+        Action::DetachOthers
+        | Action::DisplayPanes
+        | Action::FindWindow(_)
+        | Action::ChooseShell => {}
         Action::SynchronizePanes { on } => {
             let window = mux.session.active_window_mut();
             window.synchronized = on.unwrap_or(!window.synchronized);
@@ -270,8 +275,18 @@ fn pane_area(screen: CellSize) -> CellSize {
     CellSize { rows: screen.rows.saturating_sub(STATUS_ROWS).max(1), ..screen }
 }
 
-fn spawn_pane(cfg: &PtyConfig, size: PtySize) -> io::Result<Pty> {
-    Pty::spawn(&PtyConfig { size, ..cfg.clone() })
+fn spawn_pane(cfg: &PtyConfig, request: haven_mux::PaneRequest) -> io::Result<Pty> {
+    // A pane that was asked for a particular program gets that and nothing
+    // else: the session's arguments belong to the session's shell.
+    match request.program {
+        Some(program) => Pty::spawn(&PtyConfig {
+            size: request.size,
+            program: Some(program),
+            args: Vec::new(),
+            ..cfg.clone()
+        }),
+        None => Pty::spawn(&PtyConfig { size: request.size, ..cfg.clone() }),
+    }
 }
 
 fn stdin_ready(stdin: rustix::fd::BorrowedFd<'_>) -> io::Result<bool> {

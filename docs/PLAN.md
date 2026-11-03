@@ -1202,6 +1202,19 @@ there were no names for focus, resize or the literal prefix, so the claim that
 A test walks the default table and parses every command in it, because a typo
 in data is a key that silently does nothing rather than a compile error.
 
+A pane can be asked to run something other than the session's shell, which
+is what `Alt+C` is for: the menu lists what the *daemon's* machine has, since
+that is where the pane is spawned and a client's idea of where `fish` lives
+means nothing across a network. The spawner therefore takes a `PaneRequest`
+rather than a size. The alternative — smuggling the program through shared
+state the way the session environment is — would have hidden a one-shot
+argument inside something that looks like persistent state.
+
+The menu itself knows nothing about shells. It holds labels paired with
+command strings and asks the key filter to resolve them, exactly as a typed
+line is resolved, so a menu cannot offer anything the command line could not
+do and the next menu is data rather than code.
+
 **Bugs this work surfaced, worth remembering:**
 - `OSC 52` payloads were kept base64-encoded and handed to the client as if
   they were text, so honouring one would have put `aGVsbG8=` on the clipboard.

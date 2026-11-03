@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use haven_mux::layout::{Direction, Edge};
 use haven_mux::{MuxRuntime, RuntimeEvent};
 use haven_proto::{CellSize, PaneId, SessionId};
-use haven_pty::{Pty, PtyConfig, PtySize};
+use haven_pty::{Pty, PtyConfig};
 
 fn size(cols: u16, rows: u16) -> CellSize {
     CellSize { cols, rows, pixel_width: cols * 8, pixel_height: rows * 16 }
@@ -18,7 +18,8 @@ fn size(cols: u16, rows: u16) -> CellSize {
 /// A pane that reports its geometry on startup and again on every line of
 /// input. Re-reporting is what lets a test check that a resize actually
 /// reached the child's kernel view, rather than only our bookkeeping.
-fn geometry_shell(size: PtySize) -> io::Result<Pty> {
+fn geometry_shell(request: haven_mux::PaneRequest) -> io::Result<Pty> {
+    let size = request.size;
     Pty::spawn(&PtyConfig {
         program: Some("/bin/sh".into()),
         args: vec!["-c".into(), "stty size; while read l; do stty size; done".into()],
@@ -27,14 +28,17 @@ fn geometry_shell(size: PtySize) -> io::Result<Pty> {
     })
 }
 
-fn runtime(cols: u16, rows: u16) -> MuxRuntime<impl FnMut(PtySize) -> io::Result<Pty>> {
+fn runtime(
+    cols: u16,
+    rows: u16,
+) -> MuxRuntime<impl FnMut(haven_mux::PaneRequest) -> io::Result<Pty>> {
     MuxRuntime::new(SessionId(1), "test", size(cols, rows), geometry_shell).expect("spawn")
 }
 
 /// Pump until a predicate holds or we give up.
 fn pump_until<F, P>(rt: &mut MuxRuntime<F>, mut done: P) -> bool
 where
-    F: FnMut(PtySize) -> io::Result<Pty>,
+    F: FnMut(haven_mux::PaneRequest) -> io::Result<Pty>,
     P: FnMut(&MuxRuntime<F>) -> bool,
 {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -47,7 +51,10 @@ where
     false
 }
 
-fn pane_text(rt: &MuxRuntime<impl FnMut(PtySize) -> io::Result<Pty>>, pane: PaneId) -> String {
+fn pane_text(
+    rt: &MuxRuntime<impl FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>,
+    pane: PaneId,
+) -> String {
     rt.pane(pane).map(|p| p.grid().dump()).unwrap_or_default()
 }
 
@@ -63,7 +70,7 @@ fn a_fresh_session_runs_one_full_size_pane() {
 fn splitting_gives_each_child_its_own_geometry() {
     let mut rt = runtime(80, 24);
     let first = rt.session.active_pane();
-    let second = rt.split(Direction::Columns).unwrap().expect("split succeeded");
+    let second = rt.split(Direction::Columns, None).unwrap().expect("split succeeded");
 
     let rects = rt.rects();
     let width = |id: PaneId| rects.iter().find(|r| r.pane == id).unwrap().cols;
@@ -91,7 +98,7 @@ fn splitting_gives_each_child_its_own_geometry() {
 #[test]
 fn resizing_the_window_resizes_every_child() {
     let mut rt = runtime(80, 24);
-    rt.split(Direction::Rows).unwrap();
+    rt.split(Direction::Rows, None).unwrap();
     rt.resize(size(100, 40)).unwrap();
 
     for (rect, pane) in rt.visible() {
@@ -106,7 +113,7 @@ fn resizing_the_window_resizes_every_child() {
 #[test]
 fn zooming_tells_the_child_it_now_owns_the_screen() {
     let mut rt = runtime(80, 24);
-    let zoomed = rt.split(Direction::Columns).unwrap().unwrap();
+    let zoomed = rt.split(Direction::Columns, None).unwrap().unwrap();
     let before = rt.pane(zoomed).unwrap().size();
     rt.toggle_zoom().unwrap();
     let after = rt.pane(zoomed).unwrap().size();
@@ -122,7 +129,7 @@ fn zooming_tells_the_child_it_now_owns_the_screen() {
 fn input_goes_only_to_the_focused_pane() {
     let mut rt = runtime(40, 6);
     let first = rt.session.active_pane();
-    let second = rt.split(Direction::Rows).unwrap().unwrap();
+    let second = rt.split(Direction::Rows, None).unwrap().unwrap();
     assert_eq!(rt.session.active_pane(), second, "the new pane takes focus");
 
     rt.send(b"typed-into-second\n").unwrap();
@@ -138,7 +145,7 @@ fn input_goes_only_to_the_focused_pane() {
 fn focus_movement_changes_where_input_lands() {
     let mut rt = runtime(40, 6);
     let first = rt.session.active_pane();
-    rt.split(Direction::Columns).unwrap();
+    rt.split(Direction::Columns, None).unwrap();
     assert!(rt.focus(Edge::Left).unwrap());
     assert_eq!(rt.session.active_pane(), first);
     rt.send(b"to-first\n").unwrap();
@@ -149,7 +156,7 @@ fn focus_movement_changes_where_input_lands() {
 fn closing_a_pane_kills_its_child_and_reclaims_the_space() {
     let mut rt = runtime(80, 24);
     let first = rt.session.active_pane();
-    let second = rt.split(Direction::Columns).unwrap().unwrap();
+    let second = rt.split(Direction::Columns, None).unwrap().unwrap();
 
     assert!(!rt.close(second).unwrap(), "the session is not over");
     assert!(rt.pane(second).is_none(), "the pane's runtime must be gone");
@@ -159,7 +166,8 @@ fn closing_a_pane_kills_its_child_and_reclaims_the_space() {
 
 #[test]
 fn a_child_that_exits_on_its_own_closes_its_pane() {
-    let mut rt = MuxRuntime::new(SessionId(1), "test", size(40, 6), |size| {
+    let mut rt = MuxRuntime::new(SessionId(1), "test", size(40, 6), |request| {
+        let size = request.size;
         Pty::spawn(&PtyConfig {
             program: Some("/bin/sh".into()),
             // Exits immediately, as a shell does when you type `exit`.
@@ -194,7 +202,7 @@ fn closing_the_last_pane_ends_the_session() {
 fn windows_are_independent_and_switching_resizes_their_panes() {
     let mut rt = runtime(80, 24);
     let first = rt.session.active_pane();
-    let second = rt.new_window().unwrap();
+    let second = rt.new_window(None).unwrap();
     assert_eq!(rt.session.windows.len(), 2);
     assert_eq!(rt.session.active_pane(), second);
 

@@ -171,7 +171,7 @@ pub fn pane_numbers(
 }
 
 /// A top or bottom border, with an optional title set into it.
-pub(crate) fn border_row(
+pub fn border_row(
     g: &crate::theme::Glyphs,
     cols: usize,
     title: &str,
@@ -371,7 +371,7 @@ pub fn uptime(secs: u64) -> String {
 
 /// Exactly `cols` columns, so a panel row never leaves a pane showing
 /// through it or spills onto the next one.
-pub(crate) fn pad(text: &str, cols: usize) -> String {
+pub fn pad(text: &str, cols: usize) -> String {
     let mut out: String = text.chars().take(cols).collect();
     let len = out.chars().count();
     if len < cols {

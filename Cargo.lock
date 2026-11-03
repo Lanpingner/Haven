@@ -883,6 +883,7 @@ dependencies = [
  "haven-mux",
  "haven-proto",
  "haven-pty",
+ "haven-shell",
  "libc",
  "rustix 1.1.6",
  "serde",

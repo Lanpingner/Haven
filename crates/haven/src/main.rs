@@ -379,20 +379,31 @@ fn server(args: Args) -> ExitCode {
             let make_spawner = move |env: haven_daemon::SessionEnv| {
                 let program = program.clone();
                 let rest = rest.clone();
-                let spawner: Box<dyn FnMut(haven_pty::PtySize) -> std::io::Result<haven_pty::Pty>> =
-                    Box::new(move |size| {
-                        let (mut cfg, _, _) =
-                            launch_config(program.as_deref(), login, integrate, &ctx(login));
+                let spawner: Box<
+                    dyn FnMut(haven_mux::PaneRequest) -> std::io::Result<haven_pty::Pty>,
+                > = Box::new(move |request| {
+                    // A pane asked to run something in particular gets
+                    // that and no arguments: the session's arguments
+                    // belong to the session's own program.
+                    let chosen = request.program.clone();
+                    let (mut cfg, _, _) = launch_config(
+                        chosen.as_deref().or(program.as_deref()),
+                        login,
+                        integrate,
+                        &ctx(login),
+                    );
+                    if chosen.is_none() {
                         cfg.args.extend(rest.iter().cloned());
-                        // Read at spawn time, not at session creation: a pane
-                        // opened after a reattach must get that attach's
-                        // agent socket, not the one the session was born with.
-                        cfg.env.extend(
-                            env.borrow().iter().map(|(k, v)| (k.clone().into(), v.clone().into())),
-                        );
-                        cfg.size = size;
-                        haven_pty::Pty::spawn(&cfg)
-                    });
+                    }
+                    // Read at spawn time, not at session creation: a pane
+                    // opened after a reattach must get that attach's
+                    // agent socket, not the one the session was born with.
+                    cfg.env.extend(
+                        env.borrow().iter().map(|(k, v)| (k.clone().into(), v.clone().into())),
+                    );
+                    cfg.size = request.size;
+                    haven_pty::Pty::spawn(&cfg)
+                });
                 spawner
             };
             match haven_daemon::Daemon::bind(&socket, make_spawner) {

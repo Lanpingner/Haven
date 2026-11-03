@@ -11,6 +11,7 @@ haven-core.workspace = true
 haven-mux.workspace = true
 haven-proto.workspace = true
 haven-pty.workspace = true
+haven-shell.workspace = true
 rustix = { version = "1", features = ["event", "fs"] }
 libc = "0.2"
 toml = "1.1.8"
