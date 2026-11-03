@@ -25,6 +25,7 @@ use haven_pty::Pty;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 
 pub mod config;
+pub mod snapshot;
 pub mod sync;
 
 use sync::SyncState;
@@ -80,6 +81,10 @@ struct Client {
 
 /// The server.
 pub struct Daemon {
+    /// Where sessions are saved to and restored from.
+    pub save_path: PathBuf,
+    /// When the last autosave ran.
+    last_save: u64,
     listener: Option<UnixListener>,
     socket_path: Option<PathBuf>,
     sessions: BTreeMap<u32, SessionHost>,
@@ -117,6 +122,8 @@ impl Daemon {
             policy: ResizePolicy::default(),
             shutting_down: false,
             config: config::ConfigWatcher::new(default_config_path(), default_theme_dir()),
+            save_path: snapshot::default_path(),
+            last_save: unix_now(),
         }
     }
 
@@ -237,6 +244,7 @@ impl Daemon {
                 eprintln!("haven: config: {problem}");
             }
         }
+        self.autosave();
         self.sync_clients()?;
         self.flush_clients();
         Ok(())
@@ -332,6 +340,24 @@ impl Daemon {
                 let id = self.create_session(name, caps, &env)?;
                 self.join(index, id, caps);
             }
+            ClientMsg::SaveSessions => {
+                let (count, problem) = self.save_sessions();
+                let path = self.save_path.display().to_string();
+                let _ = self.clients[index].framed.queue(&ServerMsg::Saved {
+                    sessions: count,
+                    path,
+                    problem,
+                });
+            }
+            ClientMsg::RestoreSessions => {
+                let (count, problem) = self.restore_sessions();
+                let path = self.save_path.display().to_string();
+                let _ = self.clients[index].framed.queue(&ServerMsg::Saved {
+                    sessions: count,
+                    path,
+                    problem,
+                });
+            }
             ClientMsg::ListShells => {
                 let shells: Vec<String> =
                     haven_shell::available().iter().map(|p| p.display().to_string()).collect();
@@ -377,6 +403,20 @@ impl Daemon {
                 // A client that changed size must be re-synced: its rows are
                 // a different width now.
                 self.clients[index].sync.invalidate();
+            }
+            // These three need more than one session, so they are settled
+            // here rather than in the per-session action table.
+            ClientMsg::Action(Action::SaveSessions) => {
+                let (sessions, problem) = self.save_sessions();
+                let path = self.save_path.display().to_string();
+                let _ =
+                    self.clients[index].framed.queue(&ServerMsg::Saved { sessions, path, problem });
+            }
+            ClientMsg::Action(Action::RestoreSessions) => {
+                let (sessions, problem) = self.restore_sessions();
+                let path = self.save_path.display().to_string();
+                let _ =
+                    self.clients[index].framed.queue(&ServerMsg::Saved { sessions, path, problem });
             }
             // Detaching others needs every client, not one session, so it is
             // settled here rather than in the per-session action table.
@@ -549,6 +589,151 @@ impl Daemon {
         state.snapshotted = false;
     }
 
+    /// Save on a timer, so a save file is not only as good as the last time
+    /// someone remembered. A daemon holding nothing writes nothing: an empty
+    /// save file would quietly destroy the one from before a reboot.
+    fn autosave(&mut self) {
+        let every = self.config.autosave_seconds();
+        if every == 0 || self.sessions.is_empty() {
+            return;
+        }
+        if unix_now().saturating_sub(self.last_save) < every {
+            return;
+        }
+        if let (_, Some(problem)) = self.save_sessions() {
+            eprintln!("haven: autosave: {problem}");
+            // Not retried every tick: a broken path would print forever.
+            self.last_save = unix_now();
+        }
+    }
+
+    /// Write every session's shape to the save file.
+    ///
+    /// Returns how many sessions were written and what went wrong, because a
+    /// save that silently did nothing is the failure people discover after
+    /// the reboot.
+    pub fn save_sessions(&mut self) -> (u16, Option<String>) {
+        let sessions: Vec<snapshot::SavedSession> = self
+            .sessions
+            .values()
+            .map(|host| {
+                let runtime = &host.runtime;
+                snapshot::describe(&runtime.session, |pane| {
+                    let Some(runtime) = runtime.pane(pane) else {
+                        return snapshot::SavedPane::default();
+                    };
+                    snapshot::SavedPane {
+                        cwd: runtime.cwd().map(|p| p.display().to_string()),
+                        command: runtime.foreground_command().unwrap_or_default(),
+                    }
+                })
+            })
+            .collect();
+        let count = sessions.len().min(u16::MAX as usize) as u16;
+        let snapshot = snapshot::Snapshot::new(sessions);
+        match snapshot.write(&self.save_path) {
+            Ok(()) => {
+                self.last_save = unix_now();
+                (count, None)
+            }
+            Err(e) => (0, Some(e)),
+        }
+    }
+
+    /// Rebuild the saved sessions that are not already here.
+    ///
+    /// Sessions are matched by name and never replaced: a restore run twice,
+    /// or run while you are working, must not throw away what is live.
+    pub fn restore_sessions(&mut self) -> (u16, Option<String>) {
+        let snapshot = match snapshot::Snapshot::read(&self.save_path) {
+            Ok(s) => s,
+            Err(e) => return (0, Some(e)),
+        };
+        let size = self
+            .clients
+            .iter()
+            .filter(|c| c.session.is_some())
+            .map(|c| c.caps.size)
+            .next()
+            .unwrap_or(CellSize { cols: 80, rows: 24, ..Default::default() });
+
+        let mut restored = 0u16;
+        for saved in &snapshot.sessions {
+            if self.sessions.values().any(|h| h.name == saved.name) {
+                continue;
+            }
+            match self.restore_one(saved, size) {
+                Ok(()) => restored += 1,
+                Err(e) => return (restored, Some(e.to_string())),
+            }
+        }
+        (restored, None)
+    }
+
+    fn restore_one(&mut self, saved: &snapshot::SavedSession, size: CellSize) -> io::Result<()> {
+        let Some(first) = saved.windows.first() else { return Ok(()) };
+        let allowed: Vec<String> = self.config.restore_programs().to_vec();
+        let request = |pane: &snapshot::SavedPane| haven_mux::PaneRequest {
+            size: haven_pty::PtySize { cols: 1, rows: 1, ..Default::default() },
+            program: None,
+            cwd: pane.cwd.as_ref().map(std::path::PathBuf::from),
+            run: if snapshot::restorable(&pane.command, &allowed) {
+                pane.command.clone()
+            } else {
+                Vec::new()
+            },
+        };
+
+        let id = self.next_session;
+        self.next_session += 1;
+        let cell: SessionEnv = Default::default();
+        let spawner = (self.make_spawner)(cell.clone());
+        // The session is created with its first window's first pane, and the
+        // rest of the shape is installed over it: `MuxRuntime::new` has to
+        // make a pane, and a session with no panes is not representable.
+        let mut runtime = MuxRuntime::new(SessionId(id), &saved.name, size, spawner)?;
+        runtime.restore_window(
+            first.name.clone(),
+            &first.layout.to_tree(),
+            first.active_pane,
+            &first.panes.iter().map(request).collect::<Vec<_>>(),
+        )?;
+        for window in saved.windows.iter().skip(1) {
+            runtime.restore_window(
+                window.name.clone(),
+                &window.layout.to_tree(),
+                window.active_pane,
+                &window.panes.iter().map(request).collect::<Vec<_>>(),
+            )?;
+        }
+        // The placeholder window `MuxRuntime::new` made is not part of the
+        // saved shape, so it goes once there is something else to be on.
+        let placeholder = runtime.session.windows.first().map(|w| w.id);
+        if let Some(id) = placeholder.filter(|_| runtime.session.windows.len() > 1) {
+            let (panes, _) = runtime.session.close_window(id);
+            for pane in panes {
+                runtime.close_pane_quietly(pane);
+            }
+        }
+        // The placeholder took window 1, so without this a restored session
+        // starts at tab 2 and every number is off by one.
+        runtime.session.renumber_windows();
+        runtime.select_window(saved.active_window)?;
+
+        self.sessions.insert(
+            id,
+            SessionHost {
+                name: saved.name.clone(),
+                env: cell,
+                started_unix: unix_now(),
+                runtime,
+                policy: self.policy,
+                applied: Some(size),
+            },
+        );
+        Ok(())
+    }
+
     /// A pane's grid, for the read-only queries copy mode makes.
     fn pane_grid(&self, index: usize, pane: PaneId) -> Option<&haven_core::Grid> {
         let id = self.clients.get(index)?.session?;
@@ -663,8 +848,8 @@ impl Daemon {
                 runtime.send_to(target, &bytes)?;
                 false
             }
-            // Handled before the dispatch, where every client is reachable.
-            Action::DetachOthers => false,
+            // Handled before the dispatch, where every session is reachable.
+            Action::DetachOthers | Action::SaveSessions | Action::RestoreSessions => false,
             Action::SynchronizePanes { on } => {
                 let window = runtime.session.active_window_mut();
                 window.synchronized = on.unwrap_or(!window.synchronized);
@@ -838,7 +1023,7 @@ fn config_dir() -> PathBuf {
 }
 
 /// Seconds since the epoch, or `0` if the clock is before it.
-fn unix_now() -> u64 {
+pub fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

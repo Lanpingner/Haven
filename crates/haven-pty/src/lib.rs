@@ -181,6 +181,35 @@ impl Pty {
         self.child.id()
     }
 
+    /// Where the pane's shell is, read from the kernel rather than from the
+    /// shell.
+    ///
+    /// `OSC 7` would also answer this, but only with shell integration
+    /// installed and only after the shell has drawn a prompt. `/proc` is
+    /// true whatever is running, which is what a session being saved needs.
+    pub fn cwd(&self) -> Option<std::path::PathBuf> {
+        // The direct child, not the foreground process: the shell's
+        // directory is the one a restored pane should start in, and a
+        // program running in it may have gone somewhere else.
+        std::fs::read_link(format!("/proc/{}/cwd", self.child.id())).ok()
+    }
+
+    /// The command line of whatever is running in the foreground, when that
+    /// is not just the shell. `None` means the shell is at its prompt.
+    pub fn foreground_command(&self) -> Option<Vec<String>> {
+        let fg = self.foreground_pid()?;
+        if fg == self.child.id() as i32 {
+            return None;
+        }
+        let raw = std::fs::read(format!("/proc/{fg}/cmdline")).ok()?;
+        let args: Vec<String> = raw
+            .split(|b| *b == 0)
+            .filter(|part| !part.is_empty())
+            .map(|part| String::from_utf8_lossy(part).into_owned())
+            .collect();
+        (!args.is_empty()).then_some(args)
+    }
+
     /// The foreground process group's pid, via `tcgetpgrp`. This is what a tab
     /// title should show and what "something is still running" must check —
     /// the direct child is usually just the shell.

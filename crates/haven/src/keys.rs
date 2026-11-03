@@ -45,6 +45,8 @@ pub enum Action {
     },
     /// Offer the daemon's shells, and open a pane running the one picked.
     ChooseShell,
+    SaveSessions,
+    RestoreSessions,
     SendKeys {
         pane: Option<u32>,
         bytes: Vec<u8>,
@@ -109,6 +111,8 @@ pub const COMMANDS: &[&str] = &[
     "new-session",
     "rename-session",
     "respawn-pane",
+    "restore-sessions",
+    "save-sessions",
     "rotate",
     "send-keys",
     "swap-pane",
@@ -250,6 +254,8 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         // tmux's names, plus the ones someone who calls them tabs will try.
         "new-window" | "neww" | "new-tab" => Action::NewWindow { program: optional(line, verb) },
         "choose-shell" | "shells" => Action::ChooseShell,
+        "save-sessions" | "save" => Action::SaveSessions,
+        "restore-sessions" | "restore" => Action::RestoreSessions,
         "new-session" | "new" => Action::NewSession,
         "next" | "next-window" | "next-tab" => Action::NextWindow,
         "last" | "last-window" | "last-tab" => Action::LastWindow,
@@ -374,6 +380,8 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         // listing the client already holds.
         Action::DisplayPanes | Action::FindWindow(_) | Action::ChooseShell => return None,
         Action::NextLayout => P::NextLayout,
+        Action::SaveSessions => P::SaveSessions,
+        Action::RestoreSessions => P::RestoreSessions,
         Action::Rename { window, name } => P::Rename { window, name },
         Action::ApplyLayout(NamedLayout::EvenHorizontal) => P::EvenHorizontal,
         Action::ApplyLayout(NamedLayout::EvenVertical) => P::EvenVertical,

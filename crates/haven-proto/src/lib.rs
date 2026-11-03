@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -297,6 +297,12 @@ pub enum ClientMsg {
     /// What shells the *daemon's* machine has. Asked for rather than guessed
     /// at by the client, because the pane is spawned where the daemon is.
     ListShells,
+    /// Write every session's shape to the save file, or read it back.
+    ///
+    /// Both are the daemon's: it is the only thing that outlives a client,
+    /// and the only thing that knows where each pane's shell actually is.
+    SaveSessions,
+    RestoreSessions,
     /// The session's current environment, for a shell that was started
     /// before the latest attach and cannot be told any other way.
     ShowEnvironment,
@@ -387,6 +393,9 @@ pub enum Action {
     },
     /// The next named layout, cycling.
     NextLayout,
+    /// Write every session to the save file, or build back what is in it.
+    SaveSessions,
+    RestoreSessions,
     /// Rename the active window, or the session when `window` is false. An
     /// empty name gives a window back to the command it is running.
     Rename {
@@ -449,6 +458,12 @@ pub enum ServerMsg {
     Found {
         pane: PaneId,
         row: Option<u32>,
+    },
+    /// What a save or a restore did, for the client to show.
+    Saved {
+        sessions: u16,
+        path: String,
+        problem: Option<String>,
     },
     /// Answer to [`ClientMsg::ListShells`], most useful first.
     Shells(Vec<String>),

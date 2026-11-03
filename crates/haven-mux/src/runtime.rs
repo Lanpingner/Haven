@@ -47,6 +47,16 @@ impl PaneRuntime {
         self.emulator.term.title.as_deref()
     }
 
+    /// Where this pane's shell is, for saving a session.
+    pub fn cwd(&self) -> Option<std::path::PathBuf> {
+        self.pty.cwd()
+    }
+
+    /// What is running in the foreground, when it is not just the shell.
+    pub fn foreground_command(&self) -> Option<Vec<String>> {
+        self.pty.foreground_command()
+    }
+
     /// What the shell last said it was running, and whether it still is.
     /// Needs shell integration (`OSC 133`); without it there is nothing to
     /// report and the caller falls back to the title.
@@ -129,15 +139,25 @@ pub struct PaneRequest {
     pub size: PtySize,
     /// Run this instead of the session's default program.
     pub program: Option<std::path::PathBuf>,
+    /// Start the shell here rather than wherever the daemon happens to be.
+    pub cwd: Option<std::path::PathBuf>,
+    /// Type this at the shell once it is up. Restoring a program this way
+    /// rather than running it directly leaves you with a shell when it
+    /// exits, which is what a restored pane should be.
+    pub run: Vec<String>,
 }
 
 impl PaneRequest {
     pub fn new(size: PtySize) -> Self {
-        Self { size, program: None }
+        Self { size, ..Default::default() }
     }
 
     pub fn running(program: Option<std::path::PathBuf>) -> Self {
-        Self { size: PtySize { cols: 1, rows: 1, ..Default::default() }, program }
+        Self {
+            size: PtySize { cols: 1, rows: 1, ..Default::default() },
+            program,
+            ..Default::default()
+        }
     }
 }
 
@@ -298,12 +318,48 @@ impl<F: FnMut(PaneRequest) -> io::Result<Pty>> MuxRuntime<F> {
         Ok(Some(pane))
     }
 
+    /// Rebuild a window from a saved shape, one child per leaf.
+    ///
+    /// Returns the panes in the order the shape listed them, so the caller
+    /// can match them back to whatever it saved about each.
+    pub fn restore_window(
+        &mut self,
+        name: Option<String>,
+        shape: &crate::layout::PaneNode,
+        active: usize,
+        requests: &[PaneRequest],
+    ) -> io::Result<Vec<PaneId>> {
+        let (_, ids) = self.session.restore_window(name, shape, active);
+        for (pane, request) in ids.iter().zip(requests.iter()) {
+            let mut runtime = make_pane(&mut self.spawn, request.clone())?;
+            if !request.run.is_empty() {
+                // Typed at the shell rather than exec'd: when the program
+                // exits you are left with a shell, which is what a pane is.
+                let line = format!("{}\n", request.run.join(" "));
+                let _ = runtime.pty.write_all(line.as_bytes());
+            }
+            self.panes.insert(pane.0, runtime);
+        }
+        self.sync_sizes()?;
+        Ok(ids)
+    }
+
     pub fn new_window(&mut self, program: Option<std::path::PathBuf>) -> io::Result<PaneId> {
         let (_, pane, _) = self.session.new_window();
         let runtime = make_pane(&mut self.spawn, PaneRequest::running(program))?;
         self.panes.insert(pane.0, runtime);
         self.sync_sizes()?;
         Ok(pane)
+    }
+
+    /// Drop a pane's child without touching the tree, for a pane the tree
+    /// has already let go of.
+    pub fn close_pane_quietly(&mut self, pane: PaneId) {
+        if let Some(mut runtime) = self.panes.remove(&pane.0) {
+            if runtime.exited.is_none() {
+                let _ = runtime.pty.hangup(Duration::from_millis(100));
+            }
+        }
     }
 
     /// Close a pane and its child. Returns whether the session is over.
@@ -415,7 +471,8 @@ impl<F: FnMut(PaneRequest) -> io::Result<Pty>> MuxRuntime<F> {
         if old.exited.is_none() {
             let _ = old.pty.hangup(Duration::from_millis(100));
         }
-        let fresh = make_pane(&mut self.spawn, PaneRequest { size, program })?;
+        let fresh =
+            make_pane(&mut self.spawn, PaneRequest { size, program, ..Default::default() })?;
         self.panes.insert(pane.0, fresh);
         self.sync_sizes()?;
         Ok(true)

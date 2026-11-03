@@ -902,6 +902,16 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 }
                 true
             }
+            ServerMsg::Saved { sessions, path, problem } => {
+                // Said out loud either way: a save that quietly did nothing
+                // is the failure people find after the reboot.
+                self.frame.notice = Some(match problem {
+                    Some(reason) => format!("could not save: {reason}"),
+                    None if sessions == 1 => format!("1 session · {path}"),
+                    None => format!("{sessions} sessions · {path}"),
+                });
+                true
+            }
             ServerMsg::Shells(shells) => {
                 // The listing is what the menu was opened for; until it
                 // arrives there is nothing to show.

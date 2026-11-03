@@ -182,6 +182,15 @@ impl KeysFile {
 pub struct Config {
     pub theme: ThemeSpec,
     pub keys: KeysFile,
+    /// Programs a restore is allowed to start again.
+    ///
+    /// An allowlist, and short on purpose: a save file decides what runs when
+    /// a session comes back, and re-running whatever happened to be in the
+    /// foreground is how a restore turns into an exploit.
+    pub restore_programs: Vec<String>,
+    /// Save every session this often, in seconds. Zero is off. Without it a
+    /// save file is only as good as the last time someone remembered.
+    pub autosave_seconds: u64,
     /// Whether clients handle the mouse at all.
     ///
     /// Off hands it back to whatever terminal `haven attach` is running in,
@@ -192,7 +201,21 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { theme: ThemeSpec::default(), keys: KeysFile::default(), mouse: true }
+        Self {
+            theme: ThemeSpec::default(),
+            keys: KeysFile::default(),
+            mouse: true,
+            // tmux-resurrect's default list, for the same reasons: editors
+            // and pagers, which re-open a file and do nothing else.
+            restore_programs: [
+                "vim", "nvim", "vi", "emacs", "nano", "helix", "hx", "less", "man", "tail", "top",
+                "htop", "btop", "watch",
+            ]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+            autosave_seconds: 900,
+        }
     }
 }
 
@@ -284,6 +307,14 @@ impl ConfigWatcher {
 
     pub fn mouse(&self) -> bool {
         self.config.mouse
+    }
+
+    pub fn restore_programs(&self) -> &[String] {
+        &self.config.restore_programs
+    }
+
+    pub fn autosave_seconds(&self) -> u64 {
+        self.config.autosave_seconds
     }
 
     /// Re-read if anything moved. Returns whether the theme changed, so the

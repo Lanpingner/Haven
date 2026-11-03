@@ -1215,7 +1215,29 @@ command strings and asks the key filter to resolve them, exactly as a typed
 line is resolved, so a menu cannot offer anything the command line could not
 do and the next menu is data rather than code.
 
+Sessions survive a reboot now. What is saved is the shape of the work —
+sessions, tabs, the pane tree with its weights, and each pane's working
+directory — never the processes, which are gone. The directory is read from
+`/proc/<pid>/cwd` rather than from `OSC 7`: the kernel answers whatever is
+running and whether or not shell integration is installed, which is the case
+a save has to cover.
+
+A program is started again only if the config names it, and it is typed at
+the restored shell rather than exec'd so that quitting it leaves a shell.
+The allowlist is not caution for its own sake: a save file is a file on disk
+that decides what a machine runs when it comes back, and replaying whatever
+happened to be in the foreground is how a restore becomes an exploit.
+
+The save format is its own set of types rather than the mux's, because a file
+written by one version is read by another and must not change shape every
+time the pane tree does. Leaves refer to panes by position, so the file never
+names an id that will not exist again.
+
 **Bugs this work surfaced, worth remembering:**
+- `haven restore` restored nothing on a fresh daemon. The CLI attached before
+  asking, and attaching with no session named calls `first_or_create` — so it
+  made an empty `haven-1`, and the restore then skipped the saved session of
+  that name because one was already there. Save and restore do not attach.
 - `OSC 52` payloads were kept base64-encoded and handed to the client as if
   they were text, so honouring one would have put `aGVsbG8=` on the clipboard.
 - `haven server run -- prog -x` dropped `-x`. Every other subcommand does

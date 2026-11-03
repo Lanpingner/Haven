@@ -179,6 +179,9 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("q", "display-panes"),
     ("f", "command-prompt find-window "),
     ("D", "detach-others"),
+    // tmux-resurrect's keys, because the muscle memory is worth importing.
+    ("C-s", "save-sessions"),
+    ("C-r", "restore-sessions"),
     ("c", "new-window"),
     ("h", "focus-left"),
     ("j", "focus-down"),

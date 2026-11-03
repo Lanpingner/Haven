@@ -2,7 +2,7 @@
 
 use haven_proto::{CellSize, Layout, PaneId, SessionId, WindowId};
 
-use crate::layout::{Direction, Edge};
+use crate::layout::{Direction, Edge, PaneNode};
 use crate::window::{NamedLayout, Window};
 
 /// What a mutation implies for the caller, which owns the ptys.
@@ -28,6 +28,22 @@ pub struct Session {
     last_window: Option<WindowId>,
     next_pane: u32,
     next_window: u32,
+}
+
+/// Replace `PaneId(i)` placeholders with the ids at those positions.
+fn relabel(node: &mut PaneNode, ids: &[PaneId]) {
+    match node {
+        PaneNode::Leaf(id) => {
+            if let Some(real) = ids.get(id.0 as usize) {
+                *id = *real;
+            }
+        }
+        PaneNode::Split { children, .. } => {
+            for child in children.iter_mut() {
+                relabel(&mut child.node, ids);
+            }
+        }
+    }
 }
 
 impl Session {
@@ -76,6 +92,50 @@ impl Session {
 
     pub fn layout(&self, size: CellSize) -> Layout {
         self.active_window().layout(size)
+    }
+
+    /// Add a window whose pane tree is given rather than grown by splitting.
+    ///
+    /// `shape` has `PaneId(index)` placeholders at its leaves; the real ids
+    /// are allocated here and substituted in the same order, and returned so
+    /// the caller can spawn one process per leaf. Rebuilding a saved layout
+    /// by replaying splits cannot reproduce arbitrary weights, which is why
+    /// the tree is installed whole.
+    pub fn restore_window(
+        &mut self,
+        name: Option<String>,
+        shape: &PaneNode,
+        active: usize,
+    ) -> (WindowId, Vec<PaneId>) {
+        let count = shape.panes().len();
+        let ids: Vec<PaneId> = (0..count).map(|_| self.alloc_pane()).collect();
+        let mut root = shape.clone();
+        relabel(&mut root, &ids);
+
+        let id = WindowId(self.next_window);
+        self.next_window += 1;
+        let first = ids.first().copied().unwrap_or(PaneId(0));
+        let mut window = Window::new(id, first);
+        window.root = root;
+        window.active = ids.get(active).copied().unwrap_or(first);
+        window.title = name;
+        self.windows.push(window);
+        self.go_to(self.windows.len() - 1);
+        (id, ids)
+    }
+
+    /// Number the windows 1..n again.
+    ///
+    /// Only safe while nothing outside holds a window id — on a restore,
+    /// before any client has seen the session. Without it a restored session
+    /// starts at tab 2, because the window the runtime has to create before
+    /// the saved shape can be installed took the first number.
+    pub fn renumber_windows(&mut self) {
+        for (i, window) in self.windows.iter_mut().enumerate() {
+            window.id = WindowId(i as u32 + 1);
+        }
+        self.next_window = self.windows.len() as u32 + 1;
+        self.last_window = None;
     }
 
     pub fn new_window(&mut self) -> (WindowId, PaneId, SessionEvent) {

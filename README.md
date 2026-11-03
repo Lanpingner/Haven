@@ -78,6 +78,7 @@ then whatever else `/etc/shells` holds.
 | `q` | number the panes until the next key |
 | `f` | find a tab by name |
 | `D` | detach every other client |
+| `Ctrl+S` / `Ctrl+R` | save every session / build back the saved ones |
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree: sessions, windows, panes |
@@ -98,6 +99,8 @@ timestamp moves, so an edit reaches every attached client without a reattach.
 ```toml
 theme = "gruvbox"          # a built-in, a file in themes/, or an inline table
 mouse = true               # false hands the mouse back to the host terminal
+autosave_seconds = 900     # save every session this often; 0 is off
+restore_programs = ["vim", "less"]   # what a restore may start again
 
 [keys]
 prefix = "C-b"             # default C-a
@@ -108,6 +111,31 @@ root = { "C-t" = "new-window", "A-c" = "choose-shell" }   # no prefix needed
 Key specs are `C-`, `S-`, `A-`/`M-`, `D-` in any order, then a character or a
 name (`Up`, `PageUp`, `Enter`, `Space`, `F5`, …). The commands are the ones
 the command line takes, so nothing is bindable that cannot be typed.
+
+### Save and restore
+
+`Ctrl+A` `Ctrl+S` saves every session; `Ctrl+A` `Ctrl+R` builds back what is
+in the file. From a script, `haven save` and `haven restore` — restore starts
+the daemon if there is not one, which is the state a machine is in after a
+reboot.
+
+What comes back is the *shape* of the work: sessions and their names, tabs and
+their names, the pane tree with its proportions, and each pane's working
+directory. The processes are gone; a restored pane is a fresh shell in the
+right place. A program is started again only if it is named in
+`restore_programs`, and it is typed at the shell rather than exec'd, so
+quitting it leaves you with a shell.
+
+```toml
+restore_programs = ["vim", "nvim", "less", "man", "tail", "htop"]
+autosave_seconds = 900     # 0 turns it off
+```
+
+A restore never touches a session that is already there — it matches by name
+and skips — so it is safe from a login script that may run twice, and safe to
+run while you are working. The file is
+`$XDG_DATA_HOME/haven/sessions.toml`, written atomically, and it is TOML you
+can read and edit.
 
 ### Scripting
 
@@ -186,6 +214,7 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `send-keys <text>` | type into the pane; `\n` `\t` `\e` `\xNN` are decoded |
 | `synchronize-panes [on\|off]` | type into every pane at once |
 | `display-panes`, `find-window <text>`, `detach-others` | as the keys do |
+| `save-sessions`, `restore-sessions` | as `Ctrl+S` and `Ctrl+R` do |
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |
 
 `Tab` completes as far as the candidates agree. A box above the bar lists what

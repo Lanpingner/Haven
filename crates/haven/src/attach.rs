@@ -283,6 +283,36 @@ pub fn kill_session(
     wait_for_sessions(&mut transport)
 }
 
+/// Save or restore from the command line, for a login script or a cron job.
+///
+/// Returns what the daemon reported, so a script can tell whether it worked
+/// rather than assuming.
+pub fn save_or_restore(socket: &Path, restore: bool) -> io::Result<(u16, String)> {
+    // Deliberately *not* attached first. Attaching with no session named
+    // calls `first_or_create`, so asking a fresh daemon to restore would
+    // make an empty session called `haven-1` and then skip restoring the
+    // saved one because a session of that name was already there.
+    let mut transport = SocketTransport::connect(socket)?;
+    let ask = if restore { ClientMsg::RestoreSessions } else { ClientMsg::SaveSessions };
+    transport.send(ask).map_err(to_io)?;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        match transport.try_recv() {
+            Ok(Some(haven_proto::ServerMsg::Saved { sessions, path, problem })) => {
+                return match problem {
+                    Some(reason) => Err(io::Error::other(reason)),
+                    None => Ok((sessions, path)),
+                };
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(e) => return Err(to_io(e)),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::TimedOut, "no reply from the daemon"))
+}
+
 /// Run one command against a session without attaching.
 ///
 /// This is the whole of control mode for now, and it is what makes Haven

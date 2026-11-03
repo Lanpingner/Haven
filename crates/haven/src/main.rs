@@ -211,6 +211,8 @@ fn main() -> ExitCode {
         "kill-session" => kill_session(args),
         "show-env" | "show-environment" => show_env(args),
         "run" | "cmd" => run_cmd(args),
+        "save" => save_restore(args, false),
+        "restore" => save_restore(args, true),
         "server" => server(args),
         "tui" => tui(args),
         "dump" => dump(args),
@@ -297,6 +299,28 @@ fn list(args: Args) -> ExitCode {
                 );
             }
             warn_if_daemon_is_stale(daemon_build);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("haven: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `haven save` and `haven restore`, for a login script or a timer.
+fn save_restore(args: Args, restore: bool) -> ExitCode {
+    // Restoring has to be able to start the daemon: after a reboot there is
+    // not one yet, and that is exactly when a restore is wanted.
+    let socket = socket_of(&args);
+    if restore && haven::attach::connect_or_start(&socket).is_err() {
+        eprintln!("haven: no daemon, and it would not start");
+        return ExitCode::FAILURE;
+    }
+    match haven::attach::save_or_restore(&socket, restore) {
+        Ok((count, path)) => {
+            let verb = if restore { "restored" } else { "saved" };
+            println!("{verb} {count} session(s) · {path}");
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -401,6 +425,13 @@ fn server(args: Args) -> ExitCode {
                     cfg.env.extend(
                         env.borrow().iter().map(|(k, v)| (k.clone().into(), v.clone().into())),
                     );
+                    // A restored pane starts where it was, not where the
+                    // daemon happens to be — which after a reboot is `/`.
+                    // A directory that has since gone is ignored rather
+                    // than fatal: the pane is still worth having.
+                    if let Some(cwd) = request.cwd.as_ref().filter(|p| p.is_dir()) {
+                        cfg.cwd = Some(cwd.clone());
+                    }
                     cfg.size = request.size;
                     haven_pty::Pty::spawn(&cfg)
                 });

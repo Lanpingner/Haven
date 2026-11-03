@@ -240,7 +240,11 @@ fn apply<F: FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>(
         Action::DetachOthers
         | Action::DisplayPanes
         | Action::FindWindow(_)
-        | Action::ChooseShell => {}
+        | Action::ChooseShell
+        // Standalone is one session that dies with the process; there is
+        // nothing for a save file to bring back.
+        | Action::SaveSessions
+        | Action::RestoreSessions => {}
         Action::SynchronizePanes { on } => {
             let window = mux.session.active_window_mut();
             window.synchronized = on.unwrap_or(!window.synchronized);

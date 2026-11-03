@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use haven_client::frontend::Frontend;
 use haven_client::{Client, NullFrontend};
 use haven_daemon::{Daemon, ResizePolicy};
+use haven_mux::PaneRequest;
 use haven_proto::transport::SocketTransport;
 use haven_proto::{Action, CellSize, ClientMsg, PaneId, SessionId, Transport, TransportError};
 use haven_pty::{Pty, PtyConfig};
@@ -19,9 +20,7 @@ fn size(cols: u16, rows: u16) -> CellSize {
 }
 
 /// Panes running a quiet shell that echoes what it is told.
-fn spawner(
-    _env: haven_daemon::SessionEnv,
-) -> Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>> {
+fn spawner(_env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
     Box::new(|request| {
         let size = request.size;
         Pty::spawn(&PtyConfig {
@@ -38,7 +37,7 @@ fn spawner(
 /// characters in caret notation, so no real `ESC` ever reaches the emulator.
 fn marking_spawner(
     _env: haven_daemon::SessionEnv,
-) -> Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>> {
+) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
     Box::new(|request| {
         let size = request.size;
         Pty::spawn(&PtyConfig {
@@ -290,7 +289,7 @@ fn a_new_session_can_be_named() {
 /// test can recognise by eye.
 fn counting_spawner(
     _env: haven_daemon::SessionEnv,
-) -> Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>> {
+) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
     Box::new(|request| {
         let size = request.size;
         Pty::spawn(&PtyConfig {
@@ -491,9 +490,7 @@ fn a_search_that_finds_nothing_says_so() {
 
 /// A pane that prints one variable from its own environment, so a test can
 /// see what it was actually given rather than what it was meant to be given.
-fn env_spawner(
-    env: haven_daemon::SessionEnv,
-) -> Box<dyn FnMut(haven_mux::PaneRequest) -> io::Result<Pty>> {
+fn env_spawner(env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
     Box::new(move |request| {
         let size = request.size;
         Pty::spawn(&PtyConfig {
@@ -641,6 +638,114 @@ fn a_bell_marks_the_tab_you_were_not_looking_at() {
         }),
         "the mark survived a visit"
     );
+}
+
+/// A pane running a real shell, so `/proc` has a cwd worth reading.
+fn shell_spawner(env: haven_daemon::SessionEnv) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
+    Box::new(move |request| {
+        Pty::spawn(&PtyConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-i".into()],
+            cwd: request.cwd.clone(),
+            env: env.borrow().iter().map(|(k, v)| (k.clone().into(), v.clone().into())).collect(),
+            size: request.size,
+            ..Default::default()
+        })
+    })
+}
+
+#[test]
+fn a_saved_session_comes_back_with_its_shape_and_its_directories() {
+    let dir = std::env::temp_dir().join(format!("haven-resurrect-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let save = dir.join("sessions.toml");
+
+    // Build something worth restoring: two tabs, the first split in two,
+    // with one pane somewhere other than where the daemon started.
+    let mut daemon = Daemon::detached(shell_spawner);
+    daemon.save_path = save.clone();
+    let mut client = attach(&mut daemon, 40, 10);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    send_action(&mut client, Action::SplitColumns { program: None }).expect("split");
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.panes.len() == 2);
+    let pane = client.focus.expect("focus");
+    send_input(&mut client, pane, b"cd /tmp\n");
+    send_action(&mut client, Action::NewWindow { program: None }).expect("new window");
+    send_action(&mut client, Action::Rename { window: true, name: "second".into() })
+        .expect("rename");
+    settle(&mut daemon, &mut [&mut client], |c| {
+        c[0].frame.status.as_ref().is_some_and(|s| s.windows.len() == 2)
+    });
+    // Let the `cd` actually happen before the shape is read off /proc.
+    for _ in 0..40 {
+        daemon.tick(Duration::from_millis(10)).expect("tick");
+        let _ = client.tick();
+    }
+
+    let (count, problem) = daemon.save_sessions();
+    assert_eq!(problem, None, "save failed");
+    assert_eq!(count, 1);
+
+    // A second daemon, as a reboot would give: nothing in it but the file.
+    let mut fresh = Daemon::detached(shell_spawner);
+    fresh.save_path = save.clone();
+    let (restored, problem) = fresh.restore_sessions();
+    assert_eq!(problem, None, "restore failed");
+    assert_eq!(restored, 1);
+
+    let names = fresh.session_names();
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[0].1, "haven-1", "the session kept its name");
+    assert_eq!(names[0].2, 2, "both tabs should be back");
+
+    // Save again *from the restored daemon*, and compare. Checking the file
+    // written before the restore would only prove the shape was recorded;
+    // this proves the panes that came back are really in those directories,
+    // because the second save reads them from `/proc` all over again.
+    for _ in 0..40 {
+        fresh.tick(Duration::from_millis(10)).expect("tick");
+    }
+    let (_, problem) = fresh.save_sessions();
+    assert_eq!(problem, None);
+    let saved = haven_daemon::snapshot::Snapshot::read(&save).expect("read");
+    let window = &saved.sessions[0].windows[0];
+    assert_eq!(window.panes.len(), 2, "the split did not survive");
+    assert!(
+        window.panes.iter().any(|p| p.cwd.as_deref() == Some("/tmp")),
+        "a restored pane did not start where it was saved: {:?}",
+        window.panes
+    );
+    assert_eq!(saved.sessions[0].windows[1].name.as_deref(), Some("second"));
+    assert_eq!(
+        fresh.session_names()[0].1,
+        "haven-1",
+        "the restored session should keep its name through a second save"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn restoring_twice_does_not_duplicate_or_clobber_a_live_session() {
+    // A restore has to be safe to run from a login script that may fire
+    // more than once, and safe to run while you are working.
+    let dir = std::env::temp_dir().join(format!("haven-resurrect2-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let save = dir.join("sessions.toml");
+
+    let mut daemon = Daemon::detached(shell_spawner);
+    daemon.save_path = save.clone();
+    let mut client = attach(&mut daemon, 40, 10);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    daemon.save_sessions();
+
+    let before = daemon.session_names();
+    let (restored, problem) = daemon.restore_sessions();
+    assert_eq!(problem, None);
+    assert_eq!(restored, 0, "a session of that name is already here");
+    assert_eq!(daemon.session_names(), before, "the live session was touched");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
