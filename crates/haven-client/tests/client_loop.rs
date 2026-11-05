@@ -122,6 +122,8 @@ fn input_before_focus_is_dropped_rather_than_sent_to_nobody() {
 fn resize_updates_caps_and_tells_the_server() {
     let frontend = ScriptedFrontend::new(size(80, 24), [InputEvent::Resize(size(100, 30))]);
     let mut client = Client::new(frontend, ScriptedTransport::new([]));
+    // Sent once the size has held still; nothing to wait for in a test.
+    client.resize_debounce = std::time::Duration::from_millis(0);
     assert_eq!(client.tick().unwrap(), Tick::Redraw);
     match &client.transport.sent[0] {
         // The daemon is told about one row fewer than the screen has: the
@@ -808,6 +810,72 @@ fn a_menu_pick_that_only_has_something_to_say_says_it() {
     client.tick().unwrap();
     client.tick().unwrap();
     assert_eq!(client.frame.notice.as_deref(), Some("could not"));
+}
+
+#[test]
+fn a_burst_of_resizes_reaches_the_session_once() {
+    // Rapid zooming sent one resize per keypress, so the shell got a
+    // SIGWINCH per keypress and redrew its prompt each time — a screen
+    // full of prompts and a scrollback reflowed at a dozen widths.
+    let server = ScriptedTransport::new([ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1))]);
+    let mut client = Client::new(ScriptedFrontend::new(size(80, 24), []), server);
+    client.resize_debounce = std::time::Duration::from_millis(0);
+    client.tick().unwrap();
+    let before = client.transport.sent.len();
+
+    // Ten sizes in a row, as a drag or a held zoom key produces.
+    for n in 0..10u16 {
+        client.frontend.feed(InputEvent::Resize(size(80 - n, 24)));
+    }
+    client.tick().unwrap();
+
+    let resizes = client.transport.sent[before..]
+        .iter()
+        .filter(|m| matches!(m, ClientMsg::Resize { .. }))
+        .count();
+    assert_eq!(resizes, 1, "ten sizes should settle into one resize");
+    // And the one that arrives is the size it ended at.
+    let last = client.transport.sent.iter().rev().find_map(|m| match m {
+        ClientMsg::Resize { caps } => Some(caps.size),
+        _ => None,
+    });
+    assert_eq!(last.map(|s| s.cols), Some(71));
+}
+
+#[test]
+fn a_zoom_that_ends_where_it_started_costs_the_session_nothing() {
+    let server = ScriptedTransport::new([ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1))]);
+    let mut client = Client::new(ScriptedFrontend::new(size(80, 24), []), server);
+    client.resize_debounce = std::time::Duration::from_millis(0);
+    client.frontend.feed(InputEvent::Resize(size(70, 20)));
+    client.tick().unwrap();
+    let after_first = client.transport.sent.len();
+
+    // Out and back inside one burst — zoom in, zoom out — and the size the
+    // daemon already knows is the size it ends at.
+    client.frontend.feed(InputEvent::Resize(size(40, 12)));
+    client.frontend.feed(InputEvent::Resize(size(30, 10)));
+    client.frontend.feed(InputEvent::Resize(size(70, 20)));
+    client.tick().unwrap();
+    let resizes = client.transport.sent[after_first..]
+        .iter()
+        .filter(|m| matches!(m, ClientMsg::Resize { .. }))
+        .count();
+    assert_eq!(resizes, 0, "the session was told about a size it already had");
+}
+
+#[test]
+fn a_pending_resize_is_a_reason_to_wake_up() {
+    // The window waits for events and would otherwise sit on a resize
+    // nobody had been told about.
+    let server = ScriptedTransport::new([ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1))]);
+    let mut client = Client::new(ScriptedFrontend::new(size(80, 24), []), server);
+    client.tick().unwrap();
+    assert!(client.next_wake().is_none(), "nothing to wake for yet");
+    client.frontend.feed(InputEvent::Resize(size(70, 20)));
+    client.tick().unwrap();
+    let wake = client.next_wake().expect("a pending resize is a deadline");
+    assert!(wake <= std::time::Duration::from_millis(90), "{wake:?}");
 }
 
 #[test]

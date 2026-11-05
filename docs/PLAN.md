@@ -1120,7 +1120,7 @@ rewrite.
 ## 20. Implementation status
 
 Updated as milestones land, so the plan above does not drift from the tree.
-**636 tests, zero clippy warnings, `cargo test --workspace` green.**
+**639 tests, zero clippy warnings, `cargo test --workspace` green.**
 
 | Milestone | State |
 |---|---|
@@ -1135,6 +1135,13 @@ Updated as milestones land, so the plan above does not drift from the tree.
 | **M5** daemon + attach/detach | Done bar live upgrade. `havend` as `haven server run`, framed postcard over a unix socket, per-client row-revision sync, style/cluster table shipping, `Smallest`/`Latest` resize policies, autostart, `haven attach \| ls \| kill-session \| server stop`. Verified end to end: a session outlives its client and reattach restores the screen. |
 | **M1** GPU frontend | Done bar polish. wgpu pipelines, shelf-packed glyph atlas, font fallback with a last-resort system scan, sRGB-correct colour, procedural box drawing, a winit window with vsync, and `haven screenshot` so the renderer stays reviewable without a display. No italic faces, no ligatures, no colour emoji yet. |
 | **M4** keyboard | Partial. A prefix key table resolving to a declarative `Action`, shared by the standalone and attached paths. The modal stack, configurable bindings, palette and copy mode are still to come. |
+
+**Resizes are coalesced.** A size change is drawn at once and told to the
+daemon after 90ms of stillness, and not at all when it settles on the size
+the daemon already has. A resize is a `SIGWINCH` and a shell answers one by
+redrawing its prompt, so the uncoalesced version turned a held zoom key or a
+dragged window edge into a screenful of prompts over a scrollback reflowed
+at a dozen widths. Twenty resize events now reach a pane as one signal.
 
 **The history and grep modals** are the daemon answering questions a client
 cannot: both live where the shells and the scrollback are. A pane's history

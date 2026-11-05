@@ -5,6 +5,35 @@ broke, because the interesting failures were never where they looked. A
 selection, kept here because they say more about the program than a feature list
 does.
 
+## Rapid zooming filled the pane with prompts
+
+Reported with a screenshot: zoom in and out quickly a few times and a pane
+fills with forty copies of the shell prompt, some of them in fragments.
+
+Every zoom step changes the cell size, which changes how many rows and
+columns the window holds, which is a resize of the session — and a resize
+is a `SIGWINCH`, and a shell answers a `SIGWINCH` by redrawing its prompt.
+Twenty taps of `Ctrl+-` meant twenty signals, twenty prompts, and a
+scrollback reflowed at twenty different widths. The same thing happened,
+less visibly, every time a window was dragged by its edge.
+
+The client now draws the new size immediately and tells the *daemon* only
+once the size has held still for 90ms, and not at all when the size it
+settles on is the one the daemon already has — which is what a zoom in and
+back out is. Measured on a live session: twenty resize events in four
+hundred milliseconds, and the pane's program received exactly one
+`SIGWINCH`.
+
+The window had to learn to wake for it. It waits for events and would
+otherwise sit on a resize nobody had been told about until something else
+happened; `next_wake` now returns whichever is sooner, the pending resize
+or the clock.
+
+What this does not fix is the look of a reflow. Lines that were printed
+wrapped at one width and are shown at another are re-wrapped, and a prompt
+full of colour and glyphs comes apart in a way that no terminal handles
+prettily. One resize's worth of that is ordinary; twenty was the bug.
+
 ## Enter in a split scrolled the whole window
 
 Reported as "split horizontally, keep pressing Enter, and the whole thing

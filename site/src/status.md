@@ -6,7 +6,7 @@ bindings, save and restore, shell integration, container panes, themes and a
 GPU window all work.
 
 The [design plan](./plan.md) tracks this milestone by milestone, updated as
-work lands so the document cannot drift from the tree. 636 tests, zero clippy
+work lands so the document cannot drift from the tree. 639 tests, zero clippy
 warnings, `cargo test --workspace` green.
 
 ## Working

@@ -17,7 +17,9 @@ pub mod status_bar;
 
 /// Themes live in the protocol crate: the daemon owns the configuration and
 /// hands one to every client, so it is wire data, not a client's own idea.
-pub use haven_proto::theme;
+pub use std::time::Instant;
+
+use haven_proto::theme;
 
 pub use frame::{FrameModel, PaneFrame, Span, Widget, WidgetKind};
 pub use frontend::{Frontend, NullFrontend, PresentError, ScriptedFrontend, Zoom};
@@ -232,6 +234,15 @@ pub struct Client<F, T> {
     /// The second the bar was last drawn for. Redrawing when it moves is
     /// what makes the clock a clock.
     last_clock: u64,
+    /// When a resize that has happened on screen should be told to the
+    /// daemon, if one is waiting.
+    resize_due: Option<Instant>,
+    /// How long a size has to hold still first. Short enough not to be felt
+    /// while dragging a window edge, long enough to swallow a burst.
+    pub resize_debounce: std::time::Duration,
+    /// The size the daemon was last told about, so a zoom that ends where
+    /// it started costs the session nothing at all.
+    last_sent_size: Option<haven_proto::CellSize>,
     /// Last session listing received, for `haven ls`.
     pub sessions: Vec<haven_proto::SessionInfo>,
     attached: bool,
@@ -277,6 +288,9 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             fatal: None,
             sessions: Vec::new(),
             last_clock: 0,
+            resize_due: None,
+            resize_debounce: std::time::Duration::from_millis(90),
+            last_sent_size: None,
             attached: false,
         }
     }
@@ -949,14 +963,23 @@ impl<F: Frontend, T: Transport> Client<F, T> {
     /// `None` when there is no bar to keep up to date, which is what lets an
     /// idle window cost nothing at all.
     pub fn next_wake(&self) -> Option<std::time::Duration> {
-        self.frame.status.as_ref()?;
-        let subsec = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        // To the next whole second, so the displayed time changes when the
-        // clock does rather than a fraction late.
-        Some(std::time::Duration::from_nanos(1_000_000_000 - u64::from(subsec)))
+        // A resize waiting to be sent is the more urgent of the two: a
+        // window that stopped being dragged and was never mentioned to the
+        // daemon would keep the old grid until something else happened.
+        let resize = self.resize_due.map(|due| due.saturating_duration_since(Instant::now()));
+        let clock = self.frame.status.as_ref().map(|_| {
+            let subsec = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            // To the next whole second, so the displayed time changes when
+            // the clock does rather than a fraction late.
+            std::time::Duration::from_nanos(1_000_000_000 - u64::from(subsec))
+        });
+        match (resize, clock) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     /// Rebuild the status line into the frame's widgets.
@@ -1057,6 +1080,21 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
         }
 
+        if self.resize_due.is_some_and(|due| Instant::now() >= due) {
+            self.resize_due = None;
+            let size = status_bar::reserve(self.frame.size);
+            // A burst that ends where it began — zoom in, zoom out — is a
+            // resize the session never needs to hear about.
+            if self.last_sent_size != Some(size) {
+                self.last_sent_size = Some(size);
+                let mut caps = self.frontend.caps();
+                // The daemon lays panes out in the space it is told about,
+                // so the row the status line occupies is never offered.
+                caps.size = size;
+                self.transport.send(ClientMsg::Resize { caps })?;
+            }
+        }
+
         if self.fatal.is_some() {
             return Ok(Tick::Finished);
         }
@@ -1084,12 +1122,14 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 Ok(Tick::Finished)
             }
             InputEvent::Resize(size) => {
-                let mut caps = self.frontend.caps();
                 self.frame.size = size;
-                // The daemon lays panes out in the space it is told about, so
-                // the row the status line occupies is simply never offered.
-                caps.size = status_bar::reserve(size);
-                self.transport.send(ClientMsg::Resize { caps })?;
+                // Drawn now, told to the daemon in a moment. A resize costs
+                // the session a `SIGWINCH`, and a shell answers one by
+                // redrawing its prompt — so a drag across the screen, or a
+                // dozen taps of `Ctrl+-`, would leave a dozen prompts and a
+                // scrollback reflowed at a dozen different widths. Held
+                // until the size stops changing, a burst is one resize.
+                self.resize_due = Some(Instant::now() + self.resize_debounce);
                 Ok(Tick::Redraw)
             }
             // Any key dismisses the numbers, and then does nothing else: an
