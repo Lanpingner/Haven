@@ -6,7 +6,7 @@ bindings, save and restore, shell integration, container panes, themes and a
 GPU window all work.
 
 The [design plan](./plan.md) tracks this milestone by milestone, updated as
-work lands so the document cannot drift from the tree. 608 tests, zero clippy
+work lands so the document cannot drift from the tree. 635 tests, zero clippy
 warnings, `cargo test --workspace` green.
 
 ## Working
@@ -28,6 +28,10 @@ warnings, `cargo test --workspace` green.
   with a last-resort system scan, sRGB-correct colour, procedural box drawing, a
   winit window with vsync, and `haven screenshot` so the renderer stays
   reviewable without a display.
+- **[History and grep](./finding.md)** — a pane's commands merged from its
+  own `OSC 133` marks and the shell's history file, with `whatis`/`man` in a
+  panel beside them; and a grep across every pane in the session, each hit
+  carrying the window and row it is at.
 - **Shells** — bash, zsh, fish and a generic implementation behind one `Shell`
   trait, with correct job control and signal delivery, correct environment,
   native-capability detection, and `ZDOTDIR` / `--rcfile` shims.

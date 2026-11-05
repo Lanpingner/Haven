@@ -299,6 +299,36 @@ impl Grid {
         }
     }
 
+    /// Every row that matches, with its text, oldest first.
+    ///
+    /// The search next door answers "where is the next one"; this answers
+    /// "where are they all", which is a different question and a list you
+    /// can pick from. Capped, because a one-word grep over a long session
+    /// would otherwise send thousands of lines to a client that can show
+    /// twenty.
+    pub fn find_all(&self, query: &str, limit: usize) -> Vec<(usize, String)> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        // The same case rule the incremental search uses: folded unless the
+        // query has a capital in it, as every editor since vi.
+        let fold = !query.chars().any(char::is_uppercase);
+        let needle = if fold { query.to_lowercase() } else { query.to_string() };
+        let mut out = Vec::new();
+        for index in 0..self.history_len() {
+            let Some(row) = self.history_row(index) else { continue };
+            let text: String = row.cells.iter().map(|c| self.cell_text(c)).collect();
+            let hay = if fold { text.to_lowercase() } else { text.clone() };
+            if hay.contains(&needle) {
+                out.push((index, text.trim_end().to_string()));
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
     /// How far back a view may be scrolled: one row per row of history.
     pub fn max_scroll(&self) -> usize {
         self.scrollback.len()

@@ -230,6 +230,9 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("S", "synchronize-panes"),
     ("q", "display-panes"),
     ("f", "command-prompt find-window "),
+    // `/` searches, as it does in less, vim and everything since ed — but
+    // over every pane in the session, with the matches as a list.
+    ("/", "command-prompt grep "),
     ("D", "detach-others"),
     // tmux-resurrect's keys, because the muscle memory is worth importing.
     ("C-s", "save-sessions"),
@@ -300,6 +303,9 @@ impl Default for Bindings {
 pub const DEFAULT_ROOT: &[(&str, &str)] = &[
     ("A-c", "choose-shell"),
     ("A-p", "command-palette"),
+    // The history, with what each command is beside it. No prefix, because
+    // reaching for a command you ran an hour ago should be one key.
+    ("A-h", "history"),
     // What every other terminal and every browser uses. `C-+` as well as
     // `C-=`, because a keyboard that needs shift for `+` sends the one and
     // a keyboard with a numpad sends the other.

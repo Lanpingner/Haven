@@ -260,6 +260,10 @@ fn apply<F: FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>(
         | Action::ContainerMounts { .. }
         // Standalone draws into a terminal whose font is that terminal's.
         | Action::Font(_)
+        // And it has no client, so no modal to show a history or a grep in.
+        | Action::History
+        | Action::Grep(_)
+        | Action::GoTo { .. }
         | Action::CommandPalette
         // Standalone has no client-side mode machine to switch.
         | Action::SwitchTable(_)

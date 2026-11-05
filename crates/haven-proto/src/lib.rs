@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -291,6 +291,22 @@ pub enum ClientMsg {
         from: u32,
         backwards: bool,
     },
+    /// What this pane has run, and what the shell's own history file holds.
+    /// Answered by the daemon because both live where the shell does.
+    History {
+        pane: PaneId,
+    },
+    /// What a command is, for the panel beside the history. Looked up with
+    /// `whatis` and `man` — read-only, on the machine the command is on.
+    Help {
+        command: String,
+    },
+    /// Every line matching `query`, in every pane of this session. The
+    /// search message next door finds the *next* match in one pane; this
+    /// one is the list you pick from.
+    Grep {
+        query: String,
+    },
     /// Control-mode queries, which the CLI is built on: anything `haven ls`
     /// can do, a script can do (`docs/PLAN.md` §14.2).
     ListSessions,
@@ -429,6 +445,30 @@ impl Tables {
     }
 }
 
+/// One command somebody ran.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub command: String,
+    /// How it ended, where that is known — which is only for commands this
+    /// pane watched run. A history file records no statuses.
+    pub exit: Option<i32>,
+    /// Whether this pane ran it, as against the shell's history file. The
+    /// two are merged into one list and the difference is worth showing:
+    /// one of them happened here.
+    pub from_pane: bool,
+}
+
+/// A line matching a grep, and where it is.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct GrepHit {
+    pub pane: PaneId,
+    /// The window the pane is in, so a client can go there.
+    pub window: u32,
+    /// The row in that pane's history, as `ScrollTo` counts them.
+    pub row: u32,
+    pub text: String,
+}
+
 /// Somewhere a pane's shell could run that is not this machine's filesystem.
 ///
 /// Described rather than named, because a client must be able to draw the
@@ -500,6 +540,22 @@ pub enum ServerMsg {
     },
     /// Answer to [`ClientMsg::ShowEnvironment`].
     Environment(Vec<(String, String)>),
+    /// Answer to [`ClientMsg::History`], oldest last.
+    History {
+        pane: PaneId,
+        entries: Vec<HistoryEntry>,
+    },
+    /// Answer to [`ClientMsg::Help`]. Empty text means nothing was found,
+    /// which is common and not an error: a shell function has no man page.
+    Help {
+        command: String,
+        text: String,
+    },
+    /// Answer to [`ClientMsg::Grep`], in session order.
+    Matches {
+        query: String,
+        hits: Vec<GrepHit>,
+    },
     /// The key table. Sent on attach and whenever the config changes, for
     /// the same reason the theme is.
     Keys(Box<KeyTable>),

@@ -110,6 +110,18 @@ pub enum Action {
     /// pane zoom the prefix key does: one letter, two meanings, so these
     /// are spelled out as fonts rather than as zoom.
     Font(haven_client::Zoom),
+    /// The focused pane's command history, with what each command is
+    /// beside it.
+    History,
+    /// Every line matching this, in every pane of the session.
+    Grep(String),
+    /// Go to one of those lines. Written by the grep menu rather than by a
+    /// person, which is why it takes three numbers and no names.
+    GoTo {
+        window: u16,
+        pane: u32,
+        row: u32,
+    },
     /// Send the newest paste buffer to the pane.
     Paste,
 }
@@ -157,6 +169,8 @@ pub const COMMANDS: &[&str] = &[
     "find-window",
     "copy-mode",
     "paste-buffer",
+    "grep",
+    "history",
     "font-bigger",
     "font-smaller",
     "font-reset",
@@ -420,6 +434,19 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         // the end of the verb.
         "command-prompt" => Action::EnterCommand(prefill(line, verb)),
         "copy-mode" | "copy" => Action::Copy,
+        "history" | "command-history" => Action::History,
+        "grep" | "search-all" => Action::Grep(
+            optional(line, verb).ok_or_else(|| "grep needs something to look for".to_string())?,
+        ),
+        "goto" => {
+            let mut nums = line.split_whitespace().skip(1).map(str::parse::<u32>);
+            let (Some(Ok(window)), Some(Ok(pane)), Some(Ok(row))) =
+                (nums.next(), nums.next(), nums.next())
+            else {
+                return Err("goto takes a window, a pane and a row".to_string());
+            };
+            Action::GoTo { window: window as u16, pane, row }
+        }
         "font-bigger" | "zoom-in" => Action::Font(haven_client::Zoom::In),
         "font-smaller" | "zoom-out" => Action::Font(haven_client::Zoom::Out),
         "font-reset" | "zoom-reset" => Action::Font(haven_client::Zoom::Reset),
@@ -487,6 +514,9 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         | Action::ContainerShell { .. }
         | Action::ContainerMounts { .. }
         | Action::Font(_)
+        | Action::History
+        | Action::Grep(_)
+        | Action::GoTo { .. }
         | Action::CommandPalette
         | Action::SwitchTable(_) => return None,
         Action::NextLayout => P::NextLayout,
@@ -694,6 +724,7 @@ mod tests {
             let line = match *name {
                 "select-window" | "join-pane" => format!("{name} 1"),
                 "container-mount" | "container-unmount" => format!("{name} /src"),
+                "grep" => format!("{name} needle"),
                 other => other.to_string(),
             };
             assert!(parse_command(&line).is_ok(), "{name} is offered but does not parse");

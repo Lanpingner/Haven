@@ -25,6 +25,7 @@ use haven_pty::Pty;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 
 pub mod config;
+pub mod help;
 pub mod snapshot;
 pub mod sync;
 
@@ -101,6 +102,11 @@ pub struct Daemon {
     /// Handed to every spawner, so a config reload reaches panes opened
     /// afterwards without rebuilding anything.
     containers: ContainerSettings,
+    /// Help lookups in flight, and what has already been looked up. The
+    /// cache is never invalidated: a man page does not change under a
+    /// running daemon often enough to be worth the machinery.
+    help: help::Helper,
+    help_cache: help::Cache,
     policy: ResizePolicy,
     shutting_down: bool,
     /// Configuration, re-read when the file moves. The daemon owns it so a
@@ -136,6 +142,8 @@ impl Daemon {
             // first pane of the first session is spawned before any reload
             // could have happened, and it is not a lesser pane.
             containers: std::rc::Rc::new(std::cell::RefCell::new(config.containers())),
+            help: help::Helper::default(),
+            help_cache: help::Cache::new(),
             policy: ResizePolicy::default(),
             shutting_down: false,
             config,
@@ -260,6 +268,17 @@ impl Daemon {
             }
             if let Some(problem) = &self.config.problem {
                 eprintln!("haven: config: {problem}");
+            }
+        }
+        // Help that a thread finished since the last tick. Sent to every
+        // client in the session rather than remembered against the one that
+        // asked: the answer is about a command, not about a client.
+        for (word, text) in self.help.drain() {
+            self.help_cache.insert(word.clone(), text.clone());
+            for client in &mut self.clients {
+                let _ = client
+                    .framed
+                    .queue(&ServerMsg::Help { command: word.clone(), text: text.clone() });
             }
         }
         self.autosave();
@@ -485,6 +504,29 @@ impl Daemon {
                     .and_then(|g| g.find(&query, from as usize, backwards))
                     .map(|r| r as u32);
                 let _ = self.clients[index].framed.queue(&ServerMsg::Found { pane, row });
+            }
+            ClientMsg::History { pane } => {
+                let entries = self.history_for(index, pane);
+                let _ = self.clients[index].framed.queue(&ServerMsg::History { pane, entries });
+            }
+            ClientMsg::Help { command } => {
+                // Looked up on a thread. `man` reads a compressed file and
+                // runs a formatter; doing that in the event loop would stop
+                // every pane in every session while somebody moved a
+                // selection down one line.
+                let word = help::subject(&command);
+                match self.help_cache.get(&word) {
+                    Some(text) => {
+                        let _ = self.clients[index]
+                            .framed
+                            .queue(&ServerMsg::Help { command: word, text: text.clone() });
+                    }
+                    None => self.help.ask(word),
+                }
+            }
+            ClientMsg::Grep { query } => {
+                let hits = self.grep(index, &query);
+                let _ = self.clients[index].framed.queue(&ServerMsg::Matches { query, hits });
             }
             ClientMsg::ListSessions => {
                 let sessions = self.session_infos();
@@ -784,6 +826,65 @@ impl Daemon {
     }
 
     /// A pane's grid, for the read-only queries copy mode makes.
+    /// What a pane has run, and what its shell remembers from before.
+    ///
+    /// The pane's own commands come last, because the list is read from the
+    /// bottom and they are the ones with any claim on your attention: they
+    /// happened here, and they carry how they ended. Everything the file
+    /// holds that is not already in that half goes above, newest nearest.
+    fn history_for(&self, index: usize, pane: PaneId) -> Vec<haven_proto::HistoryEntry> {
+        let Some(id) = self.clients.get(index).and_then(|c| c.session) else { return Vec::new() };
+        let Some(host) = self.sessions.get(&id) else { return Vec::new() };
+        let Some(runtime) = host.runtime.pane(pane) else { return Vec::new() };
+
+        let mine: Vec<haven_proto::HistoryEntry> = runtime
+            .history()
+            .iter()
+            .map(|run| haven_proto::HistoryEntry {
+                command: run.command.clone(),
+                exit: run.exit,
+                from_pane: true,
+            })
+            .collect();
+
+        let seen: std::collections::HashSet<&str> =
+            mine.iter().map(|e| e.command.as_str()).collect();
+        let shell = haven_shell::history::shell_name(runtime.program());
+        let mut out: Vec<haven_proto::HistoryEntry> = haven_shell::history::recent(&shell, 500)
+            .into_iter()
+            .filter(|c| !seen.contains(c.as_str()))
+            .map(|command| haven_proto::HistoryEntry { command, exit: None, from_pane: false })
+            .collect();
+        out.extend(mine);
+        out
+    }
+
+    /// Every matching line in every pane of this client's session.
+    fn grep(&self, index: usize, query: &str) -> Vec<haven_proto::GrepHit> {
+        const PER_PANE: usize = 200;
+        const TOTAL: usize = 1000;
+        let Some(id) = self.clients.get(index).and_then(|c| c.session) else { return Vec::new() };
+        let Some(host) = self.sessions.get(&id) else { return Vec::new() };
+        let mut hits = Vec::new();
+        for window in &host.runtime.session.windows {
+            for pane in window.panes() {
+                let Some(runtime) = host.runtime.pane(pane) else { continue };
+                for (row, text) in runtime.grid().find_all(query, PER_PANE) {
+                    hits.push(haven_proto::GrepHit {
+                        pane,
+                        window: window.id.0,
+                        row: row as u32,
+                        text,
+                    });
+                    if hits.len() >= TOTAL {
+                        return hits;
+                    }
+                }
+            }
+        }
+        hits
+    }
+
     fn pane_grid(&self, index: usize, pane: PaneId) -> Option<&haven_core::Grid> {
         let id = self.clients.get(index)?.session?;
         self.sessions.get(&id)?.runtime.pane(pane).map(|p| p.grid())

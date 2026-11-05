@@ -220,6 +220,9 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::ContainerShell { verb, spec }) => Intercepted::ChooseLifetime { verb, spec },
         Ok(Action::ContainerMounts { add, remove }) => Intercepted::ContainerMounts { add, remove },
         Ok(Action::Font(step)) => Intercepted::Zoom(step),
+        Ok(Action::History) => Intercepted::OpenHistory,
+        Ok(Action::Grep(query)) => Intercepted::Grep(query),
+        Ok(Action::GoTo { window, pane, row }) => Intercepted::GoTo { window, pane, row },
         // Reached only when a caller has no mode to change — `act` handles
         // these, and everything with a mode goes through `act`.
         Ok(Action::SwitchTable(_)) => Intercepted::Consumed,

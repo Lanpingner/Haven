@@ -1120,7 +1120,7 @@ rewrite.
 ## 20. Implementation status
 
 Updated as milestones land, so the plan above does not drift from the tree.
-**608 tests, zero clippy warnings, `cargo test --workspace` green.**
+**635 tests, zero clippy warnings, `cargo test --workspace` green.**
 
 | Milestone | State |
 |---|---|
@@ -1135,6 +1135,21 @@ Updated as milestones land, so the plan above does not drift from the tree.
 | **M5** daemon + attach/detach | Done bar live upgrade. `havend` as `haven server run`, framed postcard over a unix socket, per-client row-revision sync, style/cluster table shipping, `Smallest`/`Latest` resize policies, autostart, `haven attach \| ls \| kill-session \| server stop`. Verified end to end: a session outlives its client and reattach restores the screen. |
 | **M1** GPU frontend | Done bar polish. wgpu pipelines, shelf-packed glyph atlas, font fallback with a last-resort system scan, sRGB-correct colour, procedural box drawing, a winit window with vsync, and `haven screenshot` so the renderer stays reviewable without a display. No italic faces, no ligatures, no colour emoji yet. |
 | **M4** keyboard | Partial. A prefix key table resolving to a declarative `Action`, shared by the standalone and attached paths. The modal stack, configurable bindings, palette and copy mode are still to come. |
+
+**The history and grep modals** are the daemon answering questions a client
+cannot: both live where the shells and the scrollback are. A pane's history
+is merged from two sources with different knowledge — `OSC 133` marks, which
+are this pane's and carry exit statuses, and the shell's own history file,
+which is global, older and statusless — and the difference is shown rather
+than smoothed over. Picking one *types* it at the prompt: a command is not
+idempotent across an hour and a directory change, and the one time that
+matters is the one nobody would have chosen. The help panel is `whatis` and
+a man page's opening, looked up on a thread so the event loop never waits on
+`man`, cached, and matched to the line that asked for it so a late answer is
+dropped rather than shown against the wrong command. Nothing is executed to
+describe it. Grep spans every pane in the session, since the line you are
+looking for is in the window you are not looking at, and each hit carries
+window, pane and row because none of the three implies the others.
 
 **Zoom** (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`) is a frontend capability, not a mux
 one: `Frontend::zoom` returns the new pixel size, or `None` from a frontend

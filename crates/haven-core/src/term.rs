@@ -68,6 +68,19 @@ pub enum CursorShape {
 }
 
 /// Terminal state for one pane.
+/// One command a pane ran, and how it ended.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CommandRun {
+    pub command: String,
+    /// `None` when the shell never reported an end — the command is still
+    /// running, or the pane was closed under it.
+    pub exit: Option<i32>,
+}
+
+/// How many commands a pane remembers. Long enough for a day's work in one
+/// pane, short enough that a hundred panes cannot eat the daemon.
+const HISTORY_LIMIT: usize = 500;
+
 #[derive(Debug)]
 pub struct Terminal {
     /// The *active* grid. On the alternate screen this is the alt grid and the
@@ -87,6 +100,13 @@ pub struct Terminal {
     pub command_running: bool,
     /// Its exit status, once `OSC 133;D` reports one.
     pub command_exit: Option<i32>,
+    /// What this pane has run, oldest first.
+    ///
+    /// The shell's own history file holds more and knows less: it is one
+    /// list for every terminal you have open, with no notion of which pane
+    /// ran what, and no record of how anything ended. This is the half that
+    /// can only be learned here.
+    pub history: std::collections::VecDeque<CommandRun>,
     pub bell_count: u32,
     pub cursor_shape: CursorShape,
     pub cursor_blink: bool,
@@ -113,6 +133,21 @@ pub struct Terminal {
 }
 
 impl Terminal {
+    /// Move the current command into the history, with how it ended.
+    ///
+    /// Repeats are kept. A command that failed and then succeeded is two
+    /// different events, and collapsing them would throw away the only
+    /// interesting part.
+    fn remember_command(&mut self, exit: Option<i32>) {
+        let Some(command) = self.command.clone().filter(|c| !c.trim().is_empty()) else {
+            return;
+        };
+        self.history.push_back(CommandRun { command, exit });
+        while self.history.len() > HISTORY_LIMIT {
+            self.history.pop_front();
+        }
+    }
+
     pub fn new(cols: usize, rows: usize) -> Self {
         Self {
             grid: Grid::new(cols, rows),
@@ -122,6 +157,7 @@ impl Terminal {
             title: None,
             command: None,
             command_running: false,
+            history: std::collections::VecDeque::new(),
             command_exit: None,
             bell_count: 0,
             cursor_shape: CursorShape::default(),
@@ -614,6 +650,12 @@ impl Perform for Terminal {
                     // nothing new has started.
                     Some(b"A") => self.command_running = false,
                     Some(b"C") => {
+                        // A command starting while one is unfinished: the
+                        // shell never sent its `D`, so the old one is
+                        // remembered without a status rather than lost.
+                        if self.command_running {
+                            self.remember_command(None);
+                        }
                         self.command_running = true;
                         self.command_exit = None;
                         for field in &params[2..] {
@@ -628,6 +670,7 @@ impl Perform for Terminal {
                             .get(2)
                             .and_then(|v| std::str::from_utf8(v).ok())
                             .and_then(|v| v.trim().parse().ok());
+                        self.remember_command(self.command_exit);
                     }
                     _ => {}
                 }
@@ -930,6 +973,59 @@ mod tests {
         let mut e = Emulator::new(20, 4);
         e.feed(bytes);
         e
+    }
+
+    #[test]
+    fn a_pane_remembers_what_it_ran_and_how_it_ended() {
+        let mut e = Emulator::new(20, 4);
+        e.feed(b"\x1b]133;C;cmdline=cargo test\x1b\\");
+        assert!(e.term.history.is_empty(), "nothing is remembered until it finishes");
+        e.feed(b"\x1b]133;D;0\x1b\\");
+        e.feed(b"\x1b]133;C;cmdline=false\x1b\\");
+        e.feed(b"\x1b]133;D;1\x1b\\");
+
+        let runs: Vec<(&str, Option<i32>)> =
+            e.term.history.iter().map(|r| (r.command.as_str(), r.exit)).collect();
+        assert_eq!(runs, vec![("cargo test", Some(0)), ("false", Some(1))]);
+    }
+
+    #[test]
+    fn a_command_that_never_reported_an_end_is_still_remembered() {
+        // Some shells miss a `D` — a command killed by a signal, a pane
+        // closed under it. Losing the line because the ending went astray
+        // would be the wrong half to drop.
+        let mut e = Emulator::new(20, 4);
+        e.feed(b"\x1b]133;C;cmdline=sleep 60\x1b\\");
+        e.feed(b"\x1b]133;C;cmdline=echo hi\x1b\\");
+        assert_eq!(e.term.history.len(), 1);
+        assert_eq!(e.term.history[0].command, "sleep 60");
+        assert_eq!(e.term.history[0].exit, None, "no status is not a status of zero");
+    }
+
+    #[test]
+    fn the_same_command_twice_is_two_entries() {
+        // Collapsing repeats would throw away the interesting case: it
+        // failed, you changed something, it passed.
+        let mut e = Emulator::new(20, 4);
+        for status in ["1", "0"] {
+            e.feed(b"\x1b]133;C;cmdline=make\x1b\\");
+            e.feed(format!("\x1b]133;D;{status}\x1b\\").as_bytes());
+        }
+        assert_eq!(e.term.history.len(), 2);
+        assert_eq!(e.term.history[0].exit, Some(1));
+        assert_eq!(e.term.history[1].exit, Some(0));
+    }
+
+    #[test]
+    fn the_history_does_not_grow_without_end() {
+        let mut e = Emulator::new(20, 4);
+        for i in 0..HISTORY_LIMIT + 20 {
+            e.feed(format!("\x1b]133;C;cmdline=echo {i}\x1b\\").as_bytes());
+            e.feed(b"\x1b]133;D;0\x1b\\");
+        }
+        assert_eq!(e.term.history.len(), HISTORY_LIMIT);
+        // The oldest go first, so what is kept is what just happened.
+        assert_eq!(e.term.history.back().unwrap().command, format!("echo {}", HISTORY_LIMIT + 19));
     }
 
     #[test]

@@ -31,6 +31,7 @@ rather than a code change.
 | `S` | synchronize: type into every pane of the tab at once |
 | `q` | number the panes until the next key |
 | `f` | find a tab by name |
+| `/` | [grep every pane](./finding.md) in the session |
 | `D` | detach every other client |
 | `Ctrl+S` / `Ctrl+R` | [save](./sessions.md) every session / build back the saved ones |
 | `P` | the command palette |
@@ -52,6 +53,7 @@ the history that exists.
 |---|---|
 | `Alt+C` | open a tab and [choose what runs in it](./sessions.md#choosing-a-shell): a local shell or [a container](./containers.md) |
 | `Alt+P` | the command palette |
+| `Alt+H` | [this pane's history](./finding.md), with help beside it |
 | `Ctrl+=` / `Ctrl+-` | bigger / smaller text, in the GPU window |
 | `Ctrl+0` | back to the size the config asks for |
 

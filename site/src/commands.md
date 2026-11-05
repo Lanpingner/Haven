@@ -28,6 +28,8 @@ the other.
 | `command-palette` (`palette`) | every command, narrowed by typing |
 | `switch-table <name>` | arm a [key table](./keys.md#key-tables) |
 | `display-panes`, `find-window <text>` | number the panes / go to a tab by name |
+| `history` | [this pane's commands](./finding.md), merged with the shell's own history file |
+| `grep <pattern>` | every matching line in every pane of the session |
 | `send-keys <text>` | type into the pane; `\n` `\t` `\e` `\xNN` are decoded |
 | `synchronize-panes [on\|off]` | type into every pane of the tab at once |
 | `detach-others` | detach every other client from this session |

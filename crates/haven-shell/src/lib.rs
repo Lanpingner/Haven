@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 
 use haven_pty::PtyConfig;
 
+pub mod history;
+
 /// How integration reached the shell, which the UI needs to report honestly.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Injection {

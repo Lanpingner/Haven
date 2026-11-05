@@ -77,6 +77,12 @@ pub enum Intercepted {
     /// Make the text bigger or smaller. Only a frontend that owns its font
     /// can; the rest say so.
     Zoom(frontend::Zoom),
+    /// Ask the daemon for the focused pane's command history.
+    OpenHistory,
+    /// Ask for every line matching this, in every pane of the session.
+    Grep(String),
+    /// Go to a grep hit: its window, its pane, its row.
+    GoTo { window: u16, pane: u32, row: u32 },
     /// Show a menu the composition root built, since only it knows what the
     /// commands are. Title, then label-and-command pairs.
     OpenMenu { title: String, entries: Vec<(String, String)>, filterable: bool },
@@ -119,6 +125,39 @@ fn trim_px(px: f32) -> String {
     } else {
         format!("{px:.1}")
     }
+}
+
+/// A command as one line, for a list that has one row per entry.
+///
+/// A shell history is full of multi-line commands — a `for` loop someone
+/// typed over four lines — and a list that let one of them be four rows
+/// would misalign everything under it.
+fn one_line(text: &str) -> String {
+    let flat: String =
+        text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ; ");
+    flat.chars().take(400).collect()
+}
+
+/// The word a help lookup is about. The same rule the daemon applies, so
+/// an answer can be matched to the line that asked for it.
+pub fn help_subject(command: &str) -> String {
+    const TRANSPARENT: &[&str] = &["sudo", "doas", "env", "command", "nohup", "time", "nice"];
+    for word in command.split_whitespace() {
+        if word.contains('=') || word.starts_with('-') || TRANSPARENT.contains(&word) {
+            continue;
+        }
+        return word.rsplit('/').next().unwrap_or(word).to_string();
+    }
+    command.trim().to_string()
+}
+
+/// A command line as a `send-keys` argument.
+///
+/// `send-keys` decodes `\n`, `\t`, `\e` and `\xNN`, so a command that
+/// contains a backslash has to say so, or `grep '\d'` would be typed as a
+/// carriage return and a `d`.
+fn escape_for_send(command: &str) -> String {
+    command.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "\\t")
 }
 
 /// Seconds since the epoch, for the bar's clock.
@@ -258,6 +297,22 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         })?;
         self.attached = true;
         Ok(())
+    }
+
+    /// Ask what the selected entry is about, if the menu wants a panel.
+    ///
+    /// Nothing is asked for a subject already shown: moving down and back
+    /// up is one keypress each way, and a `man` lookup per keypress is how
+    /// a panel becomes a reason not to use the arrows.
+    fn ask_help(&mut self) {
+        let Some(menu) = &self.menu else { return };
+        let Some(subject) = menu.subject().map(help_subject).filter(|s| !s.is_empty()) else {
+            return;
+        };
+        if menu.detail.as_ref().is_some_and(|d| d.subject == subject) {
+            return;
+        }
+        let _ = self.transport.send(ClientMsg::Help { command: subject });
     }
 
     /// A command with this client's container mounts appended.
@@ -427,6 +482,9 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             self.menu = None;
             return self.run_menu_command(&command);
         }
+        // The selection may have moved, and the panel beside it is about
+        // whatever is selected now.
+        self.ask_help();
         Ok(Tick::Redraw)
     }
 
@@ -474,6 +532,25 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             Intercepted::ContainerMounts { add, remove } => {
                 self.frame.notice = Some(self.change_mounts(add, remove));
                 Tick::Redraw
+            }
+            Intercepted::OpenHistory => {
+                match self.focus {
+                    Some(pane) => self.transport.send(ClientMsg::History { pane })?,
+                    None => self.frame.notice = Some("no pane to take a history from".into()),
+                }
+                Tick::Idle
+            }
+            Intercepted::Grep(query) => {
+                self.transport.send(ClientMsg::Grep { query })?;
+                Tick::Idle
+            }
+            Intercepted::GoTo { window, pane, row } => {
+                // Three steps because a match is in a pane, in a window,
+                // at a row, and none of the three implies the others.
+                self.transport.send(ClientMsg::Action(Action::SelectWindow(window)))?;
+                self.transport.send(ClientMsg::Action(Action::SelectPane(pane)))?;
+                self.transport.send(ClientMsg::ScrollTo { pane: PaneId(pane), row })?;
+                Tick::Idle
             }
             Intercepted::Zoom(step) => {
                 match self.frontend.zoom(step) {
@@ -1196,6 +1273,69 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     menu = menu.filterable();
                 }
                 self.menu = Some(menu);
+                true
+            }
+            ServerMsg::History { entries, .. } => {
+                // Newest last is how the daemon sends it and how a shell
+                // thinks of it; a menu is read from the top, so the list is
+                // turned over here rather than there.
+                let mut labels: Vec<(String, String)> = Vec::new();
+                let mut subjects: Vec<String> = Vec::new();
+                for entry in entries.iter().rev() {
+                    let mark = match (entry.from_pane, entry.exit) {
+                        (true, Some(0)) => "+",
+                        (true, Some(_)) => "!",
+                        (true, None) => "*",
+                        // From the shell's file: this pane never saw it, so
+                        // there is no status to claim.
+                        (false, _) => " ",
+                    };
+                    labels.push((
+                        format!("{mark} {}", one_line(&entry.command)),
+                        // Typed at the prompt, not run. What a past command
+                        // did is not what it would do now — a different
+                        // directory, a different branch — and the one that
+                        // matters is the one you would not have chosen.
+                        format!("send-keys {}", escape_for_send(&entry.command)),
+                    ));
+                    subjects.push(entry.command.clone());
+                }
+                let mut menu = menu::Menu::new("history", labels).filterable();
+                menu = menu.with_subjects(subjects);
+                self.menu = Some(menu);
+                self.ask_help();
+                true
+            }
+            ServerMsg::Help { command, text } => {
+                if let Some(menu) = &mut self.menu {
+                    // Dropped unless it is about the line now selected: a
+                    // lookup can come back after the selection moved on.
+                    if menu.subject().map(crate::help_subject) == Some(command.clone()) {
+                        menu.detail = Some(menu::MenuDetail {
+                            subject: command,
+                            lines: text.lines().map(str::to_string).collect(),
+                        });
+                        return true;
+                    }
+                }
+                false
+            }
+            ServerMsg::Matches { query, hits } => {
+                let entries: Vec<(String, String)> = hits
+                    .iter()
+                    .map(|hit| {
+                        (
+                            format!("{:>3}:{:<6} {}", hit.window, hit.row, one_line(&hit.text)),
+                            format!("goto {} {} {}", hit.window, hit.pane.0, hit.row),
+                        )
+                    })
+                    .collect();
+                let title = if entries.is_empty() {
+                    format!("grep {query} — nothing")
+                } else {
+                    format!("grep {query} — {} lines", entries.len())
+                };
+                self.menu = Some(menu::Menu::new(title, entries).filterable());
                 true
             }
             ServerMsg::Environment(env) => {

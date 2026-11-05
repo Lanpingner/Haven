@@ -57,6 +57,11 @@ impl PaneRuntime {
     }
 
     /// What this pane was asked to run, if anything in particular.
+    /// What this pane has run, as its shell reported it.
+    pub fn history(&self) -> &std::collections::VecDeque<haven_core::term::CommandRun> {
+        &self.emulator.term.history
+    }
+
     pub fn program(&self) -> Option<&std::path::Path> {
         self.program.as_deref()
     }

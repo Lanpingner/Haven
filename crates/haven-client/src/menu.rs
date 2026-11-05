@@ -24,11 +24,51 @@ pub struct Menu {
     /// Whether typing filters or picks. A menu of four shells is faster with
     /// digits; a list of forty commands is only usable by typing.
     pub filterable: bool,
+    /// What each entry is *about*, for a panel that explains it — the
+    /// command a history line would run, which is not the label, because
+    /// the label carries a status mark and the lookup must not.
+    ///
+    /// Empty means no panel. Parallel to `entries` rather than a third
+    /// field in the tuple, so every menu that does not want one is
+    /// unchanged.
+    pub subjects: Vec<String>,
+    /// The panel's contents, as they arrive. A lookup is not instant, so
+    /// this is `None` until one comes back and the panel says so.
+    pub detail: Option<MenuDetail>,
+}
+
+/// What is shown beside the list.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MenuDetail {
+    /// Which subject this is about, so an answer that arrives after the
+    /// selection moved on is dropped rather than shown against the wrong
+    /// line.
+    pub subject: String,
+    pub lines: Vec<String>,
 }
 
 impl Menu {
     pub fn new(title: impl Into<String>, entries: Vec<(String, String)>) -> Self {
-        Self { title: title.into(), entries, selected: 0, filter: String::new(), filterable: false }
+        Self {
+            title: title.into(),
+            entries,
+            selected: 0,
+            filter: String::new(),
+            filterable: false,
+            subjects: Vec::new(),
+            detail: None,
+        }
+    }
+
+    /// A menu whose entries are explained in a panel beside them.
+    pub fn with_subjects(mut self, subjects: Vec<String>) -> Self {
+        self.subjects = subjects;
+        self
+    }
+
+    /// What the selected entry is about, for the panel.
+    pub fn subject(&self) -> Option<&str> {
+        self.subjects.get(self.selected).map(String::as_str)
     }
 
     /// A menu you narrow by typing rather than one you pick from by number.
@@ -110,9 +150,25 @@ impl Menu {
         let visible = self.visible();
         // Two rows of border, and never more than the screen can hold.
         let room = (size.rows as usize).saturating_sub(4);
-        let shown = visible.len().min(room.max(1)).max(1);
+        // How wide a panel beside the list would be, settled before the
+        // height, because the help has to be wrapped before anyone can
+        // know how many rows it wants.
+        let detail_width = match &self.detail {
+            Some(_) if size.cols >= 60 => (size.cols as usize / 2).clamp(20, 48),
+            _ => 0,
+        };
+        let detail_lines: Vec<String> = self
+            .detail
+            .as_ref()
+            .filter(|_| detail_width > 0)
+            .map(|d| wrap(&d.lines, detail_width))
+            .unwrap_or_default();
+        // As tall as whichever side has more to say. Sizing it to the list
+        // alone cut the help off after five lines because five commands
+        // happened to match.
+        let shown = visible.len().max(detail_lines.len()).min(room.max(1)).max(1);
         let at = visible.iter().position(|i| *i == self.selected).unwrap_or(0);
-        let first = at.saturating_sub(shown - 1);
+        let first = at.saturating_sub(shown.saturating_sub(1).min(at));
 
         // The title carries what has been typed, so the filter is visible
         // without a second row for it.
@@ -132,22 +188,39 @@ impl Menu {
             .unwrap_or(NOTHING.len());
         // Room for " 1 " in front of the widest label, and never narrower
         // than the title — which grows as the filter is typed.
-        let inner = (widest + 4).max(title.chars().count() + 2);
+        let mut inner = (widest + 4).max(title.chars().count() + 2);
+        if detail_width > 0 {
+            // The list gives way to the panel rather than the other way
+            // round: a help column eight characters wide explains nothing.
+            inner = inner.min(size.cols as usize - detail_width - 5);
+            inner += detail_width + 3;
+        }
         let cols = (inner + 2).min(size.cols as usize);
         let inner = cols.saturating_sub(2);
+        let list_width = inner.saturating_sub(if detail_width > 0 { detail_width + 3 } else { 0 });
 
         let mut rows = Vec::with_capacity(shown + 2);
         rows.push(border_row(g, cols, &title, theme, true));
         if visible.is_empty() {
             rows.push(panel_row(g, NOTHING, inner, theme.panel_dim.style(), theme));
         }
-        for (row, index) in visible.iter().enumerate().skip(first).take(shown) {
+        for (n, (row, index)) in visible.iter().enumerate().skip(first).take(shown).enumerate() {
             let (label, _) = &self.entries[*index];
             let style =
                 if *index == self.selected { theme.selection.style() } else { theme.panel.style() };
             let text =
                 if self.filterable { format!(" {label}") } else { format!(" {} {label}", row + 1) };
-            rows.push(panel_row(g, &text, inner, style, theme));
+            if detail_width == 0 {
+                rows.push(panel_row(g, &text, inner, style, theme));
+            } else {
+                let help = detail_lines.get(n).cloned().unwrap_or_default();
+                rows.push(split_row(g, &text, &help, list_width, detail_width, style, theme));
+            }
+        }
+        // Help that outlasts the list: rows with nothing on the left.
+        for n in visible.len().saturating_sub(first)..shown {
+            let Some(help) = detail_lines.get(n) else { break };
+            rows.push(split_row(g, "", help, list_width, detail_width, theme.panel.style(), theme));
         }
         rows.push(border_row(g, cols, "", theme, false));
 
@@ -169,6 +242,68 @@ impl Menu {
 /// Shown in place of the list when the filter admits nothing. A box that
 /// simply emptied would look like a hang.
 const NOTHING: &str = " nothing matches";
+
+/// Wrap help text to the panel's width, keeping its blank lines.
+fn wrap(lines: &[String], width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in lines {
+        if line.trim().is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        let mut current = String::new();
+        for word in line.split_whitespace() {
+            if current.is_empty() {
+                current = word.to_string();
+            } else if current.chars().count() + 1 + word.chars().count() <= width {
+                current.push(' ');
+                current.push_str(word);
+            } else {
+                out.push(std::mem::take(&mut current));
+                current = word.to_string();
+            }
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+    }
+    out
+}
+
+/// A row with the list on the left and its explanation on the right.
+///
+/// Three spans rather than one string, because the selection highlight
+/// belongs to the entry and not to the paragraph next to it.
+#[allow(clippy::too_many_arguments)]
+fn split_row(
+    g: &crate::theme::Glyphs,
+    left: &str,
+    right: &str,
+    left_width: usize,
+    right_width: usize,
+    left_style: haven_core::Style,
+    theme: &Theme,
+) -> FrameRow {
+    let border = theme.panel_border.style();
+    FrameRow {
+        spans: vec![
+            Span { col: 0, text: g.vertical.clone(), style: border },
+            Span { col: 1, text: pad(left, left_width), style: left_style },
+            Span { col: (left_width + 1) as u16, text: format!(" {} ", g.vertical), style: border },
+            Span {
+                col: (left_width + 4) as u16,
+                text: pad(right, right_width),
+                style: theme.panel_dim.style(),
+            },
+            Span {
+                col: (left_width + 4 + right_width) as u16,
+                text: g.vertical.clone(),
+                style: border,
+            },
+        ],
+        rev: 0,
+    }
+}
 
 /// One row of a panel: border, padded content, border.
 fn panel_row(
@@ -194,6 +329,87 @@ fn panel_row(
 
 #[cfg(test)]
 mod tests {
+
+    fn with_help(lines: &[&str]) -> Menu {
+        let entries: Vec<(String, String)> =
+            ["a", "b"].iter().map(|c| (format!("cmd {c}"), format!("send-keys {c}"))).collect();
+        let mut m = Menu::new("history", entries)
+            .filterable()
+            .with_subjects(vec!["cmd".into(), "cmd".into()]);
+        m.detail = Some(MenuDetail {
+            subject: "cmd".into(),
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+        });
+        m
+    }
+
+    fn drawn(menu: &Menu, cols: u16, rows: u16) -> Vec<String> {
+        let theme = Theme::default();
+        let size = CellSize { cols, rows, pixel_width: 0, pixel_height: 0 };
+        let widget = menu.widget(size, &theme).expect("a widget");
+        widget
+            .rows
+            .iter()
+            .map(|row| {
+                let mut line = String::new();
+                for span in &row.spans {
+                    while line.chars().count() < span.col as usize {
+                        line.push(' ');
+                    }
+                    line.push_str(&span.text);
+                }
+                line
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_panel_appears_beside_the_list_when_there_is_room_for_one() {
+        let menu = with_help(&["grep - print lines that match patterns"]);
+        let wide = drawn(&menu, 100, 12);
+        assert!(wide[1].contains("print lines"), "{:?}", wide[1]);
+        // And on a narrow screen the list wins: a help column eight
+        // characters wide explains nothing.
+        let narrow = drawn(&menu, 50, 12);
+        assert!(!narrow.iter().any(|l| l.contains("print lines")), "{narrow:?}");
+        assert!(narrow[1].contains("cmd a"), "{:?}", narrow[1]);
+    }
+
+    #[test]
+    fn the_box_is_as_tall_as_whichever_side_has_more_to_say() {
+        // Two entries and six lines of help: sizing the box to the list
+        // cut the help off at two, which is how this was found.
+        let menu = with_help(&["one", "two", "three", "four", "five", "six"]);
+        let rows = drawn(&menu, 100, 20);
+        let body = rows[1..rows.len() - 1].to_vec();
+        assert_eq!(body.len(), 6, "{body:?}");
+        assert!(body[5].contains("six"), "the last line of help was dropped: {body:?}");
+        // The rows past the end of the list have nothing on the left.
+        assert!(body[3].trim_start_matches(['│', ' ']).starts_with("four"), "{:?}", body[3]);
+    }
+
+    #[test]
+    fn a_panel_cannot_push_the_box_off_the_screen() {
+        let menu = with_help(&["a very long line that will certainly need wrapping somewhere"]);
+        for cols in [60u16, 61, 80, 120, 200] {
+            let rows = drawn(&menu, cols, 12);
+            let widest = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0);
+            assert!(widest <= cols as usize, "{cols} columns, drew {widest}");
+        }
+    }
+
+    #[test]
+    fn help_is_wrapped_at_the_panel_width_and_keeps_its_paragraphs() {
+        let lines = vec![
+            "one two three four five six seven".to_string(),
+            String::new(),
+            "then".to_string(),
+        ];
+        let wrapped = wrap(&lines, 12);
+        assert!(wrapped.iter().all(|l| l.chars().count() <= 12), "{wrapped:?}");
+        assert!(wrapped.contains(&String::new()), "the blank line went missing: {wrapped:?}");
+        assert_eq!(wrapped.last().unwrap(), "then");
+    }
     use super::*;
 
     fn menu() -> Menu {

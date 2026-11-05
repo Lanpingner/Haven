@@ -623,6 +623,132 @@ fn a_frontend_that_does_not_own_its_font_says_so() {
 }
 
 #[test]
+fn the_history_modal_lists_the_newest_first_and_types_rather_than_runs() {
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::History {
+            pane: PaneId(1),
+            entries: vec![
+                haven_proto::HistoryEntry {
+                    command: "vim notes.md".into(),
+                    exit: None,
+                    from_pane: false,
+                },
+                haven_proto::HistoryEntry {
+                    command: "cargo test".into(),
+                    exit: Some(0),
+                    from_pane: true,
+                },
+                haven_proto::HistoryEntry {
+                    command: "false".into(),
+                    exit: Some(1),
+                    from_pane: true,
+                },
+            ],
+        },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(80, 12), []), server);
+    client.tick().unwrap();
+
+    let menu = client.menu.as_ref().expect("no history menu");
+    // Newest at the top: a history is read from the end.
+    assert!(menu.entries[0].0.contains("false"), "{:?}", menu.entries[0]);
+    assert!(menu.entries[2].0.contains("vim"), "{:?}", menu.entries[2]);
+    // What this pane ran carries how it ended; what the file holds cannot.
+    assert!(
+        menu.entries[0].0.starts_with('!'),
+        "a failure should be marked: {:?}",
+        menu.entries[0]
+    );
+    assert!(menu.entries[1].0.starts_with('+'), "{:?}", menu.entries[1]);
+    assert!(menu.entries[2].0.starts_with(' '), "{:?}", menu.entries[2]);
+    // Enter types it at the prompt. Nothing runs because Haven decided to.
+    assert_eq!(menu.entries[0].1, "send-keys false");
+    assert!(menu.filterable, "a history is long enough to need typing");
+}
+
+#[test]
+fn a_history_entry_is_one_row_however_many_lines_the_command_had() {
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::History {
+            pane: PaneId(1),
+            entries: vec![haven_proto::HistoryEntry {
+                command: "for f in *\ndo\n  echo $f\ndone".into(),
+                exit: Some(0),
+                from_pane: true,
+            }],
+        },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(80, 12), []), server);
+    client.tick().unwrap();
+    let menu = client.menu.as_ref().expect("no menu");
+    assert!(!menu.entries[0].0.contains('\n'), "a list row cannot be four rows");
+    assert!(menu.entries[0].0.contains("for f in * ; do"), "{:?}", menu.entries[0].0);
+    // And the newlines survive into what gets typed, escaped for send-keys.
+    assert!(menu.entries[0].1.contains("\\n"), "{:?}", menu.entries[0].1);
+}
+
+#[test]
+fn help_arriving_late_is_not_shown_against_the_wrong_line() {
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::History {
+            pane: PaneId(1),
+            entries: vec![haven_proto::HistoryEntry {
+                command: "git status".into(),
+                exit: Some(0),
+                from_pane: true,
+            }],
+        },
+        // An answer about something else entirely: the selection moved on
+        // while `man` was running.
+        ServerMsg::Help { command: "tar".into(), text: "tar - archive files".into() },
+        ServerMsg::Help { command: "git".into(), text: "git - content tracker".into() },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(80, 12), []), server);
+    client.tick().unwrap();
+    let detail = client.menu.as_ref().and_then(|m| m.detail.clone()).expect("no panel");
+    assert_eq!(detail.subject, "git", "the stale answer was shown: {detail:?}");
+    assert!(detail.lines[0].contains("content tracker"));
+}
+
+#[test]
+fn a_grep_hit_knows_its_window_its_pane_and_its_row() {
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Matches {
+            query: "error".into(),
+            hits: vec![haven_proto::GrepHit {
+                pane: PaneId(7),
+                window: 2,
+                row: 413,
+                text: "error[E0308]: mismatched types".into(),
+            }],
+        },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(80, 12), []), server);
+    client.tick().unwrap();
+    let menu = client.menu.as_ref().expect("no grep menu");
+    assert!(menu.title.contains("1 lines"), "{}", menu.title);
+    assert!(menu.entries[0].0.contains("mismatched types"), "{:?}", menu.entries[0]);
+    // None of the three implies the others, so the pick carries all three.
+    assert_eq!(menu.entries[0].1, "goto 2 7 413");
+}
+
+#[test]
+fn a_grep_that_found_nothing_says_so_rather_than_showing_an_empty_box() {
+    let server = ScriptedTransport::new([
+        ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1)),
+        ServerMsg::Matches { query: "zzz".into(), hits: vec![] },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(80, 12), []), server);
+    client.tick().unwrap();
+    let menu = client.menu.as_ref().expect("no menu");
+    assert!(menu.title.contains("nothing"), "{}", menu.title);
+}
+
+#[test]
 fn a_menu_pick_that_opens_another_menu_is_not_dropped_on_the_floor() {
     // The bug this is here for: picking a distro did nothing and said
     // nothing. Menu picks honoured only `Act` — the verdict that sends a

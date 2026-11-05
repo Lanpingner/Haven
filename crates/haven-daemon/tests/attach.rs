@@ -775,6 +775,82 @@ fn a_new_pane_starts_where_the_one_you_were_in_is() {
 }
 
 #[test]
+fn a_grep_finds_lines_in_every_pane_and_says_which_one() {
+    // The point of searching the session rather than the pane: the error
+    // you are looking for is in the window you are not looking at.
+    let mut daemon = daemon();
+    let mut client = attach(&mut daemon, 40, 10);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let first = client.focus.expect("focus");
+    send_input(&mut client, first, b"echo needle-one\n");
+    send_action(&mut client, Action::NewWindow { program: None }).expect("new window");
+    settle(&mut daemon, &mut [&mut client], |c| {
+        c[0].frame.status.as_ref().is_some_and(|s| s.windows.len() == 2)
+    });
+    let second = client.focus.expect("focus");
+    send_input(&mut client, second, b"echo needle-two\n");
+    for _ in 0..60 {
+        daemon.tick(Duration::from_millis(10)).expect("tick");
+        let _ = client.tick();
+    }
+
+    client.transport.send(ClientMsg::Grep { query: "needle-".into() }).expect("grep");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].menu.as_ref().is_some_and(|m| m.entries.len() >= 2)
+        }),
+        "the grep found {:?}",
+        client.menu.as_ref().map(|m| m.entries.clone())
+    );
+    let menu = client.menu.as_ref().expect("no menu");
+    let text: String = menu.entries.iter().map(|(label, _)| label.clone()).collect();
+    assert!(text.contains("needle-one"), "{text}");
+    assert!(text.contains("needle-two"), "a pane in another window was not searched: {text}");
+    // Both panes are represented, each hit naming where it is.
+    let panes: std::collections::HashSet<&str> =
+        menu.entries.iter().filter_map(|(_, cmd)| cmd.split(' ').nth(2)).collect();
+    assert!(panes.len() >= 2, "every hit came from one pane: {:?}", menu.entries);
+}
+
+#[test]
+fn a_panes_history_comes_back_marked_as_this_panes_own() {
+    // The marking spawner stands in for a shell with integration: it
+    // reports each line as a command starting. Typing the escape by hand
+    // cannot work — the tty echoes control characters in caret notation —
+    // which is why that spawner exists.
+    let mut daemon = Daemon::detached(marking_spawner);
+    let mut client = attach(&mut daemon, 40, 10);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let pane = client.focus.expect("focus");
+    send_input(&mut client, pane, b"cargo test\n");
+    // A second command: the first is remembered when something displaces
+    // it, since this stub never reports an ending.
+    send_input(&mut client, pane, b"ls -la\n");
+    for _ in 0..60 {
+        daemon.tick(Duration::from_millis(10)).expect("tick");
+        let _ = client.tick();
+    }
+
+    client.transport.send(ClientMsg::History { pane }).expect("history");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].menu
+                .as_ref()
+                .is_some_and(|m| m.entries.iter().any(|(label, _)| label.contains("cargo test")))
+        }),
+        "the pane's own command was not in its history"
+    );
+    let menu = client.menu.as_ref().expect("no menu");
+    let (label, command) =
+        menu.entries.iter().find(|(l, _)| l.contains("cargo test")).expect("the entry");
+    // Ran here, with no ending reported: marked, but not as a success.
+    assert!(label.starts_with('*'), "{label:?}");
+    assert_eq!(command, "send-keys cargo test");
+    // And the panel asks about the program, not the whole line.
+    assert_eq!(haven_client::help_subject("cargo test"), "cargo");
+}
+
+#[test]
 fn renaming_a_session_reaches_everything_that_shows_its_name() {
     // It reached nothing. The name was kept twice — once in the mux, once
     // beside it in the daemon — and `rename-session` wrote the mux's copy

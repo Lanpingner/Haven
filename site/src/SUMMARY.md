@@ -9,6 +9,7 @@
   - [The command line](./commands.md)
 - [Sessions that outlive the machine](./sessions.md)
 - [A pane that is another distro](./containers.md)
+- [The history, and finding things](./finding.md)
 - [Themes and configuration](./themes.md)
 - [Honest status](./status.md)
   - [Notes from the bug log](./bug-log.md)

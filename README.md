@@ -55,7 +55,7 @@ How the release, the installer and the two AUR packages fit together is in
 ## Try it
 
 ```sh
-cargo test --workspace     # 608 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 635 tests, incl. mc/vim/less driven on real ptys
 
 # A GPU window, attached to the daemon (which it starts if needed).
 cargo run --release -p haven -- gpu
@@ -183,6 +183,40 @@ and skips — so it is safe from a login script that may run twice, and safe to
 run while you are working. The file is
 `$XDG_DATA_HOME/haven/sessions.toml`, written atomically, and it is TOML you
 can read and edit.
+
+### History, and finding things
+
+`Alt+H` opens the focused pane's command history with a panel beside it
+saying what each command *is*:
+
+```
+┌─ history ──────────────────────────────────────────────────────┐
+│ ! false                      │ grep (1) - print lines that     │
+│ + cargo test --workspace     │ match patterns                  │
+│   grep -rn needle crates/    │                                 │
+└────────────────────────────────────────────────────────────────┘
+```
+
+The list merges two sources that know different things: what *this pane*
+ran, learned from shell integration, with how each command ended (`+`
+succeeded, `!` failed, `*` never said); and the shell's own history file —
+fish, zsh or bash, each in its own format — which goes back months and knows
+nothing else. Type to narrow, `Enter` to take one.
+
+`Enter` **types** the command at your prompt rather than running it. What a
+command did an hour ago is not what it would do now, and the once that
+matters is the once you would not have chosen.
+
+The panel comes from `whatis` and the opening of the man page. Nothing is run
+to describe it — `--help` would cover more and means running a program that
+may do its job instead — and the lookup happens on a thread in the daemon, so
+holding an arrow down does not start a `man` per keypress.
+
+`Ctrl+A` `/` greps **every pane in the session**, not just the one in front
+of you, and lists what it found with the window and row. `Enter` goes there.
+It is the other half of copy mode's search: that one answers *where is the
+next one*, this one answers *where are they all* — including in the window
+you have since left.
 
 ### Containers as panes
 
@@ -330,6 +364,8 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `scroll-up`, `scroll-down`, `scroll-end` | as the paging keys do |
 | `copy-mode`, `paste-buffer` | as `[` and `]` do |
 | `font-bigger` (`zoom-in`), `font-smaller`, `font-reset` | the size of the text in the window |
+| `history` | this pane's commands, merged with the shell's history file |
+| `grep <pattern>` | every matching line in every pane of the session |
 | `last`, `last-pane` | back to the previous tab / pane |
 | `rename-window <name>`, `rename-session <name>` | an empty name gives a tab back to its command |
 | `command-prompt <text>` | open the command line with `text` on it |
