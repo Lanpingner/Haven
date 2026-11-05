@@ -9,7 +9,7 @@ session that you would otherwise go looking for by hand.
 beside it:
 
 ```
-┌─ history ──────────────────────────────────────────────────────┐
+┌─ history · type to search ─────────────────────────────────────┐
 │ ! false                      │ grep (1) - print lines that     │
 │ + cargo test --workspace     │ match patterns                  │
 │ + git status --short         │                                 │
@@ -19,6 +19,9 @@ beside it:
 ```
 
 Type to narrow it, arrows to move, `Enter` to take one, `Esc` to drop it.
+The box is a fixed frame and does not resize as you narrow the list — see
+[one modal, everywhere](./modals.md), which is also what the palette and the
+session tree are.
 
 ### Two sources, and the difference is visible
 

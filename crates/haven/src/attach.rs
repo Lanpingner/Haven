@@ -197,7 +197,7 @@ fn act(command: &str, mode: &mut Mode, bindings: &Bindings) -> Intercepted {
             };
             Intercepted::Consumed
         }
-        _ => run_command(command),
+        _ => run_command(command, bindings),
     }
 }
 
@@ -205,7 +205,7 @@ fn act(command: &str, mode: &mut Mode, bindings: &Bindings) -> Intercepted {
 ///
 /// An empty line is a no-op rather than an error: pressing Enter on nothing
 /// is how people cancel.
-fn run_command(line: &str) -> Intercepted {
+fn run_command(line: &str, bindings: &Bindings) -> Intercepted {
     if line.trim().is_empty() {
         return Intercepted::Consumed;
     }
@@ -231,9 +231,29 @@ fn run_command(line: &str) -> Intercepted {
             // Built here because this is where the vocabulary lives. The
             // client has no idea what a command is, which is what keeps the
             // menu from being able to offer one the command line cannot run.
+            // With the key that runs it, where one does. A list of every
+            // command that says nothing about which of them you could have
+            // pressed teaches nobody the keys.
             entries: keys::COMMANDS
                 .iter()
-                .map(|c| ((*c).to_string(), keys::palette_entry(c)))
+                .map(|c| {
+                    let command = keys::palette_entry(c);
+                    // Compared as *actions*, not as strings: the table
+                    // says `n` and the palette says `next-window`, and
+                    // they are the same key.
+                    let want = keys::parse_command(c).ok();
+                    let keys = bindings.keys_matching(|bound| {
+                        bound == command
+                            || want.as_ref().is_some_and(|want| {
+                                keys::parse_command(bound).ok().as_ref() == Some(want)
+                            })
+                    });
+                    let label = match keys {
+                        Some(keys) => format!("{c:<22}{keys}"),
+                        None => (*c).to_string(),
+                    };
+                    (label, command)
+                })
                 .collect(),
             filterable: true,
         },
@@ -769,7 +789,10 @@ mod tests {
             keys::parse_command("zoom-out"),
             Ok(keys::Action::Font(haven_client::Zoom::Out))
         );
-        assert_eq!(run_command("font-reset"), Intercepted::Zoom(haven_client::Zoom::Reset));
+        assert_eq!(
+            run_command("font-reset", &keys()),
+            Intercepted::Zoom(haven_client::Zoom::Reset)
+        );
     }
 
     #[test]
@@ -777,7 +800,7 @@ mod tests {
         // Picking a distro is two questions, and the second one is the one
         // that matters a week later: did what I install in here survive.
         assert_eq!(
-            run_command("container-shell new-window docker://run/archlinux:latest"),
+            run_command("container-shell new-window docker://run/archlinux:latest", &keys()),
             Intercepted::ChooseLifetime {
                 verb: "new-window".into(),
                 spec: "docker://run/archlinux:latest".into()
@@ -791,13 +814,13 @@ mod tests {
         // spec as the program, so nothing past this point knows a container
         // was involved — not the protocol, not the mux, not the save file.
         assert_eq!(
-            run_command("new-window docker://run/archlinux:latest?keep"),
+            run_command("new-window docker://run/archlinux:latest?keep", &keys()),
             Intercepted::Act(Wire::NewWindow {
                 program: Some("docker://run/archlinux:latest?keep".into())
             })
         );
         assert_eq!(
-            run_command("split-v docker://run/alpine:latest?scratch&mount=cwd"),
+            run_command("split-v docker://run/alpine:latest?scratch&mount=cwd", &keys()),
             Intercepted::Act(Wire::SplitColumns {
                 program: Some("docker://run/alpine:latest?scratch&mount=cwd".into())
             })
@@ -809,7 +832,7 @@ mod tests {
         // It already exists, so there is no lifetime to choose: it outlives
         // the pane whatever the pane does.
         assert_eq!(
-            run_command("new-window docker://exec/web"),
+            run_command("new-window docker://exec/web", &keys()),
             Intercepted::Act(Wire::NewWindow { program: Some("docker://exec/web".into()) })
         );
     }
@@ -817,21 +840,21 @@ mod tests {
     #[test]
     fn mounts_are_added_dropped_and_asked_about() {
         assert_eq!(
-            run_command("container-mount /Projects"),
+            run_command("container-mount /Projects", &keys()),
             Intercepted::ContainerMounts { add: Some("/Projects".into()), remove: None }
         );
         // `cwd` is the word for the directory the pane was opened in,
         // resolved where the pane is spawned rather than where it was typed.
         assert_eq!(
-            run_command("mount cwd"),
+            run_command("mount cwd", &keys()),
             Intercepted::ContainerMounts { add: Some("cwd".into()), remove: None }
         );
         assert_eq!(
-            run_command("container-unmount /Projects"),
+            run_command("container-unmount /Projects", &keys()),
             Intercepted::ContainerMounts { add: None, remove: Some("/Projects".into()) }
         );
         assert_eq!(
-            run_command("container-mounts"),
+            run_command("container-mounts", &keys()),
             Intercepted::ContainerMounts { add: None, remove: None }
         );
     }
@@ -848,7 +871,7 @@ mod tests {
         // The menu holds command strings and nothing else, so this is the
         // only place that decides what one means.
         assert_eq!(
-            run_command("split-v /usr/bin/fish"),
+            run_command("split-v /usr/bin/fish", &keys()),
             Intercepted::Act(Wire::SplitColumns { program: Some("/usr/bin/fish".into()) })
         );
     }
@@ -925,10 +948,37 @@ mod tests {
                     .map(|(l, _)| l)
                     .collect();
                 assert!(
-                    prompted.contains(&&"select-window".to_string()),
+                    prompted.iter().any(|l| l.starts_with("select-window")),
                     "select-window needs a number: {prompted:?}"
                 );
-                assert!(prompted.contains(&&"rename-window".to_string()));
+                assert!(prompted.iter().any(|l| l.starts_with("rename-window")));
+
+                // And a command with a key says so. A list of every command
+                // that mentions none of the keys teaches nobody the keys.
+                // By first word, not by prefix: `next` would otherwise find
+                // `next-layout` and the assertion below would be about the
+                // wrong row.
+                let labelled = |name: &str| -> String {
+                    entries
+                        .iter()
+                        .find(|(l, _)| l.split_whitespace().next() == Some(name))
+                        .map(|(l, _)| l.clone())
+                        .unwrap_or_default()
+                };
+                assert!(labelled("split-v").contains("C-a %"), "{:?}", labelled("split-v"));
+                assert!(
+                    labelled("rename-window").contains("C-a ,"),
+                    "{:?}",
+                    labelled("rename-window")
+                );
+                // An alias counts. The tables are written the way a person
+                // writes a binding — `%` for a vertical split — so a
+                // palette comparing strings found `C-a ,` for
+                // `rename-window` and nothing for `split-v`.
+                assert!(labelled("zoom").contains("C-a z"), "{:?}", labelled("zoom"));
+                assert!(labelled("next").contains("C-a n"), "{:?}", labelled("next"));
+                // One nobody bound is left alone rather than padded out.
+                assert_eq!(labelled("container-mounts").trim(), "container-mounts");
             }
             other => panic!("{other:?}"),
         }

@@ -5,10 +5,9 @@
 //! parses exactly as it parses a typed line — so a menu cannot offer anything
 //! the command line could not do, and a new menu is data rather than code.
 
-use haven_proto::{CellSize, PaneRect};
+use haven_proto::CellSize;
 
-use crate::frame::{FrameRow, Span, Widget, WidgetKind};
-use crate::status_bar::{border_row, pad};
+use crate::frame::Widget;
 use crate::theme::Theme;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -142,193 +141,75 @@ impl Menu {
     }
 
     /// The panel, centred over the screen.
+    ///
+    /// Drawn by [`crate::dialog`], which the session tree uses too: one
+    /// box, one set of rules about how big it is and where the filter goes.
     pub fn widget(&self, size: CellSize, theme: &Theme) -> Option<Widget> {
-        if self.entries.is_empty() || size.rows < 4 || size.cols < 10 {
+        if self.entries.is_empty() {
             return None;
         }
-        let g = &theme.glyphs;
         let visible = self.visible();
-        // Two rows of border, and never more than the screen can hold.
-        let room = (size.rows as usize).saturating_sub(4);
-        // How wide a panel beside the list would be, settled before the
-        // height, because the help has to be wrapped before anyone can
-        // know how many rows it wants.
-        let detail_width = match &self.detail {
-            Some(_) if size.cols >= 60 => (size.cols as usize / 2).clamp(20, 48),
-            _ => 0,
-        };
-        let detail_lines: Vec<String> = self
+        let panel_width = crate::dialog::panel_width(size);
+        let panel = self
             .detail
             .as_ref()
-            .filter(|_| detail_width > 0)
-            .map(|d| wrap(&d.lines, detail_width))
+            .filter(|_| panel_width > 0)
+            .map(|d| crate::dialog::wrap_plain(&d.lines, panel_width, theme.panel_dim.style()))
             .unwrap_or_default();
-        // As tall as whichever side has more to say. Sizing it to the list
-        // alone cut the help off after five lines because five commands
-        // happened to match.
-        let shown = visible.len().max(detail_lines.len()).min(room.max(1)).max(1);
-        let at = visible.iter().position(|i| *i == self.selected).unwrap_or(0);
-        let first = at.saturating_sub(shown.saturating_sub(1).min(at));
 
-        // The title carries what has been typed, so the filter is visible
-        // without a second row for it.
-        let title = if self.filter.is_empty() {
-            format!(" {} ", self.title)
-        } else {
-            format!(" {}: {} ", self.title, self.filter)
-        };
-        let widest = visible
+        let rows: Vec<crate::dialog::DialogRow> = visible
             .iter()
-            .skip(first)
-            .take(shown)
-            .map(|i| self.entries[*i].0.chars().count())
-            .max()
-            // With nothing matching there are no labels to measure, and a box
-            // sized from them truncates the very text that explains why.
-            .unwrap_or(NOTHING.len());
-        // Room for " 1 " in front of the widest label, and never narrower
-        // than the title — which grows as the filter is typed.
-        let mut inner = (widest + 4).max(title.chars().count() + 2);
-        if detail_width > 0 {
-            // The list gives way to the panel rather than the other way
-            // round: a help column eight characters wide explains nothing.
-            inner = inner.min(size.cols as usize - detail_width - 5);
-            inner += detail_width + 3;
-        }
-        let cols = (inner + 2).min(size.cols as usize);
-        let inner = cols.saturating_sub(2);
-        let list_width = inner.saturating_sub(if detail_width > 0 { detail_width + 3 } else { 0 });
+            .enumerate()
+            .map(|(n, index)| {
+                let (label, _) = &self.entries[*index];
+                // A digit picks an entry outright on a short menu; a long
+                // one is reached by typing, and the numbers would be a lie
+                // past nine anyway.
+                crate::dialog::DialogRow::new(if self.filterable {
+                    format!(" {label}")
+                } else {
+                    format!(" {} {label}", n + 1)
+                })
+            })
+            .collect();
+        let selected = visible.iter().position(|i| *i == self.selected).unwrap_or(0);
 
-        let mut rows = Vec::with_capacity(shown + 2);
-        rows.push(border_row(g, cols, &title, theme, true));
-        if visible.is_empty() {
-            rows.push(panel_row(g, NOTHING, inner, theme.panel_dim.style(), theme));
-        }
-        for (n, (row, index)) in visible.iter().enumerate().skip(first).take(shown).enumerate() {
-            let (label, _) = &self.entries[*index];
-            let style =
-                if *index == self.selected { theme.selection.style() } else { theme.panel.style() };
-            let text =
-                if self.filterable { format!(" {label}") } else { format!(" {} {label}", row + 1) };
-            if detail_width == 0 {
-                rows.push(panel_row(g, &text, inner, style, theme));
-            } else {
-                let help = detail_lines.get(n).cloned().unwrap_or_default();
-                rows.push(split_row(g, &text, &help, list_width, detail_width, style, theme));
-            }
-        }
-        // Help that outlasts the list: rows with nothing on the left.
-        for n in visible.len().saturating_sub(first)..shown {
-            let Some(help) = detail_lines.get(n) else { break };
-            rows.push(split_row(g, "", help, list_width, detail_width, theme.panel.style(), theme));
-        }
-        rows.push(border_row(g, cols, "", theme, false));
-
-        let height = rows.len() as u16;
-        Some(Widget {
-            kind: WidgetKind::Overlay,
-            rect: PaneRect {
-                pane: haven_proto::PaneId(u32::MAX - 4),
-                col: (size.cols.saturating_sub(cols as u16)) / 2,
-                row: (size.rows.saturating_sub(height)) / 2,
-                cols: cols as u16,
-                rows: height,
-            },
+        crate::dialog::Dialog {
+            title: &self.title,
+            filter: &self.filter,
+            total: self.entries.len(),
             rows,
-        })
-    }
-}
-
-/// Shown in place of the list when the filter admits nothing. A box that
-/// simply emptied would look like a hang.
-const NOTHING: &str = " nothing matches";
-
-/// Wrap help text to the panel's width, keeping its blank lines.
-fn wrap(lines: &[String], width: usize) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in lines {
-        if line.trim().is_empty() {
-            out.push(String::new());
-            continue;
+            selected,
+            panel,
+            searchable: self.filterable,
+            // A menu with subjects is one with a panel, whether or not the
+            // lookup for this line has come back yet.
+            panel_slot: panel_width > 0 && !self.subjects.is_empty(),
+            hint: if self.filterable { " enter · esc" } else { " enter · esc · 1-9 picks" },
+            id: 4,
         }
-        let mut current = String::new();
-        for word in line.split_whitespace() {
-            if current.is_empty() {
-                current = word.to_string();
-            } else if current.chars().count() + 1 + word.chars().count() <= width {
-                current.push(' ');
-                current.push_str(word);
-            } else {
-                out.push(std::mem::take(&mut current));
-                current = word.to_string();
-            }
-        }
-        if !current.is_empty() {
-            out.push(current);
-        }
-    }
-    out
-}
-
-/// A row with the list on the left and its explanation on the right.
-///
-/// Three spans rather than one string, because the selection highlight
-/// belongs to the entry and not to the paragraph next to it.
-#[allow(clippy::too_many_arguments)]
-fn split_row(
-    g: &crate::theme::Glyphs,
-    left: &str,
-    right: &str,
-    left_width: usize,
-    right_width: usize,
-    left_style: haven_core::Style,
-    theme: &Theme,
-) -> FrameRow {
-    let border = theme.panel_border.style();
-    FrameRow {
-        spans: vec![
-            Span { col: 0, text: g.vertical.clone(), style: border },
-            Span { col: 1, text: pad(left, left_width), style: left_style },
-            Span { col: (left_width + 1) as u16, text: format!(" {} ", g.vertical), style: border },
-            Span {
-                col: (left_width + 4) as u16,
-                text: pad(right, right_width),
-                style: theme.panel_dim.style(),
-            },
-            Span {
-                col: (left_width + 4 + right_width) as u16,
-                text: g.vertical.clone(),
-                style: border,
-            },
-        ],
-        rev: 0,
-    }
-}
-
-/// One row of a panel: border, padded content, border.
-fn panel_row(
-    g: &crate::theme::Glyphs,
-    text: &str,
-    inner: usize,
-    style: haven_core::Style,
-    theme: &Theme,
-) -> FrameRow {
-    FrameRow {
-        spans: vec![
-            Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() },
-            Span { col: 1, text: pad(text, inner), style },
-            Span {
-                col: (inner + 1) as u16,
-                text: g.vertical.clone(),
-                style: theme.panel_border.style(),
-            },
-        ],
-        rev: 0,
+        .widget(size, theme)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn menu() -> Menu {
+        Menu::new(
+            "shell",
+            vec![
+                ("fish".into(), "split-v /usr/bin/fish".into()),
+                ("bash".into(), "split-v /bin/bash".into()),
+                ("sh".into(), "split-v /bin/sh".into()),
+            ],
+        )
+    }
+
+    fn size(cols: u16, rows: u16) -> CellSize {
+        CellSize { cols, rows, pixel_width: 0, pixel_height: 0 }
+    }
 
     fn with_help(lines: &[&str]) -> Menu {
         let entries: Vec<(String, String)> =
@@ -364,67 +245,31 @@ mod tests {
     }
 
     #[test]
-    fn a_panel_appears_beside_the_list_when_there_is_room_for_one() {
+    fn a_menu_with_help_shows_it_beside_the_list() {
+        // The geometry is the dialog's business and tested there; this is
+        // only that a menu hands its help over to be drawn.
         let menu = with_help(&["grep - print lines that match patterns"]);
-        let wide = drawn(&menu, 100, 12);
-        assert!(wide[1].contains("print lines"), "{:?}", wide[1]);
-        // And on a narrow screen the list wins: a help column eight
-        // characters wide explains nothing.
-        let narrow = drawn(&menu, 50, 12);
-        assert!(!narrow.iter().any(|l| l.contains("print lines")), "{narrow:?}");
-        assert!(narrow[1].contains("cmd a"), "{:?}", narrow[1]);
+        let wide = drawn(&menu, 100, 16);
+        assert!(wide.iter().any(|l| l.contains("print lines")), "{wide:?}");
+        assert!(wide.iter().any(|l| l.contains("cmd a")), "{wide:?}");
     }
 
     #[test]
-    fn the_box_is_as_tall_as_whichever_side_has_more_to_say() {
-        // Two entries and six lines of help: sizing the box to the list
-        // cut the help off at two, which is how this was found.
-        let menu = with_help(&["one", "two", "three", "four", "five", "six"]);
-        let rows = drawn(&menu, 100, 20);
-        let body = rows[1..rows.len() - 1].to_vec();
-        assert_eq!(body.len(), 6, "{body:?}");
-        assert!(body[5].contains("six"), "the last line of help was dropped: {body:?}");
-        // The rows past the end of the list have nothing on the left.
-        assert!(body[3].trim_start_matches(['│', ' ']).starts_with("four"), "{:?}", body[3]);
-    }
-
-    #[test]
-    fn a_panel_cannot_push_the_box_off_the_screen() {
-        let menu = with_help(&["a very long line that will certainly need wrapping somewhere"]);
-        for cols in [60u16, 61, 80, 120, 200] {
-            let rows = drawn(&menu, cols, 12);
-            let widest = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0);
-            assert!(widest <= cols as usize, "{cols} columns, drew {widest}");
+    fn the_menu_keeps_its_size_while_the_filter_narrows() {
+        // Reported: the history box changed shape on every keystroke and
+        // was hard to read. The dialog decides this; the menu must hand it
+        // the full count rather than the matching one.
+        let mut menu = with_help(&["help"]);
+        for i in 0..20 {
+            menu.entries.push((format!("cmd {i}"), format!("send-keys {i}")));
+            menu.subjects.push("cmd".into());
         }
-    }
-
-    #[test]
-    fn help_is_wrapped_at_the_panel_width_and_keeps_its_paragraphs() {
-        let lines = vec![
-            "one two three four five six seven".to_string(),
-            String::new(),
-            "then".to_string(),
-        ];
-        let wrapped = wrap(&lines, 12);
-        assert!(wrapped.iter().all(|l| l.chars().count() <= 12), "{wrapped:?}");
-        assert!(wrapped.contains(&String::new()), "the blank line went missing: {wrapped:?}");
-        assert_eq!(wrapped.last().unwrap(), "then");
-    }
-    use super::*;
-
-    fn menu() -> Menu {
-        Menu::new(
-            "shell",
-            vec![
-                ("fish".into(), "split-v /usr/bin/fish".into()),
-                ("bash".into(), "split-v /bin/bash".into()),
-                ("sh".into(), "split-v /bin/sh".into()),
-            ],
-        )
-    }
-
-    fn size(cols: u16, rows: u16) -> CellSize {
-        CellSize { cols, rows, pixel_width: 0, pixel_height: 0 }
+        let before = drawn(&menu, 100, 24);
+        menu.filter = "cmd 1".into();
+        menu.resettle();
+        let after = drawn(&menu, 100, 24);
+        assert_eq!(before.len(), after.len(), "the height moved while typing");
+        assert_eq!(before[0].chars().count(), after[0].chars().count(), "the width moved");
     }
 
     #[test]
@@ -450,7 +295,9 @@ mod tests {
     #[test]
     fn the_panel_is_centred_and_holds_every_entry() {
         let w = menu().widget(size(60, 20), &Theme::haven()).expect("a panel");
-        assert_eq!(w.rows.len(), 5, "three entries plus two borders");
+        // Three entries, two borders and the hint row the dialog gives
+        // every modal — a box nobody can leave is a trap.
+        assert_eq!(w.rows.len(), 6);
         // An odd width cannot be centred exactly on an even screen, so the
         // margins are allowed to differ by the one cell that implies.
         let right = 60 - (w.rect.col + w.rect.cols);

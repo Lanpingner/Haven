@@ -179,9 +179,21 @@ nothing.
 
 ## The session tree
 
-`Ctrl+A` `s` opens a chooser over the panes, listing every session and, for the
-one you are attached to, its tabs and the panes inside them. It opens on the
-pane you are in.
+`Ctrl+A` `s` opens a chooser over the panes, listing **every** session with
+its tabs and the panes inside them, and showing what the selected pane is
+on, in its own colours, beside the list. It opens on the pane you are in.
+
+```
+┌─ sessions · type to search ──────────────────────────────────────┐
+│ haven (2 tabs, 3 panes, attached) │ $ cargo test --workspace     │
+│ ├─tab 1: cargo test               │    Compiling haven-client    │
+│ │ ├─pane 10  cargo test …         │ test result: ok. 653 passed  │
+│ │ └─pane 11  vim  ●               │ $                            │
+│ ops (1 tab, 1 pane)               │                              │
+│ └─tab 1: ssh                      │                              │
+│ enter · esc                                                      │
+└──────────────────────────────────────────────────────────────────┘
+```
 
 | Key | Does |
 |---|---|
@@ -191,8 +203,16 @@ pane you are in.
 | `Enter` | go there — attaching to another session if that is what is selected |
 | `Esc` | close |
 
-Only the attached session can show its tabs and panes; for the others the daemon
-reports counts alone, so that is what is listed.
+The tabs come from the listing rather than from your own attachment, so a
+session nobody is attached to opens as a tree like any other — which is the
+case you are in when you are looking for where you left something.
+
+The preview is asked for per selection and only for a pane that is not
+already on the screen beside the list. Holding an arrow down does not send
+a snapshot request per keypress for panes you are moving past.
+
+It is [one modal](./modals.md), shared with the palette, the history and the
+shell menu: the same keys, and a box that does not move while you type.
 
 ## Tab names
 

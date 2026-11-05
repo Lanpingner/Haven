@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -301,6 +301,14 @@ pub enum ClientMsg {
     Help {
         command: String,
     },
+    /// A look at what a pane is showing, for the session tree's preview.
+    /// Any pane in any session, since the point is to see where you are
+    /// not.
+    Preview {
+        pane: PaneId,
+        cols: u16,
+        rows: u16,
+    },
     /// Every line matching `query`, in every pane of this session. The
     /// search message next door finds the *next* match in one pane; this
     /// one is the list you pick from.
@@ -551,6 +559,11 @@ pub enum ServerMsg {
         command: String,
         text: String,
     },
+    /// Answer to [`ClientMsg::Preview`]. Empty when the pane has gone.
+    Preview {
+        pane: PaneId,
+        rows: Vec<PreviewRow>,
+    },
     /// Answer to [`ClientMsg::Grep`], in session order.
     Matches {
         query: String,
@@ -675,6 +688,24 @@ pub struct SessionInfo {
     pub panes: u16,
     pub clients: u16,
     pub size: CellSize,
+    /// What is actually in the session, not just how much of it.
+    ///
+    /// A chooser has to show the tabs of a session you are *not* attached
+    /// to — that is the question it exists to answer — and counts cannot be
+    /// navigated. Sent with the listing, which is asked for when the tree
+    /// opens rather than on every tick.
+    pub tabs: Vec<WindowInfo>,
+}
+
+/// A row of a pane preview, as runs of identical cells.
+///
+/// Styles are *resolved* rather than interned, unlike the rows of an
+/// attached pane: a preview may be of a session whose style table this
+/// client has never been sent, and shipping a second table to colour a
+/// thumbnail would be a great deal of machinery for one panel.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct PreviewRow {
+    pub runs: Vec<(u16, String, Style)>,
 }
 
 /// Pane rectangles in cells, as computed by the daemon's layout solver.

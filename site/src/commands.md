@@ -25,7 +25,7 @@ the other.
 | `choose-shell [verb]` | the shell menu, [containers and all](./containers.md); `verb` is what to do with the pick, `new-window` by default |
 | `container-mount <path>` (`mount`) | hand a host directory to [container panes](./containers.md); `cwd` means the pane's own |
 | `container-unmount <path>` (`unmount`), `container-mounts` (`mounts`) | stop handing one over / say what they are |
-| `command-palette` (`palette`) | every command, narrowed by typing |
+| `command-palette` (`palette`) | every command, narrowed by typing, each with its key |
 | `switch-table <name>` | arm a [key table](./keys.md#key-tables) |
 | `display-panes`, `find-window <text>` | number the panes / go to a tab by name |
 | `history` | [this pane's commands](./finding.md), merged with the shell's own history file |
@@ -40,6 +40,36 @@ the other.
 Aliases are offered by completion deliberately: someone who types `vsplit`
 should see it in the list rather than be told after the fact that it does not
 exist.
+
+## The palette tells you the key
+
+`Ctrl+A` `p` lists every command, and each one that is bound carries the key
+that runs it:
+
+```
+┌─ command · type to search ───────────────────────────────────────┐
+│ split-v               C-a %                                     │
+│ rename-window         C-a ,                                     │
+│ zoom                  C-a z                                     │
+│ container-mounts                                                │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+A palette you have to use every time is a palette that taught you nothing.
+The shortest binding is the one shown — a key with no prefix is one press,
+so that is the one worth learning — and a command nobody bound is listed
+plain rather than with a blank where a key would be.
+
+The lookup runs over the keys as they are configured, not over a table
+written beside them, so rebinding `%` in the config changes what the palette
+says about `split-v`. It compares what the two *mean* rather than how they
+are spelled: bindings are written the way a person writes them — `%`, `n`,
+`z` — and a palette matching strings would claim half the commands had no
+key when the key was right there. It matches a whole command string too,
+which is why `command-prompt rename-window ` finds `,` instead of nothing.
+
+The palette is [one modal](./modals.md), the same one as the history and the
+session tree.
 
 ## Completion
 

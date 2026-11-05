@@ -261,6 +261,9 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
         panes: 2,
         clients: 1,
         size: size(80, 24),
+        // The tree reads tabs from the listing now, so it can show them
+        // for sessions nobody is attached to.
+        tabs: status.windows.clone(),
     }];
 
     // Built before the listing arrives: nothing to select.

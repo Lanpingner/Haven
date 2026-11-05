@@ -9,6 +9,7 @@
 pub mod bindings;
 pub mod chooser;
 pub mod copy;
+pub mod dialog;
 pub mod frame;
 pub mod frontend;
 pub mod input;
@@ -434,7 +435,32 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
             _ => {}
         }
+        // Whatever is selected now is what the preview is about.
+        self.ask_preview();
         Ok(Tick::Redraw)
+    }
+
+    /// Ask what the selected pane is showing, for the tree's preview.
+    ///
+    /// Nothing is asked for a pane already on screen beside the list: the
+    /// arrows are held down, and a snapshot per keypress of a pane you are
+    /// moving past is traffic for a panel nobody read.
+    fn ask_preview(&mut self) {
+        let Some(chooser) = &self.chooser else { return };
+        let Some(pane) = chooser.previewed(&self.sessions) else { return };
+        if chooser.preview.as_ref().is_some_and(|(shown, _)| *shown == pane) {
+            return;
+        }
+        let size = crate::dialog::panel_width(self.frame.size);
+        if size == 0 {
+            return;
+        }
+        let rows = (self.frame.size.rows as usize).saturating_sub(6).clamp(4, 40);
+        let _ = self.transport.send(ClientMsg::Preview {
+            pane: PaneId(pane),
+            cols: size as u16,
+            rows: rows as u16,
+        });
     }
 
     /// One keystroke while a menu is up.
@@ -1360,6 +1386,13 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 }
                 false
             }
+            ServerMsg::Preview { pane, rows } => {
+                if let Some(chooser) = &mut self.chooser {
+                    chooser.preview = Some((pane.0, rows));
+                    return true;
+                }
+                false
+            }
             ServerMsg::Matches { query, hits } => {
                 let entries: Vec<(String, String)> = hits
                     .iter()
@@ -1409,6 +1442,8 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 // The listing is what the chooser was waiting for.
                 let open = self.chooser.is_some();
                 self.refresh_chooser();
+                // And the preview of whatever it opened on.
+                self.ask_preview();
                 open
             }
             ServerMsg::Refused { reason } => {

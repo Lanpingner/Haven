@@ -10,12 +10,10 @@
 //! A tree would need expand and collapse state for no gain: the whole point
 //! is to see everything at once and jump to one of it.
 
-use haven_core::Style;
-
 use crate::theme::Theme;
-use haven_proto::{CellSize, PaneRect, SessionId, SessionInfo, SessionStatus};
+use haven_proto::{CellSize, SessionId, SessionInfo, SessionStatus};
 
-use crate::frame::{FrameRow, Span, Widget, WidgetKind};
+use crate::frame::Widget;
 
 /// What picking a row does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -46,6 +44,41 @@ pub struct Chooser {
     pub selected: usize,
     /// Typed text narrows the list, as it does in every other chooser.
     pub filter: String,
+    /// What the selected pane is showing, and which pane that was. Kept
+    /// with its id so an answer that arrives after the selection moved on
+    /// is dropped rather than shown against the wrong row.
+    pub preview: Option<(u32, Vec<haven_proto::PreviewRow>)>,
+}
+
+impl Chooser {
+    /// Which pane the selection is about, for the preview.
+    ///
+    /// A pane row means itself; a tab means its active pane; a session
+    /// means the active pane of its active tab. Every row is *somewhere*,
+    /// and that somewhere is what to show.
+    pub fn previewed(&self, sessions: &[SessionInfo]) -> Option<u32> {
+        let row = self.rows.get(self.selected)?;
+        match row.choice {
+            Choice::Pane(id) => Some(id),
+            Choice::Window(index) => {
+                let session = self.session_of(self.selected)?;
+                let info = sessions.iter().find(|s| s.id == session)?;
+                info.tabs.get(index as usize).map(|w| w.active_pane)
+            }
+            Choice::Session(id) => {
+                let info = sessions.iter().find(|s| s.id == id)?;
+                info.tabs.first().map(|w| w.active_pane)
+            }
+        }
+    }
+
+    /// Which session a row belongs to: the nearest session row above it.
+    fn session_of(&self, at: usize) -> Option<SessionId> {
+        self.rows[..=at].iter().rev().find_map(|r| match r.choice {
+            Choice::Session(id) => Some(id),
+            _ => None,
+        })
+    }
 }
 
 impl Chooser {
@@ -61,10 +94,12 @@ impl Chooser {
             rows.push(Row {
                 indent: 0,
                 text: format!(
-                    "{} ({} tabs, {} panes{})",
+                    "{} ({} {}, {} {}{})",
                     info.name,
                     info.windows,
+                    if info.windows == 1 { "tab" } else { "tabs" },
                     info.panes,
+                    if info.panes == 1 { "pane" } else { "panes" },
                     if info.clients > 0 { ", attached" } else { "" }
                 ),
                 choice: Choice::Session(info.id),
@@ -72,12 +107,15 @@ impl Chooser {
                 last: false,
                 parent_last: false,
             });
-            if !here {
-                continue;
-            }
-            let Some(status) = status else { continue };
-            for (index, window) in status.windows.iter().enumerate() {
-                let active_window = window.id == status.active_window;
+            // Every session's tabs, not just the attached one's. Answering
+            // "what is in that other session" is the only reason to open a
+            // tree rather than press `last`.
+            let active_window = status
+                .filter(|s| s.session == info.id)
+                .map(|s| s.active_window)
+                .or_else(|| info.tabs.first().map(|w| w.id));
+            for (index, window) in info.tabs.iter().enumerate() {
+                let active_window = Some(window.id) == active_window && here;
                 rows.push(Row {
                     indent: 1,
                     // Called a tab in the interface, though the protocol and
@@ -93,11 +131,11 @@ impl Chooser {
                     ),
                     choice: Choice::Window(index as u16),
                     current: active_window && window.panes.len() <= 1,
-                    last: index + 1 == status.windows.len(),
+                    last: index + 1 == info.tabs.len(),
                     parent_last: false,
                 });
                 let pane_count = window.panes.len();
-                let tab_is_last = index + 1 == status.windows.len();
+                let tab_is_last = index + 1 == info.tabs.len();
                 for (pane_index, pane) in window.panes.iter().enumerate() {
                     let active = active_window && pane.id == window.active_pane;
                     rows.push(Row {
@@ -132,7 +170,7 @@ impl Chooser {
             .max_by_key(|(_, r)| r.indent)
             .map(|(i, _)| i)
             .unwrap_or(0);
-        Self { rows, selected, filter: String::new() }
+        Self { rows, selected, filter: String::new(), preview: None }
     }
 
     /// Rows matching the filter, with their index in `rows`.
@@ -172,92 +210,78 @@ impl Chooser {
     }
 
     /// Draw it centred, as an overlay over the panes.
+    ///
+    /// Through [`crate::dialog`], which the menus use too: one box, one
+    /// rule about its size, one place the filter is shown.
     pub fn widget(&self, size: CellSize, theme: &Theme) -> Option<Widget> {
-        let visible = self.visible();
-        if size.rows < 7 || size.cols < 28 {
-            return None;
-        }
         let g = &theme.glyphs;
-        let title = if self.filter.is_empty() {
-            " session / tab / pane ".to_string()
-        } else {
-            format!(" filter: {} ", self.filter)
-        };
-
-        let widest = visible
+        let visible = self.visible();
+        let rows: Vec<crate::dialog::DialogRow> = visible
             .iter()
-            .map(|(_, r)| r.text.chars().count() + guide_width(r.indent) + 6)
-            .max()
-            .unwrap_or(0);
-        let cols = widest
-            .max(title.chars().count() + 4)
-            .max(HINT.chars().count() + 4)
-            .min(size.cols as usize - 2)
-            .max(28);
-        let inner = cols - 2;
+            .map(|(_, entry)| {
+                let guides = guide(g, entry.indent, entry.last, entry.parent_last);
+                let text = format!(
+                    "{}{}",
+                    entry.text,
+                    if entry.current { format!("  {}", g.here) } else { String::new() }
+                );
+                let style = if entry.indent == 0 {
+                    theme.panel_title.style()
+                } else if entry.current {
+                    theme.panel.style()
+                } else {
+                    theme.panel_dim.style()
+                };
+                crate::dialog::DialogRow::new(text)
+                    .with_lead(vec![(format!(" {guides}"), theme.panel_dim.style())])
+                    .with_style(style)
+            })
+            .collect();
+        let selected = visible.iter().position(|(i, _)| *i == self.selected).unwrap_or(0);
 
-        // Two rows of border, one of hint, and the status bar keeps its own.
-        let room = (size.rows as usize).saturating_sub(5);
-        let shown = visible.len().min(room).max(1);
-        let at = visible.iter().position(|(i, _)| *i == self.selected).unwrap_or(0);
-        let first = at.saturating_sub(shown.saturating_sub(1));
-
-        let mut out = Vec::with_capacity(shown + 3);
-        out.push(crate::status_bar::border_row(g, cols, &title, theme, true));
-
-        if visible.is_empty() {
-            out.push(panel_line(g, inner, "  nothing matches", theme.panel_dim.style(), theme));
+        crate::dialog::Dialog {
+            title: "sessions",
+            filter: &self.filter,
+            total: self.rows.len(),
+            rows,
+            selected,
+            panel: self.panel(size, theme),
+            searchable: true,
+            // The preview is a round trip away; the room for it is not.
+            panel_slot: crate::dialog::panel_width(size) > 0,
+            hint: HINT,
+            id: 1,
         }
-        for (row_index, entry) in visible.iter().skip(first).take(shown) {
-            let selected = *row_index == self.selected;
-            let text = format!(
-                "{}{}{}",
-                guide(g, entry.indent, entry.last, entry.parent_last),
-                entry.text,
-                if entry.current { format!("  {}", g.here) } else { String::new() }
-            );
-            let style = if selected {
-                theme.selection.style()
-            } else if entry.indent == 0 {
-                theme.panel_title.style()
-            } else if entry.current {
-                theme.panel.style()
-            } else {
-                theme.panel_dim.style()
-            };
-            out.push(panel_line(g, inner, &format!(" {text}"), style, theme));
+        .widget(size, theme)
+    }
+
+    /// The preview: what the selected pane is showing, in its own colours.
+    fn panel(&self, size: CellSize, theme: &Theme) -> Vec<Vec<crate::dialog::Run>> {
+        let width = crate::dialog::panel_width(size);
+        if width == 0 {
+            return Vec::new();
         }
-
-        // A way out, stated: a modal nobody can leave is a trap.
-        let more = visible.len().saturating_sub(shown);
-        let hint = if more > 0 { format!("{HINT} · +{more} more") } else { HINT.to_string() };
-        out.push(panel_line(g, inner, &hint, theme.panel_dim.style(), theme));
-        out.push(crate::status_bar::border_row(g, cols, "", theme, false));
-
-        let col = ((size.cols as usize - cols) / 2) as u16;
-        let row = ((size.rows as usize).saturating_sub(out.len()) / 2) as u16;
-        Some(Widget {
-            kind: WidgetKind::Overlay,
-            rect: PaneRect {
-                pane: haven_proto::PaneId(u32::MAX - 1),
-                col,
-                row,
-                cols: cols as u16,
-                rows: out.len() as u16,
-            },
-            rows: out,
-        })
+        let Some((_, rows)) = &self.preview else {
+            // Said rather than left blank: an empty panel looks like a
+            // preview of an empty pane.
+            return vec![vec![("  …".to_string(), theme.panel_dim.style())]];
+        };
+        rows.iter()
+            .map(|row| {
+                row.runs
+                    .iter()
+                    .flat_map(|(count, text, style)| {
+                        std::iter::repeat_n(text.clone(), *count as usize).map(move |t| (t, *style))
+                    })
+                    .collect()
+            })
+            .collect()
     }
 }
 
-const HINT: &str = " enter · esc · type to filter";
+const HINT: &str = " enter · esc";
 
 /// How wide a guide is at a given depth, so widths can be worked out before
-/// the guide itself exists.
-fn guide_width(indent: u8) -> usize {
-    indent as usize * 2
-}
-
 /// The tree guide for a row. Drawing the shape beats indenting with spaces:
 /// the eye follows a line, and three levels of plain indentation read as a
 /// list that happens to be ragged.
@@ -270,28 +294,6 @@ fn guide(g: &crate::theme::Glyphs, indent: u8, last: bool, parent_last: bool) ->
         // drawn to nothing.
         _ if parent_last => format!("{}{}", " ".repeat(g.trunk.chars().count()), arm),
         _ => format!("{}{}", g.trunk, arm),
-    }
-}
-
-/// One row of a panel: border, content padded to the inner width, border.
-fn panel_line(
-    g: &crate::theme::Glyphs,
-    inner: usize,
-    text: &str,
-    style: Style,
-    theme: &Theme,
-) -> FrameRow {
-    FrameRow {
-        spans: vec![
-            Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() },
-            Span { col: 1, text: crate::status_bar::pad(text, inner), style },
-            Span {
-                col: (inner + 1) as u16,
-                text: g.vertical.clone(),
-                style: theme.panel_border.style(),
-            },
-        ],
-        rev: 0,
     }
 }
 
@@ -312,7 +314,17 @@ mod tests {
             panes: 2,
             clients,
             size: size(80, 24),
+            // The listing carries the tabs now: the tree shows them for
+            // every session, not only the attached one.
+            tabs: status().windows,
         }
+    }
+
+    /// A listing entry whose tabs are the ones in this status, which is
+    /// what the daemon sends: the tree reads tabs from the listing so it
+    /// can show them for sessions nobody is attached to.
+    fn info_of(id: u32, name: &str, clients: u16, st: &SessionStatus) -> SessionInfo {
+        SessionInfo { tabs: st.windows.clone(), ..info(id, name, clients) }
     }
 
     fn status() -> SessionStatus {
@@ -361,9 +373,12 @@ mod tests {
                 Choice::Window(0),
                 Choice::Pane(10),
                 Choice::Pane(11),
-                // The session we are not attached to cannot be expanded: the
-                // daemon only reports counts for it.
+                // And the session nobody is attached to, expanded too: the
+                // listing carries its tabs, which is what the tree is for.
                 Choice::Session(SessionId(2)),
+                Choice::Window(0),
+                Choice::Pane(10),
+                Choice::Pane(11),
             ]
         );
     }
@@ -381,7 +396,7 @@ mod tests {
         let mut st = status();
         st.windows[0].panes.truncate(1);
         st.windows[0].active_pane = 10;
-        let c = Chooser::new(&[info(1, "work", 1)], Some(&st));
+        let c = Chooser::new(&[info_of(1, "work", 1, &st)], Some(&st));
         assert_eq!(c.choice(), Some(Choice::Pane(10)));
     }
 
@@ -390,7 +405,7 @@ mod tests {
         let mut st = status();
         st.windows[0].panes.truncate(1);
         st.windows[0].active_pane = 10;
-        let c = Chooser::new(&[info(1, "work", 1)], Some(&st));
+        let c = Chooser::new(&[info_of(1, "work", 1, &st)], Some(&st));
         assert_eq!(c.choice(), Some(Choice::Pane(10)));
     }
 
@@ -429,7 +444,8 @@ mod tests {
         let mut c = Chooser::new(&[info(1, "work", 1), info(2, "other", 0)], Some(&status()));
         c.filter = "vim".into();
         c.resettle();
-        assert_eq!(c.visible().len(), 1);
+        // One per session, now that every session's panes are listed.
+        assert_eq!(c.visible().len(), 2);
         assert_eq!(c.choice(), Some(Choice::Pane(11)));
 
         // A filter matching nothing must not leave a selection pointing off

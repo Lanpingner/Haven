@@ -153,6 +153,60 @@ impl Bindings {
         table != PREFIX && table != ROOT
     }
 
+    /// How to press a command, as a person would write it.
+    ///
+    /// The reverse of what the tables are for, and worth having: a palette
+    /// that lists every command without saying which of them already has a
+    /// key teaches nobody the keys. Matched on the whole command string, so
+    /// `command-prompt rename-window ` finds `,` rather than nothing.
+    ///
+    /// The shortest first: a key with no prefix is one press, and that is
+    /// the one worth showing.
+    pub fn keys_for(&self, command: &str) -> Option<String> {
+        self.keys_matching(|bound| bound == command)
+    }
+
+    /// [`keys_for`](Self::keys_for), for a caller that can tell when two
+    /// spellings mean the same thing.
+    ///
+    /// The tables are written in aliases — `n`, not `next-window`; `%`, not
+    /// `split-v` — because that is how a person writes a binding. A palette
+    /// comparing strings therefore found a key for about half of what was
+    /// bound and silently dropped the rest, which is worse than showing
+    /// none: it says `next-window` has no key when `C-a n` is right there.
+    /// This crate cannot resolve an alias — it does not know what a command
+    /// is, deliberately — so the question goes back to whoever does.
+    pub fn keys_matching(&self, same: impl Fn(&str) -> bool) -> Option<String> {
+        let label_of = |chord: &Chord| {
+            label(&KeyEvent {
+                key: chord.key,
+                mods: chord.mods,
+                state: crate::input::KeyState::Press,
+            })
+        };
+        if let Some((chord, _)) =
+            self.tables.get(ROOT).into_iter().flatten().find(|(_, bound)| same(bound))
+        {
+            return Some(label_of(chord));
+        }
+        if let Some((chord, _)) =
+            self.tables.get(PREFIX).into_iter().flatten().find(|(_, bound)| same(bound))
+        {
+            return Some(format!("{} {}", label_of(&self.prefix), label_of(chord)));
+        }
+        // A table of someone's own: name it, since the key alone would not
+        // say how to get into the table it lives in.
+        self.tables
+            .iter()
+            .filter(|(name, _)| name.as_str() != ROOT && name.as_str() != PREFIX)
+            .find_map(|(name, binds)| {
+                binds
+                    .iter()
+                    .find(|(_, bound)| same(bound))
+                    .map(|(chord, _)| format!("{name} {}", label_of(chord)))
+            })
+    }
+
     pub fn prefix_table(&self) -> &[(Chord, String)] {
         self.tables.get(PREFIX).map(Vec::as_slice).unwrap_or_default()
     }
@@ -317,6 +371,40 @@ pub const DEFAULT_ROOT: &[(&str, &str)] = &[
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_command_can_say_which_key_runs_it() {
+        // For the palette: a list of every command that says nothing about
+        // which of them you could have pressed teaches nobody the keys.
+        let b = Bindings::default();
+        assert_eq!(b.keys_for("split-v").as_deref(), Some("C-a %"));
+        assert_eq!(b.keys_for("new-window").as_deref(), Some("C-a c"));
+        // A root binding is one press, and is preferred for being shorter.
+        assert_eq!(b.keys_for("choose-shell").as_deref(), Some("A-c"));
+        assert_eq!(b.keys_for("history").as_deref(), Some("A-h"));
+        // Matched on the whole command, so a prompt-opening binding is
+        // found by the string the palette would run.
+        assert_eq!(b.keys_for("command-prompt rename-window ").as_deref(), Some("C-a ,"));
+        // And a command nobody bound says nothing rather than something.
+        assert_eq!(b.keys_for("container-mounts"), None);
+    }
+
+    #[test]
+    fn a_changed_prefix_changes_what_the_palette_shows() {
+        let b = Bindings::default().with(Some("C-b"), PREFIX, &[]);
+        assert_eq!(b.keys_for("split-v").as_deref(), Some("C-b %"));
+    }
+
+    #[test]
+    fn a_key_in_a_table_of_your_own_names_the_table() {
+        // A key alone would not say how to get into the table it lives in.
+        let b = Bindings::default().with(None, "copy", &[("y".into(), "paste-buffer".into())]);
+        assert_eq!(b.keys_for("paste-buffer").as_deref(), Some("C-a ]"));
+        // One the defaults leave alone, so the table's own key is the
+        // only answer there is.
+        let b = Bindings::default().with(None, "copy", &[("y".into(), "container-mounts".into())]);
+        assert_eq!(b.keys_for("container-mounts").as_deref(), Some("copy y"));
+    }
     use super::*;
 
     fn event(key: Key, mods: Modifiers) -> KeyEvent {

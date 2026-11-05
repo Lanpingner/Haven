@@ -186,6 +186,9 @@ impl Daemon {
                 panes: host.runtime.session.panes().len() as u16,
                 clients: self.clients.iter().filter(|c| c.session == Some(*id)).count() as u16,
                 size: host.runtime.size(),
+                // The tabs themselves, for every session: the tree's whole
+                // job is to show what is in the one you are not in.
+                tabs: host.windows(),
             })
             .collect()
     }
@@ -524,6 +527,11 @@ impl Daemon {
                     None => self.help.ask(word),
                 }
             }
+            ClientMsg::Preview { pane, cols, rows } => {
+                let preview = self.preview(pane, cols as usize, rows as usize);
+                let _ =
+                    self.clients[index].framed.queue(&ServerMsg::Preview { pane, rows: preview });
+            }
             ClientMsg::Grep { query } => {
                 let hits = self.grep(index, &query);
                 let _ = self.clients[index].framed.queue(&ServerMsg::Matches { query, hits });
@@ -857,6 +865,47 @@ impl Daemon {
             .collect();
         out.extend(mine);
         out
+    }
+
+    /// What a pane is showing, small enough to put in a panel.
+    ///
+    /// Looked for in every session, not just this client's: the point of a
+    /// preview is to see where you are *not*. Styles are resolved here
+    /// rather than interned, because the client has never been sent the
+    /// style table of a session it is not attached to.
+    fn preview(&self, pane: PaneId, cols: usize, rows: usize) -> Vec<haven_proto::PreviewRow> {
+        let Some(runtime) = self.sessions.values().find_map(|h| h.runtime.pane(pane)) else {
+            return Vec::new();
+        };
+        let grid = runtime.grid();
+        let styles = runtime.styles();
+        grid.rows()
+            .iter()
+            .take(rows)
+            .map(|row| {
+                let mut runs: Vec<(u16, String, haven_core::Style)> = Vec::new();
+                for cell in row.cells.iter().take(cols) {
+                    let text = grid.cell_text(cell).into_owned();
+                    let style = styles.get(cell.style);
+                    match runs.last_mut() {
+                        Some((count, prev, prev_style))
+                            if *prev == text && *prev_style == style && *count < u16::MAX =>
+                        {
+                            *count += 1
+                        }
+                        _ => runs.push((1, text, style)),
+                    }
+                }
+                // A row of trailing blanks is most of a preview; dropping it
+                // here costs nothing and the client pads anyway.
+                while runs.last().is_some_and(|(_, text, style)| {
+                    text.trim().is_empty() && *style == haven_core::Style::default()
+                }) {
+                    runs.pop();
+                }
+                haven_proto::PreviewRow { runs }
+            })
+            .collect()
     }
 
     /// Every matching line in every pane of this client's session.
@@ -1195,11 +1244,30 @@ impl SessionHost {
     /// pane's title, which is what a shell sets and what a user recognises.
     fn status(&self, clients: u16) -> haven_proto::SessionStatus {
         let session = &self.runtime.session;
+        let windows = self.windows();
+        haven_proto::SessionStatus {
+            session: session.id,
+            name: self.name().to_string(),
+            windows,
+            active_window: session.windows.get(session.active).map(|w| w.id.0).unwrap_or(0),
+            started_unix: self.started_unix,
+            clients,
+        }
+    }
+
+    /// What is in this session: its tabs, their panes, and what each is
+    /// doing.
+    ///
+    /// Shared with the session listing, because the tree has to show the
+    /// tabs of a session nobody is attached to and a count cannot be
+    /// navigated.
+    fn windows(&self) -> Vec<haven_proto::WindowInfo> {
+        let session = &self.runtime.session;
         // Solved once rather than per pane: a client labelling panes needs
         // their geometry, and working it out again would be a second answer
         // to a question the layout has already settled.
         let rects = self.runtime.session.layout(self.runtime.size()).panes;
-        let windows = session
+        session
             .windows
             .iter()
             .map(|w| haven_proto::WindowInfo {
@@ -1246,15 +1314,7 @@ impl SessionHost {
                 active_pane: w.active.0,
                 zoomed: w.zoomed.is_some(),
             })
-            .collect();
-        haven_proto::SessionStatus {
-            session: session.id,
-            name: self.name().to_string(),
-            windows,
-            active_window: session.windows.get(session.active).map(|w| w.id.0).unwrap_or(0),
-            started_unix: self.started_unix,
-            clients,
-        }
+            .collect()
     }
 }
 

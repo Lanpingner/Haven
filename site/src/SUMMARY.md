@@ -10,6 +10,7 @@
 - [Sessions that outlive the machine](./sessions.md)
 - [A pane that is another distro](./containers.md)
 - [The history, and finding things](./finding.md)
+- [One modal, everywhere](./modals.md)
 - [Themes and configuration](./themes.md)
 - [Honest status](./status.md)
   - [Notes from the bug log](./bug-log.md)
