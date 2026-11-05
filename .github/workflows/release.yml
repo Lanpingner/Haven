@@ -159,6 +159,12 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      # The runner checks out as its own user and the container runs as
+      # root, so git calls the workspace dubious and refuses to read it —
+      # which `gh` only discovers when it shells out to git to work out
+      # which repository this is.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Import the signing key
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -227,6 +233,8 @@ jobs:
       - name: Upload the repository to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          # Named outright, so `gh` has no reason to ask git at all.
+          GH_REPO: ${{ github.repository }}
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           cd repo
