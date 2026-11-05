@@ -15,6 +15,7 @@ on:
       tag:
         description: 'Tag to build (must already exist)'
         required: true
+        type: string
 
 permissions:
   contents: write
