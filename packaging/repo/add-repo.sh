@@ -79,5 +79,11 @@ EOF
     say "added [$NAME] to $CONF (kept $CONF.haven-backup)"
 fi
 
-pacman -Sy
-say "done — 'pacman -S haven-terminal-bin' installs it, 'pacman -Syu' keeps it current"
+# Deliberately not `pacman -Sy`: refreshing the databases and then
+# installing against them, without upgrading, is the partial-upgrade trap —
+# and doing it to someone else's machine on their behalf is worse than
+# telling them the command.
+say "done. Now:"
+say "    sudo pacman -Syu                   # picks up the new repository"
+say "    sudo pacman -S haven-terminal-bin"
+

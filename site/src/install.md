@@ -8,6 +8,7 @@ project's.
 ```sh
 # A signed pacman repository, served from the GitHub release.
 curl -fsSL https://github.com/Lanpingner/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
+sudo pacman -Syu
 sudo pacman -S haven-terminal-bin
 ```
 

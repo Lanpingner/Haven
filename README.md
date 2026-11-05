@@ -27,7 +27,7 @@ with `mdbook serve site --open`; the last chapter includes this repository's
 ```sh
 # Arch, from a signed pacman repository — no AUR account needed
 curl -fsSL https://github.com/Lanpingner/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
-sudo pacman -S haven-terminal-bin
+sudo pacman -Syu && sudo pacman -S haven-terminal-bin
 
 # the key that repository is signed with:
 #   2F10059CF6636B150B9584867D04983E5D12A3E4
