@@ -134,7 +134,10 @@ jobs:
     runs-on: ubuntu-22.04
     container: archlinux:base-devel
     steps:
-      - run: pacman -Sy --noconfirm --needed git github-cli pacman-contrib
+      # -Syu, not -Sy: installing against a database newer than the image's
+      # packages is the partial-upgrade trap, and in a container it surfaces
+      # as a 404 on a file that was rebuilt since the image was made.
+      - run: pacman -Syu --noconfirm --needed git github-cli pacman-contrib
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
@@ -178,11 +181,13 @@ jobs:
           # asset was published minutes ago by the job this one needs, so the
           # hash is taken from that rather than waited for.
           sed -i "s/^pkgver=.*/pkgver=$ver/" PKGBUILD
-          updpkgsums
-          # makepkg refuses to run as root, which in a container is who we are.
+          # makepkg refuses to run as root, which in a container is who we
+          # are — and updpkgsums is makepkg wearing a hat, so it refuses
+          # too. Both run as a user made for the purpose.
           useradd -m builder
           chown -R builder .
-          sudo -u builder makepkg --noconfirm --nodeps
+          sudo -u builder -H updpkgsums
+          sudo -u builder -H makepkg --noconfirm --nodeps
           cd "$GITHUB_WORKSPACE"
           mkdir -p repo
           mv packaging/aur/haven-terminal-bin/*.pkg.tar.zst repo/
