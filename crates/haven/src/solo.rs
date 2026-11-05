@@ -258,6 +258,8 @@ fn apply<F: FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>(
         // the menu's questions; standalone has neither.
         | Action::ContainerShell { .. }
         | Action::ContainerMounts { .. }
+        // Standalone draws into a terminal whose font is that terminal's.
+        | Action::Font(_)
         | Action::CommandPalette
         // Standalone has no client-side mode machine to switch.
         | Action::SwitchTable(_)

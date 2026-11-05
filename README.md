@@ -55,7 +55,7 @@ How the release, the installer and the two AUR packages fit together is in
 ## Try it
 
 ```sh
-cargo test --workspace     # 598 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 608 tests, incl. mc/vim/less driven on real ptys
 
 # A GPU window, attached to the daemon (which it starts if needed).
 cargo run --release -p haven -- gpu
@@ -84,6 +84,14 @@ to move, a digit to pick one outright, `Enter` to take the highlighted one,
 pane is spawned: your shell first, then the ones Haven has integration for,
 then whatever else `/etc/shells` holds.
 
+`Ctrl+=` and `Ctrl+-` make the text bigger and smaller in the window, and
+`Ctrl+0` goes back to the configured size — Alacritty's keys, and every
+browser's. The window keeps its pixels, so a bigger font means fewer rows and
+columns and the session is resized to match. The size is remembered in
+`[font] size` in your config, written as one line so the rest of the file
+survives. In `haven attach` the surrounding terminal owns the font, and the
+key says so rather than doing nothing.
+
 `Ctrl+A` then:
 
 | Key | Action |
@@ -91,7 +99,7 @@ then whatever else `/etc/shells` holds.
 | `%` / `"` | split into columns / rows |
 | `h` `j` `k` `l` or arrows | move focus |
 | `H` `J` `K` `L` | resize |
-| `z` | zoom the active pane |
+| `z` | zoom the active *pane* — the layout, not the text |
 | `x` | close the pane |
 | `c` / `n` / `p` / `1`-`9` | new tab / next / previous / select |
 | `C` | new session, and move to it |
@@ -321,6 +329,7 @@ same actions the keys do, so nothing is reachable one way and not the other.
 | `new-session` (`new`) | a new session on this daemon, named `haven-<n>` |
 | `scroll-up`, `scroll-down`, `scroll-end` | as the paging keys do |
 | `copy-mode`, `paste-buffer` | as `[` and `]` do |
+| `font-bigger` (`zoom-in`), `font-smaller`, `font-reset` | the size of the text in the window |
 | `last`, `last-pane` | back to the previous tab / pane |
 | `rename-window <name>`, `rename-session <name>` | an empty name gives a tab back to its command |
 | `command-prompt <text>` | open the command line with `text` on it |

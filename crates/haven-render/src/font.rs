@@ -342,6 +342,20 @@ impl FontStack {
         self.metrics
     }
 
+    /// Re-measure at a new pixel size.
+    ///
+    /// The faces are already loaded and the coverage map answers *which
+    /// face draws this character*, which no size changes — so a zoom costs
+    /// one measurement rather than another scan of every font on the
+    /// system. The glyphs themselves are rasterised on demand and keyed by
+    /// size, so nothing stale survives into a frame.
+    pub fn set_size(&mut self, size_px: f32) {
+        self.size_px = size_px;
+        if let Some(face) = self.faces.first() {
+            self.metrics = measure(face.as_ref(), size_px);
+        }
+    }
+
     pub fn size_px(&self) -> f32 {
         self.size_px
     }
@@ -693,6 +707,26 @@ mod tests {
         if let Some((id, glyph)) = stack.face_for('漢') {
             assert_ne!(glyph, 0, "resolved to face {id:?} with no glyph");
         }
+    }
+
+    #[test]
+    fn a_bigger_size_gives_a_bigger_cell_and_the_same_faces() {
+        // What zoom rests on: the cell grows, and nothing is reloaded —
+        // the faces and the coverage map are about which glyph, not how
+        // big, so a keypress must not cost another scan of the system.
+        let Some(mut stack) = stack() else { return };
+        let small = stack.metrics();
+        let faces = stack.face_count();
+
+        stack.set_size(stack.size_px() * 2.0);
+        let big = stack.metrics();
+        assert!(big.width > small.width, "{small:?} -> {big:?}");
+        assert!(big.height > small.height, "{small:?} -> {big:?}");
+        assert_eq!(stack.face_count(), faces, "a resize reloaded the font stack");
+
+        // And back again, exactly: `Ctrl+0` has to land where it started.
+        stack.set_size(stack.size_px() / 2.0);
+        assert_eq!(stack.metrics(), small);
     }
 
     #[test]

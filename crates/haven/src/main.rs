@@ -59,7 +59,7 @@ struct Args {
     socket: Option<PathBuf>,
     out: Option<PathBuf>,
     font: Option<String>,
-    font_size: f32,
+    font_size: Option<f32>,
     gpu: haven_render::GpuPreference,
     target: Option<u32>,
     subcommand: Option<String>,
@@ -80,7 +80,7 @@ impl Default for Args {
             socket: None,
             out: None,
             font: None,
-            font_size: 16.0,
+            font_size: None,
             gpu: haven_render::GpuPreference::default(),
             target: None,
             subcommand: None,
@@ -113,7 +113,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<(String, Args), String>
             "--gpu" => args.gpu = args.gpu.with_backend(&value("--gpu")?)?,
             "--gpu-power" => args.gpu = args.gpu.with_power(&value("--gpu-power")?)?,
             "--font-size" => {
-                args.font_size = value("--font-size")?.parse().map_err(|_| "bad --font-size")?
+                args.font_size = Some(value("--font-size")?.parse().map_err(|_| "bad --font-size")?)
             }
             "-t" | "--target" => {
                 args.target = Some(value("-t")?.parse().map_err(|_| "bad -t: expected a number")?)
@@ -234,18 +234,42 @@ fn socket_of(args: &Args) -> PathBuf {
 }
 
 /// Attach with a GPU window.
+/// Which font to open the window with: a flag beats the file, and the file
+/// beats the built-in default.
+///
+/// Worth a function of its own because getting it backwards is invisible —
+/// the window opens either way, and the only symptom is a config setting
+/// that appears to do nothing.
+fn font_choice(
+    flag_family: Option<String>,
+    flag_size: Option<f32>,
+    file: &haven_daemon::config::FontFile,
+) -> (Option<String>, f32) {
+    (flag_family.or_else(|| file.family.clone()), flag_size.unwrap_or(file.size))
+}
+
 fn gpu(args: Args) -> ExitCode {
     let socket = socket_of(&args);
     let session = args.target.map(haven_proto::SessionId);
+    // The window reads the same config file the daemon does, for the one
+    // section the daemon has no use for. It is read here rather than sent
+    // over the wire because a font belongs to the screen you are looking
+    // at, not to the shells running on a server.
+    let config_path = haven_daemon::default_config_path();
+    let watcher = haven_daemon::config::ConfigWatcher::new(
+        config_path.clone(),
+        haven_daemon::default_theme_dir(),
+    );
+    let (family, size) = font_choice(args.font.clone(), args.font_size, watcher.font());
     let config = haven_render::WindowConfig {
         title: "Haven".into(),
         cols: args.cols,
         rows: args.rows,
-        font: args.font.clone(),
-        font_size: args.font_size,
+        font: family,
+        font_size: size,
         gpu: args.gpu,
     };
-    match haven::attach::run_gpu(&socket, session, config) {
+    match haven::attach::run_gpu(&socket, session, config, config_path) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("haven: {e}");
@@ -548,7 +572,7 @@ fn screenshot(args: Args) -> ExitCode {
         &cfg,
         &args.send,
         Duration::from_millis(args.idle_ms),
-        args.font_size,
+        args.font_size.unwrap_or(16.0),
         args.font.as_deref(),
         &out,
     ) {
@@ -589,4 +613,23 @@ fn shell_info(args: Args) -> ExitCode {
     );
     let _ = Path::new("");
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use haven_daemon::config::FontFile;
+
+    #[test]
+    fn a_flag_beats_the_file_and_the_file_beats_the_default() {
+        let default = FontFile::default();
+        assert_eq!(font_choice(None, None, &default), (None, 16.0));
+
+        let file = FontFile { family: Some("Iosevka".into()), size: 18.0 };
+        assert_eq!(font_choice(None, None, &file), (Some("Iosevka".into()), 18.0));
+
+        // Either half can be overridden without disturbing the other.
+        assert_eq!(font_choice(Some("Fira".into()), None, &file), (Some("Fira".into()), 18.0));
+        assert_eq!(font_choice(None, Some(11.0), &file), (Some("Iosevka".into()), 11.0));
+    }
 }

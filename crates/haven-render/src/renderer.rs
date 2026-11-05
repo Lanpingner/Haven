@@ -535,6 +535,20 @@ impl Renderer {
         self.fonts.face_for(c).is_some()
     }
 
+    /// Draw at a new font size from the next frame on, returning the cell
+    /// that size implies. The caller owns what that means for the grid:
+    /// the same window holds fewer, larger cells.
+    pub fn set_font_size(&mut self, size_px: f32) -> CellMetrics {
+        self.fonts.set_size(size_px);
+        self.cell = self.fonts.metrics();
+        self.atlas.reset();
+        self.cell
+    }
+
+    pub fn font_size(&self) -> f32 {
+        self.fonts.size_px()
+    }
+
     pub fn cell_metrics(&self) -> CellMetrics {
         self.cell
     }

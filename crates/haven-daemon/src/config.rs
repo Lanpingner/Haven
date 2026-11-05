@@ -192,6 +192,88 @@ impl KeysFile {
     }
 }
 
+/// The `[font]` section, which only a frontend that owns its font reads —
+/// the window. A client drawing into somebody else's terminal has nothing
+/// to do with it.
+#[derive(Clone, PartialEq, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FontFile {
+    /// A family name, or nothing for whatever the system calls monospace.
+    pub family: Option<String>,
+    /// Pixels, not points: a point needs a DPI, and the one X11 reports is
+    /// wrong often enough that it would make the default unpredictable.
+    pub size: f32,
+}
+
+impl Default for FontFile {
+    fn default() -> Self {
+        Self { family: None, size: 16.0 }
+    }
+}
+
+/// Write a new font size into a config file, leaving everything else in it
+/// alone.
+///
+/// Not a serialization of the whole config, which is the obvious way and
+/// the wrong one: it would reformat the file and drop every comment in it
+/// the first time someone pressed `Ctrl+=`. This edits the one line, adds
+/// the one section when it is missing, and writes through a temporary file
+/// so an interrupted save cannot leave a half-written config behind.
+pub fn write_font_size(path: &Path, size: f32) -> Result<(), String> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let line = format!("size = {}", trim_float(size));
+
+    let mut out: Vec<String> = Vec::new();
+    let mut in_font = false;
+    let mut written = false;
+    for raw in existing.lines() {
+        let trimmed = raw.trim();
+        if trimmed.starts_with('[') {
+            // Leaving the section without having found a size: add one,
+            // before whatever section comes next.
+            if in_font && !written {
+                out.push(line.clone());
+                written = true;
+            }
+            in_font = trimmed == "[font]";
+        } else if in_font && !written && trimmed.starts_with("size") && trimmed.contains('=') {
+            out.push(line.clone());
+            written = true;
+            continue;
+        }
+        out.push(raw.to_string());
+    }
+    if in_font && !written {
+        out.push(line.clone());
+        written = true;
+    }
+    if !written {
+        if !out.is_empty() && !out.last().is_some_and(|l| l.trim().is_empty()) {
+            out.push(String::new());
+        }
+        out.push("[font]".to_string());
+        out.push(line);
+    }
+
+    let mut text = out.join("\n");
+    text.push('\n');
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let temp = path.with_extension("toml.tmp");
+    std::fs::write(&temp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&temp, path).map_err(|e| e.to_string())
+}
+
+/// `16`, not `16.0`, because a config file is read by people.
+fn trim_float(v: f32) -> String {
+    if (v - v.round()).abs() < 0.05 {
+        format!("{}", v.round() as i64)
+    } else {
+        format!("{v:.1}")
+    }
+}
+
 /// The `[containers]` section: where a pane's shell may run other than here.
 ///
 /// Three keys and no more. `cli` is the one that matters most and looks the
@@ -221,7 +303,9 @@ impl From<&ContainersFile> for haven_backend::Settings {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Deserialize)]
+// Not `Eq`: a font size is a float, and a config that cannot be compared
+// for total equality is no loss — nothing keys anything by one.
+#[derive(Clone, PartialEq, Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub theme: ThemeSpec,
@@ -237,6 +321,8 @@ pub struct Config {
     pub autosave_seconds: u64,
     /// Where a pane's shell may run other than on this machine.
     pub containers: ContainersFile,
+    /// What the window draws with. Ignored by every other frontend.
+    pub font: FontFile,
     /// Whether clients handle the mouse at all.
     ///
     /// Off hands it back to whatever terminal `haven attach` is running in,
@@ -251,6 +337,7 @@ impl Default for Config {
             theme: ThemeSpec::default(),
             keys: KeysFile::default(),
             containers: ContainersFile::default(),
+            font: FontFile::default(),
             mouse: true,
             // tmux-resurrect's default list, for the same reasons: editors
             // and pagers, which re-open a file and do nothing else.
@@ -368,6 +455,10 @@ impl ConfigWatcher {
         (&self.config.containers).into()
     }
 
+    pub fn font(&self) -> &FontFile {
+        &self.config.font
+    }
+
     /// Re-read if anything moved. Returns whether the theme changed, so the
     /// daemon only pushes when there is something to push.
     pub fn poll(&mut self) -> bool {
@@ -417,6 +508,86 @@ impl ConfigWatcher {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remembering_a_font_size_keeps_the_rest_of_the_file() {
+        // The reason this edits a line rather than serializing the config:
+        // a program that rewrites your file the first time you press
+        // Ctrl+= and takes your comments with it has done more harm than
+        // the preference was worth.
+        let dir = std::env::temp_dir().join(format!("haven-font-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("config.toml");
+        let original = "\
+# my terminal, my rules
+theme = \"kanagawa\"
+
+[font]
+# a size I argued with myself about
+size = 16
+family = \"Iosevka\"
+
+[containers]
+cli = \"podman\"
+";
+        std::fs::write(&path, original).expect("write");
+        write_font_size(&path, 18.0).expect("save");
+        let after = std::fs::read_to_string(&path).expect("read");
+
+        assert!(after.contains("size = 18"), "{after}");
+        assert!(!after.contains("size = 16"));
+        assert!(after.contains("# my terminal, my rules"), "a comment was lost: {after}");
+        assert!(after.contains("# a size I argued with myself about"), "{after}");
+        assert!(after.contains("family = \"Iosevka\""), "{after}");
+        assert!(after.contains("cli = \"podman\""), "the next section was eaten: {after}");
+        // And it still parses as what it claims to be.
+        let parsed = Config::from_toml(&after).expect("parses");
+        assert_eq!(parsed.font.size, 18.0);
+        assert_eq!(parsed.font.family.as_deref(), Some("Iosevka"));
+        assert_eq!(parsed.containers.cli, "podman");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_font_section_is_added_when_there_is_none() {
+        let dir = std::env::temp_dir().join(format!("haven-font2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("config.toml");
+
+        // No file at all: the first zoom on a fresh machine.
+        write_font_size(&path, 20.0).expect("save");
+        let fresh = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(Config::from_toml(&fresh).expect("parses").font.size, 20.0);
+
+        // A file with other sections and no [font].
+        std::fs::write(&path, "mouse = false\n\n[containers]\nenabled = false\n").expect("write");
+        write_font_size(&path, 14.5).expect("save");
+        let after = std::fs::read_to_string(&path).expect("read");
+        let parsed = Config::from_toml(&after).expect("parses");
+        assert_eq!(parsed.font.size, 14.5, "{after}");
+        assert!(!parsed.mouse, "an existing setting was lost: {after}");
+        assert!(!parsed.containers.enabled, "{after}");
+        // A half number keeps its half; a whole one does not grow a `.0`.
+        assert!(after.contains("size = 14.5"), "{after}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_size_outside_the_font_section_is_not_mistaken_for_ours() {
+        // `size` under another section is somebody else's key.
+        let dir = std::env::temp_dir().join(format!("haven-font3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[containers]\nenabled = true\n").expect("write");
+        write_font_size(&path, 17.0).expect("save");
+        let after = std::fs::read_to_string(&path).expect("read");
+        assert!(after.contains("[font]"), "{after}");
+        assert!(after.contains("enabled = true"), "{after}");
+        assert_eq!(Config::from_toml(&after).expect("parses").font.size, 17.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     fn tmp(tag: &str) -> PathBuf {

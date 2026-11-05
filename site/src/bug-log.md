@@ -100,6 +100,12 @@ unmapped window never sends, and `is_visible()` stayed `true` through the whole
 stall. A terminal has no use for a discrete GPU, so the integrated one is now the
 default, and the window stops rendering entirely while occluded.
 
+A footnote for anyone copying the fix: asking for `PowerPreference::LowPower`
+is not the same as leaving it alone. In wgpu 23 the default is `None` — "power
+usage is not considered" — so an adapter request that looks neutral can still
+be handed the discrete GPU. Found by another project on this machine, which
+hit exactly this configuration before changing one line.
+
 ## The texture limit that was not the hardware's
 
 Requesting `Limits::downlevel_defaults()` caps textures at 2048 *whatever the

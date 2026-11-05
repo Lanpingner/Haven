@@ -368,3 +368,31 @@ fn an_ordinary_glyph_still_takes_the_foreground() {
     assert!(bluest[2] > 100, "the glyph did not take the foreground: {bluest:?}");
     assert!(bluest[0] < 80 && bluest[1] < 80, "it came out white rather than blue: {bluest:?}");
 }
+
+#[test]
+fn zooming_keeps_the_window_and_changes_how_much_fits_in_it() {
+    // The whole of what a zoom key does, on a real GPU: the pixels stay,
+    // the cell grows, and the grid the session is told about shrinks.
+    let Some(mut r) = renderer(40, 10) else { return };
+    let pixels_before = r.size();
+    let grid_before = r.grid_size();
+    let small = r.cell_metrics();
+
+    let bigger = r.set_font_size(r.font_size() * 2.0);
+    assert!(bigger.width > small.width && bigger.height > small.height, "{small:?} {bigger:?}");
+    assert_eq!(r.size(), pixels_before, "a zoom must not resize the surface");
+    let grid_after = r.grid_size();
+    assert!(
+        grid_after.0 < grid_before.0 && grid_after.1 < grid_before.1,
+        "bigger text in the same window means fewer cells: {grid_before:?} -> {grid_after:?}"
+    );
+
+    // And it still draws. The atlas was emptied by the size change, so this
+    // is the frame that refills it — the one that would fail if the reset
+    // left the renderer pointing at glyphs that are no longer there.
+    let palette = Palette::default();
+    let screen = text_screen(grid_after.0 as usize, grid_after.1 as usize, &["haven"]);
+    r.render(&screen, (0, 0), &palette, CursorShape::Block);
+    let after = r.read_pixels().expect("a frame after zooming");
+    assert!(after.iter().any(|b| *b != 0), "the frame after a zoom was blank");
+}

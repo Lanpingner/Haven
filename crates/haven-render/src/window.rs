@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use haven_client::frame::{composite, FrameModel};
-use haven_client::frontend::{Frontend, PresentError};
+use haven_client::frontend::{Frontend, PresentError, Zoom};
 use haven_client::input::{
     InputEvent, Key, KeyEvent, KeyState, Modifiers, MouseButton, MouseEvent, NamedKey,
 };
@@ -33,9 +33,18 @@ pub struct Wake;
 
 /// The frontend half: a queue winit fills and the client drains, plus the
 /// renderer once the window exists.
+/// How much one press changes the size. A pixel is about six per cent at
+/// the default, which is a step you can see without overshooting.
+const ZOOM_STEP_PX: f32 = 1.0;
+/// Below this the cell is a smudge; above it one glyph is most of a pane.
+const ZOOM_RANGE_PX: std::ops::RangeInclusive<f32> = 6.0..=72.0;
+
 #[derive(Default)]
 pub struct GpuFrontend {
     renderer: Option<Renderer>,
+    /// The size the window opened at, which is what `Reset` goes back to:
+    /// the config's answer, not the first thing zoom happened to see.
+    base_font_px: f32,
     window: Option<Arc<Window>>,
     queue: VecDeque<InputEvent>,
     size: CellSize,
@@ -184,6 +193,7 @@ impl GpuFrontend {
     }
 
     fn adopt(&mut self, window: Arc<Window>, renderer: Renderer) {
+        self.base_font_px = renderer.font_size();
         let (cols, rows) = renderer.grid_size();
         let physical = window.inner_size();
         self.size = CellSize {
@@ -232,6 +242,39 @@ impl Frontend for GpuFrontend {
 
     fn set_clipboard(&mut self, text: &str) {
         self.put_on_clipboard(text);
+    }
+
+    /// Bigger or smaller text in the same window, so the grid it holds
+    /// changes — which the session has to be told about, exactly as it is
+    /// told when the window itself is resized.
+    fn zoom(&mut self, zoom: Zoom) -> Option<f32> {
+        let base = self.base_font_px;
+        let next = {
+            let renderer = self.renderer.as_mut()?;
+            let current = renderer.font_size();
+            let wanted = match zoom {
+                Zoom::In => current + ZOOM_STEP_PX,
+                Zoom::Out => current - ZOOM_STEP_PX,
+                Zoom::Reset => base,
+            };
+            let next = wanted.clamp(*ZOOM_RANGE_PX.start(), *ZOOM_RANGE_PX.end());
+            // Already there: at either end of the range, and on a reset
+            // that resets nothing. Saying the size is still right, but
+            // emptying the atlas and rewriting the config file to say what
+            // it already says is work for nobody.
+            if (next - current).abs() < f32::EPSILON {
+                return Some(current);
+            }
+            renderer.set_font_size(next);
+            next
+        };
+        if let Some(window) = self.window.clone() {
+            let px = window.inner_size();
+            let cells = self.resized(px.width, px.height);
+            self.push(InputEvent::Resize(cells));
+            window.request_redraw();
+        }
+        Some(next)
     }
 
     fn present(&mut self, frame: &FrameModel) -> Result<(), PresentError> {
@@ -575,6 +618,10 @@ pub fn run<T: Transport + 'static>(
     config: WindowConfig,
     wake: Option<std::os::fd::OwnedFd>,
     key_filter: Option<haven_client::KeyFilter>,
+    // Where a zoomed font size goes to be remembered. Passed in rather than
+    // done here for the same reason the key table is: the config file
+    // belongs to the composition root, and this crate draws.
+    font_saver: Option<Box<dyn FnMut(f32)>>,
 ) -> Result<(), RenderError> {
     let event_loop = EventLoop::<Wake>::with_user_event()
         .build()
@@ -591,6 +638,7 @@ pub fn run<T: Transport + 'static>(
     });
     let mut client = Client::new(GpuFrontend::new(), transport);
     client.key_filter = key_filter;
+    client.font_saver = font_saver;
     let mut app =
         App { client, session, config, instance, modifiers: ModifiersState::empty(), error: None };
     event_loop.run_app(&mut app).map_err(|e| RenderError::Device(e.to_string()))?;

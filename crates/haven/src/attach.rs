@@ -219,6 +219,7 @@ fn run_command(line: &str) -> Intercepted {
         Ok(Action::ChooseShell(verb)) => Intercepted::ChooseShell(verb),
         Ok(Action::ContainerShell { verb, spec }) => Intercepted::ChooseLifetime { verb, spec },
         Ok(Action::ContainerMounts { add, remove }) => Intercepted::ContainerMounts { add, remove },
+        Ok(Action::Font(step)) => Intercepted::Zoom(step),
         // Reached only when a caller has no mode to change — `act` handles
         // these, and everything with a mode goes through `act`.
         Ok(Action::SwitchTable(_)) => Intercepted::Consumed,
@@ -255,6 +256,7 @@ pub fn run_gpu(
     socket: &Path,
     session: Option<SessionId>,
     config: haven_render::WindowConfig,
+    config_path: std::path::PathBuf,
 ) -> io::Result<()> {
     let transport = connect_or_start(socket)?;
     // The event loop blocks until something happens; without a descriptor to
@@ -264,7 +266,15 @@ pub fn run_gpu(
     // The same table the TUI client uses: a binding that works in one and
     // not the other would be a trap, and this one was.
     let filter: haven_client::KeyFilter = Box::new(key_filter());
-    haven_render::window::run(transport, session, config, wake, Some(filter))
+    // Zooming writes the size back, so the next window opens where this one
+    // was left. A failure is said out loud and not fatal: a config file that
+    // cannot be written is a reason to lose the preference, not the session.
+    let saver: Box<dyn FnMut(f32)> = Box::new(move |px| {
+        if let Err(e) = haven_daemon::config::write_font_size(&config_path, px) {
+            eprintln!("haven: could not remember the font size: {e}");
+        }
+    });
+    haven_render::window::run(transport, session, config, wake, Some(filter), Some(saver))
         .map_err(|e| io::Error::other(e.to_string()))
 }
 
@@ -722,6 +732,41 @@ mod tests {
                 "picking {name:?} ran {entry:?} and nothing happened"
             );
         }
+    }
+
+    #[test]
+    fn the_zoom_keys_are_the_ones_every_other_terminal_uses() {
+        let b = keys();
+        for (c, want) in [
+            ('=', haven_client::Zoom::In),
+            ('+', haven_client::Zoom::In),
+            ('-', haven_client::Zoom::Out),
+            ('0', haven_client::Zoom::Reset),
+        ] {
+            let mut filter = key_filter();
+            let mut mode = Mode::Normal;
+            assert_eq!(
+                filter(&key(Key::Char(c), Modifiers::CTRL), &mut mode, &b),
+                Intercepted::Zoom(want),
+                "Ctrl+{c}"
+            );
+            assert_eq!(mode, Mode::Normal, "a root binding must not arm anything");
+        }
+    }
+
+    #[test]
+    fn zooming_is_not_the_pane_zoom_the_prefix_does() {
+        // One word, two meanings, so the commands are spelled as fonts.
+        assert_eq!(keys::parse_command("zoom"), Ok(keys::Action::ToggleZoom));
+        assert_eq!(
+            keys::parse_command("font-bigger"),
+            Ok(keys::Action::Font(haven_client::Zoom::In))
+        );
+        assert_eq!(
+            keys::parse_command("zoom-out"),
+            Ok(keys::Action::Font(haven_client::Zoom::Out))
+        );
+        assert_eq!(run_command("font-reset"), Intercepted::Zoom(haven_client::Zoom::Reset));
     }
 
     #[test]

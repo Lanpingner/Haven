@@ -21,10 +21,29 @@ restore_programs = ["vim", "nvim", "less", "man", "tail", "htop"]
 prefix = "C-b"                                           # default C-a
 bind = { "|" = "split-v", "-" = "split-h", "x" = "" }    # empty unbinds
 root = { "C-t" = "new-window", "A-c" = "choose-shell" }  # no prefix needed
+
+[font]
+family = "Iosevka"         # or nothing: whatever the system calls monospace
+size = 16                  # pixels
 ```
 
 Everything in it is live: the file is re-read when its timestamp moves, and a
 changed theme, binding or mouse setting reaches every attached client at once.
+
+`[font]` is the exception in two ways. It is read by the **window** and by
+nothing else — a client drawing into somebody else's terminal has no say in
+that terminal's font — and it is the one section Haven writes to as well as
+reads. `Ctrl+=`, `Ctrl+-` and `Ctrl+0` change the size and remember it here,
+so the next window opens where you left this one.
+
+That write is a single line, not a re-serialization of the file. A program
+that reformats your config and drops your comments the first time you press
+`Ctrl+=` has done more harm than the preference was worth, so the editing
+keeps everything it does not understand, and a test proves it with a file
+full of comments.
+
+Sizes are in **pixels**, not points: a point needs a DPI, and the one X11
+reports is wrong often enough to make the default unpredictable.
 
 ## Keys
 

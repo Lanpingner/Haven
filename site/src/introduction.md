@@ -13,7 +13,7 @@ translating escape sequences twice.
 <div class="pills">
 <span class="pill"><b>Rust</b> · 13 crates · ~30k lines</span>
 <span class="pill"><b>wgpu</b> Vulkan / Metal / DX12 / GL</span>
-<span class="pill"><b>598</b> tests, zero clippy warnings</span>
+<span class="pill"><b>608</b> tests, zero clippy warnings</span>
 <span class="pill"><b>MIT</b> OR Apache-2.0</span>
 <span class="pill">v0.0.1 · <b>pre-release</b></span>
 </div>

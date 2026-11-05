@@ -297,7 +297,17 @@ impl Default for Bindings {
 
 /// Bound with no prefix at all. Two by default, both things that are faster
 /// than typing the command they stand for.
-pub const DEFAULT_ROOT: &[(&str, &str)] = &[("A-c", "choose-shell"), ("A-p", "command-palette")];
+pub const DEFAULT_ROOT: &[(&str, &str)] = &[
+    ("A-c", "choose-shell"),
+    ("A-p", "command-palette"),
+    // What every other terminal and every browser uses. `C-+` as well as
+    // `C-=`, because a keyboard that needs shift for `+` sends the one and
+    // a keyboard with a numpad sends the other.
+    ("C-=", "font-bigger"),
+    ("C-+", "font-bigger"),
+    ("C--", "font-smaller"),
+    ("C-0", "font-reset"),
+];
 
 #[cfg(test)]
 mod tests {

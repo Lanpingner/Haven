@@ -20,7 +20,7 @@ pub mod status_bar;
 pub use haven_proto::theme;
 
 pub use frame::{FrameModel, PaneFrame, Span, Widget, WidgetKind};
-pub use frontend::{Frontend, NullFrontend, PresentError, ScriptedFrontend};
+pub use frontend::{Frontend, NullFrontend, PresentError, ScriptedFrontend, Zoom};
 pub use input::{
     InputEvent, Key, KeyEncoder, KeyEvent, KeyState, Modifiers, MouseButton, MouseEvent, NamedKey,
 };
@@ -74,6 +74,9 @@ pub enum Intercepted {
     /// Change which host directories a container pane is given. `add` and
     /// `remove` are both `None` for a request to simply say what they are.
     ContainerMounts { add: Option<String>, remove: Option<String> },
+    /// Make the text bigger or smaller. Only a frontend that owns its font
+    /// can; the rest say so.
+    Zoom(frontend::Zoom),
     /// Show a menu the composition root built, since only it knows what the
     /// commands are. Title, then label-and-command pairs.
     OpenMenu { title: String, entries: Vec<(String, String)>, filterable: bool },
@@ -106,6 +109,16 @@ pub enum Tick {
     Redraw,
     /// The user asked to detach, or the server went away.
     Finished,
+}
+
+/// A font size as a person would write it: `16`, not `16.0`, and `16.5`
+/// when it really is.
+fn trim_px(px: f32) -> String {
+    if (px - px.round()).abs() < 0.05 {
+        format!("{}", px.round() as i32)
+    } else {
+        format!("{px:.1}")
+    }
 }
 
 /// Seconds since the epoch, for the bar's clock.
@@ -151,6 +164,13 @@ pub struct Client<F, T> {
     /// What to do with the shell picked from the menu, held between asking
     /// the daemon for the list and the list arriving.
     pub shell_verb: String,
+    /// Where a new font size goes to be remembered.
+    ///
+    /// A callback rather than a path, for the same reason the key filter is
+    /// one: the config file belongs to the composition root above, and a
+    /// client that wrote to it would be a second thing that knows where it
+    /// lives and what is in it.
+    pub font_saver: Option<Box<dyn FnMut(f32)>>,
     /// Host directories handed to container panes opened from here.
     ///
     /// Client-side and deliberately so: a mount can only be decided before
@@ -209,6 +229,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             buffers: Vec::new(),
             shell_verb: "new-window".into(),
             container_mounts: Vec::new(),
+            font_saver: None,
             mouse_enabled: true,
             showing_panes: false,
             environment: Vec::new(),
@@ -452,6 +473,28 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
             Intercepted::ContainerMounts { add, remove } => {
                 self.frame.notice = Some(self.change_mounts(add, remove));
+                Tick::Redraw
+            }
+            Intercepted::Zoom(step) => {
+                match self.frontend.zoom(step) {
+                    Some(px) => {
+                        // Remembered, so the next window opens where this
+                        // one was left. The client does not write the file
+                        // itself — it is not the client's file to know
+                        // about — it hands the number to whoever gave it
+                        // the saver.
+                        if let Some(save) = &mut self.font_saver {
+                            save(px);
+                        }
+                        self.frame.notice = Some(format!("font {}px", trim_px(px)));
+                    }
+                    // A key that does nothing and says nothing is
+                    // indistinguishable from a broken binding.
+                    None => {
+                        self.frame.notice =
+                            Some("the terminal Haven is running in owns the font size".into())
+                    }
+                }
                 Tick::Redraw
             }
             Intercepted::OpenMenu { title, entries, filterable } => {

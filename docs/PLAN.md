@@ -1120,7 +1120,7 @@ rewrite.
 ## 20. Implementation status
 
 Updated as milestones land, so the plan above does not drift from the tree.
-**598 tests, zero clippy warnings, `cargo test --workspace` green.**
+**608 tests, zero clippy warnings, `cargo test --workspace` green.**
 
 | Milestone | State |
 |---|---|
@@ -1135,6 +1135,19 @@ Updated as milestones land, so the plan above does not drift from the tree.
 | **M5** daemon + attach/detach | Done bar live upgrade. `havend` as `haven server run`, framed postcard over a unix socket, per-client row-revision sync, style/cluster table shipping, `Smallest`/`Latest` resize policies, autostart, `haven attach \| ls \| kill-session \| server stop`. Verified end to end: a session outlives its client and reattach restores the screen. |
 | **M1** GPU frontend | Done bar polish. wgpu pipelines, shelf-packed glyph atlas, font fallback with a last-resort system scan, sRGB-correct colour, procedural box drawing, a winit window with vsync, and `haven screenshot` so the renderer stays reviewable without a display. No italic faces, no ligatures, no colour emoji yet. |
 | **M4** keyboard | Partial. A prefix key table resolving to a declarative `Action`, shared by the standalone and attached paths. The modal stack, configurable bindings, palette and copy mode are still to come. |
+
+**Zoom** (`Ctrl+=` / `Ctrl+-` / `Ctrl+0`) is a frontend capability, not a mux
+one: `Frontend::zoom` returns the new pixel size, or `None` from a frontend
+whose font is not its own — a client drawing into somebody else's terminal
+cannot resize that terminal's font, and the key says so rather than doing
+nothing. The window answers by re-measuring the already-loaded faces (a
+zoom costs a measurement, not another scan of every font on the system),
+emptying the atlas, and pushing itself a resize: the same pixels now hold
+fewer, larger cells, and the session is told so through the path a window
+resize already uses. The new size is handed to a saver the composition root
+supplies, because the config file is not the client's to know about, and
+written as a single line so that pressing `Ctrl+=` cannot reformat a file
+full of someone's comments.
 
 **Releases and packaging** are in `packaging/`, chained so that one link
 cannot drift from the next: a tag runs `.github/workflows/release.yml`, which

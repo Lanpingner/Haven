@@ -227,7 +227,12 @@ impl Atlas {
         Some((PADDING, y + PADDING))
     }
 
-    fn reset(&mut self) {
+    /// Forget every packed glyph.
+    ///
+    /// Public for the font-size change: every entry was rasterised at the
+    /// old size and is keyed by it, so none would ever be read again —
+    /// which makes them exactly the kind of thing that fills an atlas.
+    pub fn reset(&mut self) {
         self.shelves.clear();
         self.next_y = 0;
         self.map.clear();

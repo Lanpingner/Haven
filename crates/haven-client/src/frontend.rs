@@ -11,6 +11,19 @@ use haven_proto::{CellSize, ClientCaps, FrontendKind, KeyTier};
 use crate::frame::FrameModel;
 use crate::input::InputEvent;
 
+/// What a zoom key asks of a frontend.
+///
+/// Not the pane zoom the prefix key does — that rearranges a layout. This
+/// is the size of the text, which only a frontend that owns its own font
+/// can change at all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Zoom {
+    In,
+    Out,
+    /// Back to the size the config asked for.
+    Reset,
+}
+
 pub trait Frontend: std::fmt::Debug {
     fn caps(&self) -> ClientCaps;
     /// Non-blocking: `None` means no input is pending.
@@ -23,6 +36,15 @@ pub trait Frontend: std::fmt::Debug {
     /// clipboard does nothing: the text is still kept in a paste buffer, so
     /// copy mode works either way.
     fn set_clipboard(&mut self, _text: &str) {}
+    /// Make the text bigger or smaller, returning the new size in pixels.
+    ///
+    /// `None` from a frontend whose font is not its own: a client drawing
+    /// into somebody else's terminal cannot resize that terminal's font,
+    /// and the caller says so rather than letting the key do nothing.
+    fn zoom(&mut self, _zoom: Zoom) -> Option<f32> {
+        None
+    }
+
     /// Stop or resume asking the host for mouse reports.
     ///
     /// Ignoring the events is not enough for a terminal client: the host

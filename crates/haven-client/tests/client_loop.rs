@@ -558,6 +558,70 @@ fn containers_are_in_the_same_menu_as_the_shells() {
     assert!(menu.entries[2].0.contains("not pulled yet"), "{}", menu.entries[2].0);
 }
 
+/// A frontend that owns its font, as the window does.
+#[derive(Debug)]
+struct Zooming {
+    inner: ScriptedFrontend,
+    px: f32,
+}
+
+impl haven_client::Frontend for Zooming {
+    fn caps(&self) -> haven_proto::ClientCaps {
+        self.inner.caps()
+    }
+    fn next_input(&mut self) -> Option<InputEvent> {
+        self.inner.next_input()
+    }
+    fn present(
+        &mut self,
+        frame: &haven_client::frame::FrameModel,
+    ) -> Result<(), haven_client::PresentError> {
+        self.inner.present(frame)
+    }
+    fn zoom(&mut self, zoom: haven_client::Zoom) -> Option<f32> {
+        self.px = match zoom {
+            haven_client::Zoom::In => self.px + 1.0,
+            haven_client::Zoom::Out => self.px - 1.0,
+            haven_client::Zoom::Reset => 16.0,
+        };
+        Some(self.px)
+    }
+}
+
+#[test]
+fn zooming_tells_you_the_new_size_and_hands_it_on_to_be_remembered() {
+    let server = ScriptedTransport::new([ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1))]);
+    let frontend = Zooming { inner: ScriptedFrontend::new(size(40, 10), []), px: 16.0 };
+    let mut client = Client::new(frontend, server);
+    let saved = std::rc::Rc::new(std::cell::RefCell::new(Vec::<f32>::new()));
+    let sink = saved.clone();
+    client.font_saver = Some(Box::new(move |px| sink.borrow_mut().push(px)));
+    client.key_filter =
+        Some(Box::new(|_, _, _| haven_client::Intercepted::Zoom(haven_client::Zoom::In)));
+    client.tick().unwrap();
+    client.frontend.inner.feed(InputEvent::Key(KeyEvent::char('=').with(Modifiers::CTRL)));
+    client.tick().unwrap();
+
+    assert_eq!(client.frame.notice.as_deref(), Some("font 17px"), "the bar should say the size");
+    assert_eq!(*saved.borrow(), vec![17.0], "the new size was not handed on to be saved");
+}
+
+#[test]
+fn a_frontend_that_does_not_own_its_font_says_so() {
+    // The TUI client draws into somebody else's terminal, and that
+    // terminal's font is not Haven's to change. A key that did nothing and
+    // said nothing would look like a broken binding.
+    let server = ScriptedTransport::new([ServerMsg::Layout(layout(&[(1, 0, 0, 20, 4)], 1))]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 10), []), server);
+    client.key_filter =
+        Some(Box::new(|_, _, _| haven_client::Intercepted::Zoom(haven_client::Zoom::In)));
+    client.tick().unwrap();
+    client.frontend.feed(InputEvent::Key(KeyEvent::char('=').with(Modifiers::CTRL)));
+    client.tick().unwrap();
+    let notice = client.frame.notice.as_deref().unwrap_or_default();
+    assert!(notice.contains("owns the font size"), "{notice}");
+}
+
 #[test]
 fn a_menu_pick_that_opens_another_menu_is_not_dropped_on_the_floor() {
     // The bug this is here for: picking a distro did nothing and said

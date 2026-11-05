@@ -106,6 +106,10 @@ pub enum Action {
     Scroll(i32),
     /// Enter copy mode.
     Copy,
+    /// Bigger or smaller text. Not [`Action::ToggleZoom`], which is the
+    /// pane zoom the prefix key does: one letter, two meanings, so these
+    /// are spelled out as fonts rather than as zoom.
+    Font(haven_client::Zoom),
     /// Send the newest paste buffer to the pane.
     Paste,
 }
@@ -153,6 +157,9 @@ pub const COMMANDS: &[&str] = &[
     "find-window",
     "copy-mode",
     "paste-buffer",
+    "font-bigger",
+    "font-smaller",
+    "font-reset",
     "scroll-up",
     "scroll-down",
     "scroll-end",
@@ -413,6 +420,9 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         // the end of the verb.
         "command-prompt" => Action::EnterCommand(prefill(line, verb)),
         "copy-mode" | "copy" => Action::Copy,
+        "font-bigger" | "zoom-in" => Action::Font(haven_client::Zoom::In),
+        "font-smaller" | "zoom-out" => Action::Font(haven_client::Zoom::Out),
+        "font-reset" | "zoom-reset" => Action::Font(haven_client::Zoom::Reset),
         "paste-buffer" | "paste" => Action::Paste,
         "scroll-up" | "page-up" => Action::Scroll(PAGE_ROWS),
         "scroll-down" | "page-down" => Action::Scroll(-PAGE_ROWS),
@@ -476,6 +486,7 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         | Action::ChooseShell(_)
         | Action::ContainerShell { .. }
         | Action::ContainerMounts { .. }
+        | Action::Font(_)
         | Action::CommandPalette
         | Action::SwitchTable(_) => return None,
         Action::NextLayout => P::NextLayout,

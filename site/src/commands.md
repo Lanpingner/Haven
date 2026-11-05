@@ -20,6 +20,7 @@ the other.
 | `even-horizontal`, `even-vertical`, `tiled` | layouts |
 | `scroll-up`, `scroll-down`, `scroll-top`, `scroll-end` | as the paging keys do |
 | `copy-mode` (`copy`), `paste-buffer` | enter copy mode / paste the newest buffer |
+| `font-bigger` (`zoom-in`), `font-smaller` (`zoom-out`), `font-reset` | the size of the text in the window, remembered in the config |
 | `choose` | the session tree |
 | `choose-shell [verb]` | the shell menu, [containers and all](./containers.md); `verb` is what to do with the pick, `new-window` by default |
 | `container-mount <path>` (`mount`) | hand a host directory to [container panes](./containers.md); `cwd` means the pane's own |

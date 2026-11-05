@@ -15,7 +15,7 @@ rather than a code change.
 | `%` / `"` | split into columns / rows, in the directory you are in |
 | `h` `j` `k` `l` or arrows | move focus |
 | `H` `J` `K` `L` | resize |
-| `z` | zoom the active pane |
+| `z` | zoom the active *pane* — the layout, not the text |
 | `x` | close the pane |
 | `c` / `n` / `p` / `1`-`9` | new tab / next / previous / select |
 | `C` | new session, and move to it |
@@ -52,6 +52,8 @@ the history that exists.
 |---|---|
 | `Alt+C` | open a tab and [choose what runs in it](./sessions.md#choosing-a-shell): a local shell or [a container](./containers.md) |
 | `Alt+P` | the command palette |
+| `Ctrl+=` / `Ctrl+-` | bigger / smaller text, in the GPU window |
+| `Ctrl+0` | back to the size the config asks for |
 
 Those two are the defaults, and the *root table* they live in is the same
 mechanism as everything else: `root` in the config binds keys that act with
