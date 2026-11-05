@@ -1,6 +1,6 @@
 pkgbase = haven-terminal
 	pkgdesc = A GPU terminal with the multiplexer already inside it
-	pkgver = 0.0.1
+	pkgver = 0.0.2
 	pkgrel = 1
 	url = https://github.com/Lanpingner/Haven
 	arch = x86_64
@@ -19,12 +19,12 @@ pkgbase = haven-terminal
 	optdepends = libxi: input on X11
 	optdepends = wayland: windows on Wayland
 	optdepends = noto-fonts-emoji: colour emoji
-	provides = haven=0.0.1
+	provides = haven=0.0.2
 	conflicts = haven
 	conflicts = haven-terminal-bin
 	conflicts = haven-terminal-git
 	options = !lto
-	source = haven-terminal-0.0.1.tar.gz::https://github.com/Lanpingner/Haven/archive/refs/tags/v0.0.1.tar.gz
-	sha256sums = 914fbc75bd63fe0a42d1d47065aae0509b387c332262eafc23cb345d1688d6dc
+	source = haven-terminal-0.0.2.tar.gz::https://github.com/Lanpingner/Haven/archive/refs/tags/v0.0.2.tar.gz
+	sha256sums = 2600f3e194603d7dd9a6e87d97d6bf345d2e758c833e730501d37c7ffac3f1dc
 
 pkgname = haven-terminal
