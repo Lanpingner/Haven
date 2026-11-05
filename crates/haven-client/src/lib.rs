@@ -461,7 +461,11 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         if size == 0 {
             return;
         }
-        let rows = (self.frame.size.rows as usize).saturating_sub(6).clamp(4, 40);
+        // Exactly what the panel will show. Asking for more was harmless
+        // when the box grew to fit its contents; against a fixed frame the
+        // extra rows are dropped off the bottom, which is the half of a
+        // pane worth previewing.
+        let rows = crate::dialog::panel_rows(self.frame.size);
         let _ = self.transport.send(ClientMsg::Preview {
             pane: PaneId(pane),
             cols: size as u16,

@@ -114,6 +114,16 @@ pub fn panel_width(size: CellSize) -> usize {
     (inner * 45 / 100).clamp(24, 56)
 }
 
+/// How many rows a searchable dialog's list and panel are tall.
+///
+/// Public because a preview has to be *asked for* at this height: a caller
+/// that guesses high gets a snapshot whose bottom rows are then dropped,
+/// and the bottom is the half worth seeing.
+pub fn panel_rows(size: CellSize) -> usize {
+    let room = (size.rows as usize).saturating_sub(5);
+    (size.rows as usize * 2 / 3).clamp(1, room.max(1))
+}
+
 const NOTHING: &str = "  nothing matches";
 
 impl Dialog<'_> {
@@ -154,7 +164,7 @@ impl Dialog<'_> {
         // because a short list in a window five times its size reads as a
         // mistake, and nothing about it changes while it is open.
         let (body, list_w) = if self.searchable {
-            let body = (size.rows as usize * 2 / 3).clamp(1, room.max(1));
+            let body = panel_rows(size);
             let cols = (size.cols as usize * 4 / 5).clamp(12, size.cols as usize);
             let inner = cols.saturating_sub(2).max(1);
             let list_w =

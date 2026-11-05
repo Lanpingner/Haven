@@ -887,9 +887,10 @@ impl Daemon {
         };
         let grid = runtime.grid();
         let styles = runtime.styles();
-        grid.rows()
+        let all = grid.rows();
+
+        all[preview_window(grid, rows)]
             .iter()
-            .take(rows)
             .map(|row| {
                 let mut runs: Vec<(u16, String, haven_core::Style)> = Vec::new();
                 for cell in row.cells.iter().take(cols) {
@@ -1521,6 +1522,105 @@ pub fn socket_path(name: &str) -> PathBuf {
     base.join("haven").join(format!("{uid}-{name}.sock"))
 }
 
+/// Which rows of a pane to preview, when it is taller than the panel.
+///
+/// A shell's news is at the **bottom**: the prompt you are at, and whatever
+/// just finished. Taking the top gave every pane a preview of its login
+/// banner — the oldest thing on the screen and the one thing they all have
+/// in common — while the output that would have said which pane this was
+/// sat below the fold.
+///
+/// A full-screen program is the other way round. It composes the whole
+/// screen from the top, and its first rows are its title and its menu, so
+/// that is where it is recognisable.
+fn preview_window(grid: &Grid, rows: usize) -> std::ops::Range<usize> {
+    let all = grid.rows();
+    if grid.is_alt {
+        return 0..rows.min(all.len());
+    }
+    let used = all
+        .iter()
+        .rposition(|row| row.cells.iter().any(|c| !grid.cell_text(c).trim().is_empty()))
+        .map(|r| r + 1)
+        .unwrap_or(0);
+    // The cursor counts as used even on a blank row: a pane sitting at an
+    // empty prompt should preview as an empty prompt, not as the paragraph
+    // above it.
+    let end = used.max(grid.cursor.row + 1).min(all.len());
+    end.saturating_sub(rows)..end
+}
+
 /// Silence the unused-import warning for a type used only in a signature.
 #[doc(hidden)]
 pub fn _grid_anchor(_: &Grid) {}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::preview_window;
+    use haven_core::Grid;
+
+    fn filled(rows: usize, used: usize) -> Grid {
+        let mut grid = Grid::new(20, rows);
+        for row in 0..used {
+            grid.cursor.row = row;
+            grid.cursor.col = 0;
+            for c in format!("line {row}").chars() {
+                grid.write(c, 1);
+            }
+        }
+        grid.cursor.row = used.saturating_sub(1);
+        grid
+    }
+
+    fn text(grid: &Grid, window: std::ops::Range<usize>) -> Vec<String> {
+        grid.rows()[window]
+            .iter()
+            .map(|row| row.cells.iter().map(|c| grid.cell_text(c).into_owned()).collect::<String>())
+            .map(|line| line.trim_end().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_shell_previews_its_last_rows_not_its_first() {
+        // It previewed the first: every pane showed its login banner, and
+        // the one thing a preview is for — telling panes apart — was the
+        // thing it could not do.
+        let grid = filled(40, 40);
+        let shown = text(&grid, preview_window(&grid, 5));
+        assert_eq!(shown, vec!["line 35", "line 36", "line 37", "line 38", "line 39"]);
+    }
+
+    #[test]
+    fn a_pane_with_less_on_it_than_the_panel_holds_starts_at_the_top() {
+        // No blank band above three lines of output.
+        let grid = filled(40, 3);
+        assert_eq!(text(&grid, preview_window(&grid, 20)), vec!["line 0", "line 1", "line 2"]);
+    }
+
+    #[test]
+    fn an_empty_prompt_below_the_output_is_kept_in_view() {
+        // The cursor is on a blank row under the text. Anchoring on the
+        // last *written* row would scroll the prompt you are sitting at out
+        // of its own preview.
+        let mut grid = filled(40, 10);
+        grid.cursor.row = 10;
+        let shown = text(&grid, preview_window(&grid, 3));
+        assert_eq!(shown, vec!["line 8", "line 9", ""]);
+    }
+
+    #[test]
+    fn a_full_screen_program_previews_from_the_top() {
+        let mut grid = Grid::new_alt(20, 40);
+        for row in 0..40 {
+            grid.cursor.row = row;
+            grid.cursor.col = 0;
+            for c in format!("line {row}").chars() {
+                grid.write(c, 1);
+            }
+        }
+        // Its title and its menu are at the top, which is where it is
+        // recognisable; its last rows are a status line every one of them
+        // has.
+        assert_eq!(text(&grid, preview_window(&grid, 2)), vec!["line 0", "line 1"]);
+    }
+}

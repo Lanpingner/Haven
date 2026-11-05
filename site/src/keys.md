@@ -211,6 +211,15 @@ The preview is asked for per selection and only for a pane that is not
 already on the screen beside the list. Holding an arrow down does not send
 a snapshot request per keypress for panes you are moving past.
 
+What it shows is the **bottom** of a shell pane — the prompt you are at and
+whatever just finished — because that is what tells two panes apart. Taken
+from the top, every preview was a login banner. A full-screen program is
+the other way round: it composes its screen from the top, its first rows
+are its title and its menu, and its last row is a status line every one of
+them has, so that one previews from the top. It is asked for at exactly the
+panel's height, since rows past the bottom of the panel are dropped and the
+bottom is the half worth seeing.
+
 It is [one modal](./modals.md), shared with the palette, the history and the
 shell menu: the same keys, and a box that does not move while you type.
 
