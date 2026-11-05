@@ -27,7 +27,7 @@ conflicts=('haven' 'haven-terminal' 'haven-terminal-git')
 # symbols out of a binary that has none produces an empty package.
 options=('!strip' '!debug')
 source_x86_64=("$url/releases/download/v$pkgver/haven-$pkgver-x86_64-unknown-linux-gnu.tar.gz")
-sha256sums_x86_64=('SKIP')
+sha256sums_x86_64=('5c4c8293d96ad228d18d5565474a3baedce7202dda583ae198bdbca3b6fb7ddb')
 
 _dir="haven-$pkgver-x86_64-unknown-linux-gnu"
 
