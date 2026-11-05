@@ -55,7 +55,7 @@ How the release, the installer and the two AUR packages fit together is in
 ## Try it
 
 ```sh
-cargo test --workspace     # 635 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 636 tests, incl. mc/vim/less driven on real ptys
 
 # A GPU window, attached to the daemon (which it starts if needed).
 cargo run --release -p haven -- gpu

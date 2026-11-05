@@ -178,21 +178,37 @@ impl Serializer {
         let width = prev[0].len();
         let blank_row = vec![RenderCell::blank(); width];
 
-        // How many rows a given alignment explains, counting only non-blank
-        // rows so a mostly-empty screen cannot match trivially.
+        // The band of rows that changed at all. Whatever scrolled did so
+        // inside it, and confining the scroll to that band is the whole
+        // point: this screen is usually several panes, and `SU` without a
+        // region moves every one of them — along with the status bar, and
+        // along with the top line into the *host terminal's* scrollback.
+        // That looked exactly like what it was: pressing Enter in the lower
+        // pane of a split scrolled the entire window.
+        let Some(top) = (0..rows).find(|&i| prev[i] != next[i]) else {
+            return prev.clone();
+        };
+        let bottom = (0..rows).rev().find(|&i| prev[i] != next[i]).unwrap_or(top);
+        let band = bottom - top + 1;
+        if band < 4 {
+            return prev.clone();
+        }
+
+        // How many rows of the band a given alignment explains, counting
+        // only non-blank rows so a mostly-empty pane cannot match trivially.
         let score = |shift: isize| -> usize {
-            (0..rows as isize)
+            (top..=bottom)
                 .filter(|&i| {
-                    let source = i + shift;
-                    (0..rows as isize).contains(&source)
-                        && prev[source as usize] == next[i as usize]
+                    let source = i as isize + shift;
+                    (top as isize..=bottom as isize).contains(&source)
+                        && prev[source as usize] == next[i]
                         && prev[source as usize] != blank_row
                 })
                 .count()
         };
 
         let baseline = score(0);
-        let max_shift = (rows as isize) - 2;
+        let max_shift = (band as isize) - 2;
         let mut best: Option<(isize, usize)> = None;
         for shift in (1..=max_shift).chain(-max_shift..=-1) {
             let s = score(shift);
@@ -204,18 +220,35 @@ impl Serializer {
         }
 
         let Some((shift, _)) = best else { return prev.clone() };
-        let mut shifted: Snapshot = Vec::with_capacity(rows);
+
+        // A band that is the whole screen needs no region, and saying so
+        // keeps the common unsplit case to the three bytes it was.
+        let whole = top == 0 && bottom == rows - 1;
+        if !whole {
+            out.extend_from_slice(format!("\x1b[{};{}r", top + 1, bottom + 1).as_bytes());
+        }
+        let mut shifted = prev.clone();
         if shift > 0 {
-            // Content moved up: SU.
             out.extend_from_slice(format!("\x1b[{shift}S").as_bytes());
-            shifted.extend_from_slice(&prev[shift as usize..]);
-            shifted.resize(rows, blank_row);
+            let up = shift as usize;
+            for i in top..=bottom {
+                shifted[i] =
+                    if i + up <= bottom { prev[i + up].clone() } else { blank_row.clone() };
+            }
         } else {
             let down = (-shift) as usize;
             out.extend_from_slice(format!("\x1b[{down}T").as_bytes());
-            shifted.extend(std::iter::repeat_n(blank_row, down));
-            shifted.extend_from_slice(&prev[..rows - down]);
+            for i in (top..=bottom).rev() {
+                shifted[i] =
+                    if i >= top + down { prev[i - down].clone() } else { blank_row.clone() };
+            }
         }
+        if !whole {
+            // Back to the whole screen, or everything written afterwards is
+            // confined to one pane's rows.
+            out.extend_from_slice(b"\x1b[r");
+        }
+        // DECSTBM homes the cursor, and so does the scroll on some hosts.
         self.pos = None;
         shifted
     }

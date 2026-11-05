@@ -5,6 +5,37 @@ broke, because the interesting failures were never where they looked. A
 selection, kept here because they say more about the program than a feature list
 does.
 
+## Enter in a split scrolled the whole window
+
+Reported as "split horizontally, keep pressing Enter, and the whole thing
+scrolls — not just that pane". It did.
+
+The serializer has an optimisation worth having: when a frame is mostly the
+previous frame shifted, say `SU` instead of repainting every row. The
+difference between smooth and horrible when tailing a log over a slow link.
+It scored the shift across the *whole screen* and emitted a bare
+`ESC[1S` — and this program's screen is hardly ever one thing. A pane is not
+the screen. `SU` with no region moves every other pane, moves the status
+bar, and pushes the top line into the scrollback of the terminal Haven is
+running in, which is somebody else's.
+
+The repaint that followed put the picture back, so the content was never
+wrong. What you saw was the whole window jerking upward once per Enter, and
+your host terminal's scrollback slowly filling with Haven's top row.
+
+Now the band of rows that actually changed is found first, and the scroll is
+confined to it with `DECSTBM`:
+
+```
+ESC[13;23r   the lower pane, and nothing else
+ESC[1S
+ESC[r        hand the whole screen back
+```
+
+It is also *cheaper* than what it replaced, which repainted the pane above
+after scrolling it by mistake. Captured from a real split: sixteen scrolls,
+every one inside `ESC[13;23r`, with row 24 — the status bar — untouched.
+
 ## Four commands that worked where nobody could see
 
 Reported in one sitting, and all four the same shape: something happened

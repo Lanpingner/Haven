@@ -163,3 +163,70 @@ fn resizing_forces_a_full_repaint_rather_than_a_corrupt_delta() {
     let after = String::from_utf8(s.frame(&emu.term.grid, &emu.term.styles)).unwrap();
     assert!(after.contains("2J"), "a geometry change must repaint: {after:?}");
 }
+
+/// A split screen: two panes stacked, only the lower one scrolling.
+///
+/// This is the shape the scroll optimisation gets wrong. `SU` moves the
+/// whole screen, and a pane is not the whole screen.
+fn split_frame(
+    rows: usize,
+    cols: usize,
+    top_text: &str,
+    bottom: &[String],
+) -> Vec<Vec<haven_vtwrite::RenderCell>> {
+    let mut out = Vec::new();
+    let line = |text: &str| -> Vec<haven_vtwrite::RenderCell> {
+        let mut row = vec![haven_vtwrite::RenderCell::blank(); cols];
+        for (i, c) in text.chars().take(cols).enumerate() {
+            row[i] = haven_vtwrite::RenderCell::new(c.to_string(), Default::default());
+        }
+        row
+    };
+    out.push(line(top_text));
+    for _ in 1..rows / 2 {
+        out.push(line(""));
+    }
+    for i in 0..rows - rows / 2 {
+        out.push(line(bottom.get(i).map(String::as_str).unwrap_or("")));
+    }
+    out
+}
+
+#[test]
+fn a_pane_that_scrolls_does_not_scroll_the_whole_screen() {
+    // Pressing Enter in the lower pane of a split scrolled the entire
+    // window, because the scroll optimisation emitted `SU` for the whole
+    // screen — which moves every other pane, the status bar, and the top
+    // line into the *host* terminal's scrollback.
+    let (rows, cols) = (12, 40);
+    let mut serializer = Serializer::new(Caps::default());
+    let mut host = Emulator::new(cols, rows);
+
+    let bottom: Vec<String> = (0..6).map(|i| format!("$ line {i}")).collect();
+    let first = split_frame(rows, cols, "TOP PANE - must not move", &bottom);
+    host.feed(&serializer.frame_snapshot(first, (0, 0)));
+
+    let scrolled: Vec<String> = (1..8).map(|i| format!("$ line {i}")).collect();
+    let second = split_frame(rows, cols, "TOP PANE - must not move", &scrolled);
+    let out = serializer.frame_snapshot(second.clone(), (0, 0));
+    let text = String::from_utf8_lossy(&out).into_owned();
+    host.feed(&out);
+
+    // The scroll is confined to the rows that moved, and the region is
+    // handed back afterwards.
+    if text.contains("\x1b[1S") || text.contains("\x1b[1T") {
+        assert!(text.contains("r\u{1b}[1S") || text.contains(";12r"), "no region: {text:?}");
+        assert!(text.contains("\x1b[r"), "the scroll region was never reset: {text:?}");
+    }
+
+    // And the picture is right, which is the part worth proving: the top
+    // pane says what it said, and the lower one has moved on.
+    let got = snapshot(&host.term.grid, &host.term.styles);
+    let row_text = |row: &[haven_vtwrite::RenderCell]| -> String {
+        row.iter().map(|c| c.text.clone()).collect::<String>().trim_end().to_string()
+    };
+    assert_eq!(row_text(&got[0]), "TOP PANE - must not move", "the top pane moved");
+    for (i, row) in got.iter().enumerate() {
+        assert_eq!(row_text(row), row_text(&second[i]), "row {i} differs");
+    }
+}
