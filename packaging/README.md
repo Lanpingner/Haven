@@ -40,7 +40,56 @@ hash is worse than one that admits it has none.
 and nothing else, so automating it means putting a personal key in a secret.
 It is one command, run by a person.
 
+## The pacman repository
+
+The AUR is one way to get updates; this is the other, and it needs no AUR
+account at all. The release carries a signed one-package pacman repository,
+so a machine that has added it treats Haven like any other package:
+
+```sh
+sudo packaging/repo/add-repo.sh      # key, then /etc/pacman.conf
+sudo pacman -S haven-terminal-bin
+sudo pacman -Syu                     # from then on
+```
+
+`add-repo.sh --remove` undoes the pacman.conf half and keeps a backup. It
+adds the key *before* the repository on purpose: the other order leaves a
+machine whose next `-Syu` fails on a signature it was never given the means
+to check.
+
+### Setting it up, once
+
+The repository job signs what it publishes, so it needs a key:
+
+```sh
+packaging/repo/make-signing-key.sh --push    # makes one, sets GPG_PRIVATE_KEY
+```
+
+That key signs and nothing else: not an identity, certifying nobody, with no
+passphrase. A key living in CI is a key that can be taken from CI, and the
+answer to that is not a passphrase in a second secret — whoever can read one
+secret can read both — but a key worth little, easily revoked and replaced.
+Publish its fingerprint somewhere people can check it against.
+
+Without that secret the `repo` job fails loudly rather than skipping, which
+is deliberate: a release that quietly stopped shipping a repository is one
+nobody notices until `pacman -Syu` says there is nothing new.
+
+### How it is built
+
+In an Arch container, because `makepkg`, `repo-add` and `pacman-key` live
+nowhere else — and *after* the tarball job, because it packages what that
+job published rather than compiling the binary twice. It sets `pkgver` from
+the tag and recomputes the checksum from the asset it just downloaded, so
+the PKGBUILD in the tree does not have to have been refreshed first.
+
+One wrinkle worth knowing: `repo-add` makes `haven.db` a symlink to
+`haven.db.tar.zst`, and a release asset cannot be a symlink. Each link is
+uploaded as a copy of what it points at, which is what pacman asks for by
+name anyway.
+
 ## The files
+
 
 | | |
 |---|---|
@@ -50,6 +99,8 @@ It is one command, run by a person.
 | `haven.svg` | the icon, which is the site's logo. |
 | `aur/haven-terminal/` | builds from the release's source tarball. `x86_64` and `aarch64`. |
 | `aur/haven-terminal-bin/` | unpacks the release binary. `x86_64` only — that is all the workflow builds. |
+| `repo/add-repo.sh` | adds the signed pacman repository to a machine, and `--remove` takes it off again. |
+| `repo/make-signing-key.sh` | makes the signing-only key the repository is signed with, and offers to set the secret. |
 
 ## Why the runner is pinned to ubuntu-22.04
 

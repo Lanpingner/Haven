@@ -2,13 +2,32 @@
 
 ## Arch
 
+Two ways, and the first needs no AUR account — not even one of the
+project's.
+
+```sh
+# A signed pacman repository, served from the GitHub release.
+curl -fsSL https://github.com/Lanpingner/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
+sudo pacman -S haven-terminal-bin
+```
+
+That adds the project's signing key to the pacman keyring and a `[haven]`
+section to `/etc/pacman.conf`, after which `pacman -Syu` keeps Haven current
+like anything else. The key goes in first on purpose: the other order leaves
+a machine whose next upgrade fails on a signature it has no way to check.
+`add-repo.sh --remove` takes the repository back out, keeping a backup of
+the file it edited.
+
+Or, from the AUR:
+
 ```sh
 yay -S haven-terminal-bin   # the binary from the release
 yay -S haven-terminal       # or build it yourself
 ```
 
-Both install `haven`, a desktop entry and the icon. They conflict with each
-other on purpose: one `haven` in `PATH`, whichever way you got it.
+All three install `haven`, a desktop entry and the icon, and all three
+conflict with each other on purpose: one `haven` in `PATH`, whichever way
+you got it.
 
 ## Anywhere else, with one line
 
@@ -75,8 +94,9 @@ cannot `dlopen`, and `dlopen` is how the window finds Vulkan.
 
 ## Updating
 
-`yay -Syu` on Arch. Everywhere else, run the installer again — it replaces
-what it put there, and nothing else.
+`pacman -Syu` on Arch, through either the repository or the AUR. Everywhere
+else, run the installer again — it replaces what it put there, and nothing
+else.
 
 ## Releases, for the curious
 

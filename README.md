@@ -25,7 +25,11 @@ with `mdbook serve site --open`; the last chapter includes this repository's
 ## Install
 
 ```sh
-# Arch
+# Arch, from a signed pacman repository — no AUR account needed
+curl -fsSL https://github.com/Lanpingner/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
+sudo pacman -S haven-terminal-bin
+
+# Arch, from the AUR
 yay -S haven-terminal-bin        # the binary from the release
 yay -S haven-terminal            # or build it yourself
 
