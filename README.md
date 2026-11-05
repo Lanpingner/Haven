@@ -9,9 +9,10 @@ from, as a **standalone** terminal with no daemon, and as a **TUI client** that
 draws into any existing terminal over plain escape sequences.
 
 **Status: usable, with plenty still ahead.** Sessions, splits, window tabs,
-zoom, attach/detach, shell integration and a GPU window all work; `mc`, `vim`
-and `htop` render correctly. Plugins, copy mode, configuration and the
-interactive capability probe are not written yet. See
+zoom, attach/detach, copy mode, configuration, save and restore, container
+panes, shell integration and a GPU window all work; `mc`, `vim` and `htop`
+render correctly. Plugins, live daemon upgrade and ligatures are not written
+yet. See
 [docs/PLAN.md](docs/PLAN.md) for the design and
 [its status section](docs/PLAN.md#20-implementation-status) for exactly what
 exists.
@@ -20,6 +21,29 @@ There is a project page at <https://lanpingner.github.io/Haven/> — an
 mdBook whose chapters are the markdown files in [site/src/](site/src/). Build it
 with `mdbook serve site --open`; the last chapter includes this repository's
 [docs/PLAN.md](docs/PLAN.md) verbatim rather than copying it.
+
+## Install
+
+```sh
+# Arch
+yay -S haven-terminal-bin        # the binary from the release
+yay -S haven-terminal            # or build it yourself
+
+# Anywhere else
+curl -fsSL https://github.com/Lanpingner/Haven/releases/latest/download/haven-install.sh | sh
+```
+
+The installer checks the download's checksum before it believes it, installs
+into `~/.local` without ever calling `sudo`, and takes `--prefix`,
+`--version`, `--build` and `--uninstall`. It is short and worth
+[reading first](install.sh) — piping a script from the internet into a shell
+is a thing to be uneasy about.
+
+`haven attach` and `haven tui` need nothing but glibc 2.35 or newer. The
+window loads Vulkan, libxkbcommon and your display server's client library at
+runtime, which is why a terminal-only install can do without all of them.
+How the release, the installer and the two AUR packages fit together is in
+[packaging/README.md](packaging/README.md).
 
 ## Try it
 

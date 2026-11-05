@@ -1,0 +1,108 @@
+name: release
+
+# A release is cut by pushing a tag:
+#
+#     git tag -a v0.0.1 -m 'Haven 0.0.1' && git push origin v0.0.1
+#
+# Everything downstream — the installer, both AUR packages — reads what this
+# job uploads, so the asset names are a contract and not a detail. Changing
+# one breaks `install.sh` and `packaging/aur/refresh.sh` together.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (must already exist)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    # Not `ubuntu-latest`. The binary links glibc, and a binary built against
+    # a newer one will not start on an older system — so the runner is pinned
+    # to the oldest supported image rather than following whatever GitHub
+    # promotes. glibc 2.35 is the floor this sets.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: The tag and the manifest must agree
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          manifest=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$tag" != "v$manifest" ]; then
+            echo "tag $tag does not match workspace version $manifest" >&2
+            echo "A release whose binary reports a different version than its" >&2
+            echo "name is a bug report nobody can place." >&2
+            exit 1
+          fi
+          echo "version=$manifest" >> "$GITHUB_ENV"
+
+      # `--locked` so the release is built from the lockfile in the tag and
+      # not from whatever has since been published.
+      - run: cargo build --release --locked -p haven
+
+      - name: Stage the tarball
+        run: |
+          target=x86_64-unknown-linux-gnu
+          dir="haven-${{ env.version }}-$target"
+          mkdir -p "$dir"
+          cp target/release/haven "$dir/"
+          strip "$dir/haven"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
+          cp packaging/haven.desktop packaging/haven.svg "$dir/"
+          cp packaging/tarball-install.sh "$dir/install.sh"
+          chmod +x "$dir/install.sh"
+          tar czf "$dir.tar.gz" "$dir"
+          sha256sum "$dir.tar.gz" > SHA256SUMS
+          # The installer is fetched on its own, before any tarball exists, so
+          # it is an asset in its own right as well as a file in the tree.
+          cp install.sh haven-install.sh
+          sha256sum haven-install.sh >> SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          target=x86_64-unknown-linux-gnu
+          notes=$(cat <<'MD'
+          ## Install
+
+          ```sh
+          curl -fsSL https://github.com/Lanpingner/Haven/releases/latest/download/haven-install.sh | sh
+          ```
+
+          On Arch, prefer the AUR package — `yay -S haven-terminal-bin` for this
+          binary, or `yay -S haven-terminal` to build it yourself.
+
+          The binary needs glibc 2.35 or newer. `haven attach` and `haven tui`
+          need nothing else; the GPU window loads Vulkan, libxkbcommon and your
+          display server's client library at runtime.
+          MD
+          )
+          gh release create "$tag" \
+            --title "Haven $tag" \
+            --notes "$notes" \
+            "haven-${{ env.version }}-$target.tar.gz" \
+            haven-install.sh \
+            SHA256SUMS
+
+      # Said out loud, because the AUR packages are the half of the release
+      # that is not automatic: they live in their own repositories and need
+      # the checksums this job has just produced.
+      - name: What is left to do by hand
+        run: |
+          echo "::notice::Now run: packaging/aur/refresh.sh ${{ github.event.inputs.tag || github.ref_name }} && packaging/aur/publish.sh"

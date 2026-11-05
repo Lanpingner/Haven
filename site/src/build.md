@@ -1,7 +1,9 @@
 # Build it
 
-Rust 1.85 or newer, and a GPU backend wgpu can reach for the window. There are
-no packages yet; this is a from-source project for now.
+Rust 1.85 or newer, and a GPU backend wgpu can reach for the window.
+
+If you only want to *use* it, [install it](./install.md) instead: there is an
+Arch package and a one-line installer, and neither needs a toolchain.
 
 ```sh
 git clone https://github.com/Lanpingner/Haven

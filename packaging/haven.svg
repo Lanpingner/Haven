@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Haven Terminal">
+  <title>Haven Terminal</title>
+  <!-- The mark is the program: a window, two panes with a rule between them
+       that together read as an H, and the status row the client keeps for
+       itself along the bottom. Palette is Haven's own default theme. -->
+  <defs>
+    <linearGradient id="haven-stem" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8ab4f8"/>
+      <stop offset="1" stop-color="#6c9cf0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- the window -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#1b1e28"/>
+  <rect x="3" y="3" width="58" height="58" rx="13" fill="none" stroke="#2e3344" stroke-width="2"/>
+
+  <!-- two panes: the stems of the H -->
+  <rect x="17" y="14" width="7" height="30" rx="2" fill="url(#haven-stem)"/>
+  <rect x="40" y="14" width="7" height="30" rx="2" fill="url(#haven-stem)"/>
+
+  <!-- the rule in the gap between them: the crossbar -->
+  <rect x="24" y="25.5" width="16" height="7" rx="2" fill="#c8d0e0"/>
+
+  <!-- the status row, with the session name marked off at its left -->
+  <rect x="12" y="50" width="40" height="3.5" rx="1.75" fill="#2e3344"/>
+  <rect x="12" y="50" width="11" height="3.5" rx="1.75" fill="#6c9cf0"/>
+</svg>

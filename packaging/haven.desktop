@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Haven Terminal
+GenericName=Terminal
+Comment=A GPU terminal with the multiplexer already inside it
+# The window, not the attach client: a desktop launcher has no terminal to
+# draw into. It starts the daemon itself if one is not already running, so
+# the session outlives the window this opens.
+Exec=haven gpu
+Icon=haven
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;terminal;multiplexer;tmux;
+StartupNotify=true
+StartupWMClass=haven

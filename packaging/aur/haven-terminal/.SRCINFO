@@ -1,0 +1,30 @@
+pkgbase = haven-terminal
+	pkgdesc = A GPU terminal with the multiplexer already inside it
+	pkgver = 0.0.1
+	pkgrel = 1
+	url = https://github.com/Lanpingner/Haven
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	license = Apache-2.0
+	makedepends = cargo
+	makedepends = git
+	depends = glibc
+	depends = gcc-libs
+	depends = libxkbcommon
+	depends = vulkan-icd-loader
+	optdepends = libx11: windows on X11
+	optdepends = libxcursor: cursors on X11
+	optdepends = libxrandr: multi-monitor on X11
+	optdepends = libxi: input on X11
+	optdepends = wayland: windows on Wayland
+	optdepends = noto-fonts-emoji: colour emoji
+	provides = haven=0.0.1
+	conflicts = haven
+	conflicts = haven-terminal-bin
+	conflicts = haven-terminal-git
+	options = !lto
+	source = haven-terminal-0.0.1.tar.gz::https://github.com/Lanpingner/Haven/archive/refs/tags/v0.0.1.tar.gz
+	sha256sums = SKIP
+
+pkgname = haven-terminal

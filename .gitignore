@@ -14,3 +14,11 @@ a.out
 
 # mdbook output
 /site/book
+
+# makepkg's working directories and output, from building an AUR package in
+# place. The PKGBUILD and .SRCINFO are the only files of a package worth
+# keeping.
+/packaging/aur/*/src/
+/packaging/aur/*/pkg/
+/packaging/aur/*/*.pkg.tar.*
+/packaging/aur/*/*.tar.gz

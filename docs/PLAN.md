@@ -1136,6 +1136,20 @@ Updated as milestones land, so the plan above does not drift from the tree.
 | **M1** GPU frontend | Done bar polish. wgpu pipelines, shelf-packed glyph atlas, font fallback with a last-resort system scan, sRGB-correct colour, procedural box drawing, a winit window with vsync, and `haven screenshot` so the renderer stays reviewable without a display. No italic faces, no ligatures, no colour emoji yet. |
 | **M4** keyboard | Partial. A prefix key table resolving to a declarative `Action`, shared by the standalone and attached paths. The modal stack, configurable bindings, palette and copy mode are still to come. |
 
+**Releases and packaging** are in `packaging/`, chained so that one link
+cannot drift from the next: a tag runs `.github/workflows/release.yml`, which
+builds on a pinned `ubuntu-22.04` (a glibc-linked binary will not start on an
+older system than it was built against, and `ubuntu-latest` moves), and
+uploads the tarball, a copy of the installer and `SHA256SUMS`. `install.sh`
+reads `SHA256SUMS` first — it names the tarball, so `latest` resolves without
+an API call — and refuses anything whose checksum does not match. The two AUR
+packages, one from the binary and one from source, are pointed at the
+published release by `packaging/aur/refresh.sh` and pushed by
+`publish.sh`, which is deliberately not in CI: the AUR authenticates by SSH
+key alone, so automating it would mean a personal key in a secret. A musl
+build would remove the glibc floor and cannot be used — a static musl binary
+cannot `dlopen`, which is how the window finds Vulkan.
+
 **Crates:** `haven-core`, `haven-pty`, `haven-shell`, `haven-backend`,
 `haven-vtwrite`, `haven-proto`, `haven-client`, `haven-tui`, `haven-mux`,
 `haven-daemon`, `haven`.

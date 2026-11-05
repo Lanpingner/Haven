@@ -2,6 +2,7 @@
 
 [Haven Terminal](./introduction.md)
 
+- [Install it](./install.md)
 - [How it compares](./comparison.md)
 - [Run modes](./modes.md)
 - [Keys and commands](./keys.md)

@@ -1,0 +1,73 @@
+# Maintainer: Lanpingner <berromaa@gmail.com>
+#
+# Builds Haven from the source of a tagged release. For the binary that the
+# release workflow already built, see haven-terminal-bin.
+#
+# `packaging/aur/refresh.sh <tag>` fills in pkgver and the checksum from a
+# published release; do not edit either by hand.
+
+pkgname=haven-terminal
+pkgver=0.0.1
+pkgrel=1
+pkgdesc='A GPU terminal with the multiplexer already inside it'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Lanpingner/Haven'
+license=('MIT' 'Apache-2.0')
+# Only glibc and gcc-libs are linked. Everything the window needs — Vulkan,
+# libxkbcommon, the display server's client library — is opened at runtime,
+# so a terminal-only install can do without all of it. They are depends
+# rather than optdepends anyway, because `haven gpu` is the headline and a
+# dlopen failure at startup is a worse introduction than a few megabytes.
+depends=('glibc' 'gcc-libs' 'libxkbcommon' 'vulkan-icd-loader')
+makedepends=('cargo' 'git')
+optdepends=('libx11: windows on X11'
+            'libxcursor: cursors on X11'
+            'libxrandr: multi-monitor on X11'
+            'libxi: input on X11'
+            'wayland: windows on Wayland'
+            'noto-fonts-emoji: colour emoji')
+provides=("haven=$pkgver")
+conflicts=('haven' 'haven-terminal-bin' 'haven-terminal-git')
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+_srcdir="Haven-$pkgver"
+
+prepare() {
+  cd "$_srcdir"
+  # Vendored up front so build() can run with the network off, which is what
+  # a clean chroot build does.
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_srcdir"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # --locked, so the package is built from the lockfile in the tag rather
+  # than from whatever has been published since it was cut.
+  cargo build --frozen --release --locked -p haven
+}
+
+check() {
+  cd "$_srcdir"
+  export RUSTUP_TOOLCHAIN=stable
+  # The suite drives real ptys and real programs (mc, vim, less) and skips
+  # nothing on their absence, so a package built in a chroot without them
+  # would fail here for reasons that are not the package's fault. Run it
+  # yourself from a checkout if you want the whole thing.
+  cargo test --frozen --release --locked -p haven-core -p haven-mux
+}
+
+package() {
+  cd "$_srcdir"
+  install -Dm755 target/release/haven "$pkgdir/usr/bin/haven"
+  install -Dm644 packaging/haven.desktop "$pkgdir/usr/share/applications/haven.desktop"
+  install -Dm644 packaging/haven.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/haven.svg"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}
