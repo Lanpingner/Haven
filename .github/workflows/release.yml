@@ -100,13 +100,30 @@ jobs:
           # built again — to add an asset a later workflow learned to make,
           # for instance — and a second run that failed on "already exists"
           # would mean cutting a version number to fix packaging.
+          # GitHub's API has answered 500 to an asset replace, to a workflow
+          # dispatch and to a push's ruleset check, all in one afternoon. A
+          # release that has to be driven by hand because the far end was
+          # briefly unwell is a release process that does not work.
+          retry() {
+            n=0
+            until "$@"; do
+              n=$((n + 1))
+              if [ "$n" -ge 4 ]; then
+                echo "::error::gave up after $n attempts: $*"
+                return 1
+              fi
+              echo "attempt $n failed, waiting $((n * 10))s"
+              sleep $((n * 10))
+            done
+          }
+
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" --clobber \
+            retry gh release upload "$tag" --clobber \
               "haven-${{ env.version }}-$target.tar.gz" \
               haven-install.sh \
               SHA256SUMS
           else
-            gh release create "$tag" \
+            retry gh release create "$tag" \
               --title "Haven $tag" \
               --notes "$notes" \
               "haven-${{ env.version }}-$target.tar.gz" \
@@ -213,7 +230,19 @@ jobs:
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           cd repo
-          gh release upload "$tag" --clobber \
+          retry() {
+            n=0
+            until "$@"; do
+              n=$((n + 1))
+              if [ "$n" -ge 4 ]; then
+                echo "::error::gave up after $n attempts: $*"
+                return 1
+              fi
+              echo "attempt $n failed, waiting $((n * 10))s"
+              sleep $((n * 10))
+            done
+          }
+          retry gh release upload "$tag" --clobber \
             *.pkg.tar.zst *.pkg.tar.zst.sig \
             haven.db haven.db.sig haven.files haven.files.sig \
             "$GITHUB_WORKSPACE/haven-repo.pub"
