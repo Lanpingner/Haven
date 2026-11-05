@@ -851,6 +851,46 @@ fn a_panes_history_comes_back_marked_as_this_panes_own() {
 }
 
 #[test]
+fn a_command_run_twice_is_listed_once() {
+    // A pane's history is mostly repetition — `cargo test` over and over —
+    // and the modal listed every run, so the list you were reading to find
+    // one line was thirty rows of the same line.
+    let mut daemon = Daemon::detached(marking_spawner);
+    let mut client = attach(&mut daemon, 40, 10);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let pane = client.focus.expect("focus");
+    for line in [b"cargo test
+".as_slice(), b"ls -la
+", b"cargo test
+", b"vim notes
+"] {
+        send_input(&mut client, pane, line);
+        for _ in 0..30 {
+            daemon.tick(Duration::from_millis(10)).expect("tick");
+            let _ = client.tick();
+        }
+    }
+
+    client.transport.send(ClientMsg::History { pane }).expect("history");
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].menu
+                .as_ref()
+                .is_some_and(|m| m.entries.iter().any(|(l, _)| l.contains("cargo test")))
+        }),
+        "no history came back"
+    );
+    let menu = client.menu.as_ref().expect("no menu");
+    let runs = menu.entries.iter().filter(|(l, _)| l.contains("cargo test")).count();
+    assert_eq!(runs, 1, "{:?}", menu.entries);
+    // Once, and at its most recent run. The modal lists newest first, so
+    // the second `cargo test` puts it above `ls -la` — where keeping the
+    // first occurrence instead would have left it below.
+    let at = |needle: &str| menu.entries.iter().position(|(l, _)| l.contains(needle));
+    assert!(at("cargo test") < at("ls -la"), "{:?}", menu.entries);
+}
+
+#[test]
 fn renaming_a_session_reaches_everything_that_shows_its_name() {
     // It reached nothing. The name was kept twice — once in the mux, once
     // beside it in the daemon — and `rename-session` wrote the mux's copy

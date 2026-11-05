@@ -23,6 +23,19 @@ The box is a fixed frame and does not resize as you narrow the list — see
 [one modal, everywhere](./modals.md), which is also what the palette and the
 session tree are.
 
+### Each command once
+
+A history is mostly repetition — `cargo test` forty times, `git status`
+twice that — and a list you are reading to find one line should not spend
+forty rows saying the same thing. Each command appears once, at its **most
+recent** run, so the order still reads as what you did last and the status
+beside it is how it ended last.
+
+Both halves go through the rule, and the shell file is deduplicated before
+it is capped rather than after: 500 entries are meant to be 500 things
+worth choosing from, and cutting first would spend most of them on repeats
+of the last few commands.
+
 ### Two sources, and the difference is visible
 
 The list is merged from two places that know different things:

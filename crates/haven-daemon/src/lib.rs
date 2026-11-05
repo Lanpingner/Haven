@@ -845,15 +845,23 @@ impl Daemon {
         let Some(host) = self.sessions.get(&id) else { return Vec::new() };
         let Some(runtime) = host.runtime.pane(pane) else { return Vec::new() };
 
-        let mine: Vec<haven_proto::HistoryEntry> = runtime
+        // Each command once, at its most recent run — so the status shown
+        // beside it is the one it ended with last, and a list you are
+        // reading to find a line does not spend thirty rows on `cargo
+        // test`. The same rule the shell half goes through.
+        let mut seen_mine = std::collections::HashSet::new();
+        let mut mine: Vec<haven_proto::HistoryEntry> = runtime
             .history()
             .iter()
+            .rev()
+            .filter(|run| seen_mine.insert(run.command.as_str()))
             .map(|run| haven_proto::HistoryEntry {
                 command: run.command.clone(),
                 exit: run.exit,
                 from_pane: true,
             })
             .collect();
+        mine.reverse();
 
         let seen: std::collections::HashSet<&str> =
             mine.iter().map(|e| e.command.as_str()).collect();

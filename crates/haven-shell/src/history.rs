@@ -23,16 +23,35 @@
 
 use std::path::{Path, PathBuf};
 
-/// The most recent entries, newest last. Capped because a history file is
-/// unbounded and a client is going to be sent this.
+/// The most recent entries, newest last, each command once. Capped because
+/// a history file is unbounded and a client is going to be sent this.
+///
+/// A history file is mostly repetition — `cargo test` forty times, `git
+/// status` twice that — and a list you are reading to find one line should
+/// not spend forty rows saying the same thing. The **newest** occurrence is
+/// the one kept, so the order still reads as "what I did last".
+///
+/// Deduplicated before the cap, not after: a limit of 500 is meant to be
+/// 500 things worth choosing from, and cutting first would spend most of
+/// them on repeats of the last few commands.
 pub fn recent(shell: &str, limit: usize) -> Vec<String> {
     let Some(path) = path_for(shell) else { return Vec::new() };
     let Ok(text) = std::fs::read_to_string(&path) else { return Vec::new() };
-    let mut all = parse(shell, &text);
+    let mut all = dedup_keeping_newest(parse(shell, &text));
     if all.len() > limit {
         all.drain(..all.len() - limit);
     }
     all
+}
+
+/// Each command once, at the position of its most recent run, order
+/// otherwise untouched.
+pub fn dedup_keeping_newest(mut commands: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    commands.reverse();
+    commands.retain(|command| seen.insert(command.clone()));
+    commands.reverse();
+    commands
 }
 
 /// Where a shell keeps its history, by the rules that shell actually uses.
@@ -184,6 +203,19 @@ pub fn shell_name(program: Option<&Path>) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_newest_run_of_a_repeated_command_is_the_one_kept() {
+        let out = super::dedup_keeping_newest(
+            ["cargo test", "vim a", "cargo test", "git status", "vim a"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        );
+        // Each once, and each where it ran last — so the list still reads
+        // newest-last rather than in the order things were first tried.
+        assert_eq!(out, vec!["cargo test", "git status", "vim a"]);
+    }
+
     use super::*;
 
     #[test]
