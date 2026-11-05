@@ -5,6 +5,39 @@ broke, because the interesting failures were never where they looked. A
 selection, kept here because they say more about the program than a feature list
 does.
 
+## The cursor was left one row below its own line
+
+The other half of the zoom story, and the half that was actually a bug in
+the terminal rather than in how often it was told things.
+
+When a resize changed only the number of rows — which a font change does
+whenever the new cell width happens to divide the window the same way —
+the grid pushed rows off the top into history and then merely *clamped* the
+cursor to the last row. Content moved up by three; the cursor moved up by
+as much as the clamp happened to allow. The cursor ended up below its own
+line, the shell drew its next prompt there, and the old prompt stayed
+above it. Every zoom step added one, with a gap, which is exactly what the
+screenshots showed.
+
+It was invisible when the cursor was already on the last row, which is why
+it survived: that is the case every test had.
+
+Two changes. A shrink now eats blank rows below the cursor before it takes
+any history, and when it does take history the cursor goes up with it. And
+growing takes rows back *out* of history rather than appending blanks, so
+zooming out and back in lands exactly where it started — verified by
+comparing the whole grid before and after a round trip.
+
+With a real fish: six rows-only resizes leave one prompt on screen and the
+cursor on it. A full zoom in and out — seven resizes, both dimensions
+moving — also leaves one.
+
+What this does not fix is a reflow at a *new width*. A shell keeps its own
+record of how many rows its prompt occupies; re-wrap the prompt underneath
+it and that record is stale, so the repaint can leave a fragment behind.
+Every terminal that reflows has this, and it is one fragment rather than
+one per resize.
+
 ## Rapid zooming filled the pane with prompts
 
 Reported with a screenshot: zoom in and out quickly a few times and a pane

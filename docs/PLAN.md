@@ -1120,7 +1120,7 @@ rewrite.
 ## 20. Implementation status
 
 Updated as milestones land, so the plan above does not drift from the tree.
-**639 tests, zero clippy warnings, `cargo test --workspace` green.**
+**642 tests, zero clippy warnings, `cargo test --workspace` green.**
 
 | Milestone | State |
 |---|---|

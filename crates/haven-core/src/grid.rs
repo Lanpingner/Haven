@@ -355,6 +355,13 @@ impl Grid {
             .collect()
     }
 
+    /// Take the newest row back out of history, for a screen that grew.
+    fn unpop_scrollback(&mut self) -> Option<Row> {
+        let row = self.scrollback.pop_back()?;
+        self.scrollback_bytes = self.scrollback_bytes.saturating_sub(row_bytes(&row));
+        Some(row)
+    }
+
     fn push_scrollback(&mut self, row: Row) {
         if self.is_alt || self.max_scrollback_bytes == 0 {
             return;
@@ -446,12 +453,34 @@ impl Grid {
             self.cols = cols;
         }
         while self.rows.len() > rows_n {
-            // Rows leaving the top are history, not garbage.
+            // Blank space below the cursor goes first. Pushing text into
+            // history while empty rows sit underneath it loses content for
+            // no reason.
+            let last = self.rows.len() - 1;
+            if last > self.cursor.row && self.rows[last].cells.iter().all(|c| c.is_blank()) {
+                self.rows.pop();
+                continue;
+            }
+            // Rows leaving the top are history, not garbage — and the
+            // cursor goes up with them. It used to be merely clamped, so
+            // every shrink left it one row below its own line: the shell
+            // then drew its next prompt there, under the old one, and a few
+            // taps of the zoom key filled the pane with prompts.
             let row = self.rows.remove(0);
             self.push_scrollback(row);
+            self.cursor.row = self.cursor.row.saturating_sub(1);
         }
         while self.rows.len() < rows_n {
-            self.rows.push(Row::new(cols));
+            // Growing gives back what shrinking took, so zooming out and
+            // in again lands where it started rather than drifting up the
+            // screen a line at a time.
+            match self.unpop_scrollback() {
+                Some(row) => {
+                    self.rows.insert(0, row);
+                    self.cursor.row += 1;
+                }
+                None => self.rows.push(Row::new(cols)),
+            }
         }
         self.scroll_top = 0;
         self.scroll_bot = rows_n - 1;
@@ -855,6 +884,77 @@ fn row_text(row: &Row, clusters: &Clusters) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn shrinking_takes_the_cursor_with_the_content() {
+        // It did not: the cursor was merely clamped, so every shrink left
+        // it one row below its own line. A shell then drew its next prompt
+        // there, under the old one, and a few taps of the zoom key filled
+        // the pane with prompts separated by gaps.
+        let mut g = Grid::new(20, 8);
+        for line in ["one", "two", "three", "four", "five", "six"] {
+            for c in line.chars() {
+                g.write(c, 1);
+            }
+            g.line_feed();
+            g.move_to(g.cursor.row, 0);
+        }
+        for c in "PROMPT> ".chars() {
+            g.write(c, 1);
+        }
+        let before = g.cursor.row;
+        assert_eq!(g.dump().lines().nth(before).unwrap().trim_end(), "PROMPT>");
+
+        g.resize(20, 5);
+        let row = g.cursor.row;
+        assert_eq!(
+            g.dump().lines().nth(row).unwrap().trim_end(),
+            "PROMPT>",
+            "the cursor left its own line: {}",
+            g.dump()
+        );
+    }
+
+    #[test]
+    fn a_shrink_eats_blank_space_before_it_eats_history() {
+        // Pushing text into history while empty rows sit below it loses
+        // content for no reason.
+        let mut g = Grid::new(20, 8);
+        for c in "only line".chars() {
+            g.write(c, 1);
+        }
+        g.resize(20, 4);
+        assert_eq!(g.max_scroll(), 0, "history was taken while blanks were available");
+        assert_eq!(g.dump().lines().next().unwrap().trim_end(), "only line");
+        assert_eq!(g.cursor.row, 0);
+    }
+
+    #[test]
+    fn growing_gives_back_what_shrinking_took() {
+        // Zoom out and in again should land where it started, rather than
+        // drifting up the screen one line at a time.
+        let mut g = Grid::new(20, 8);
+        for line in ["one", "two", "three", "four", "five", "six"] {
+            for c in line.chars() {
+                g.write(c, 1);
+            }
+            g.line_feed();
+            g.move_to(g.cursor.row, 0);
+        }
+        for c in "$ ".chars() {
+            g.write(c, 1);
+        }
+        let before = g.dump();
+        let cursor = (g.cursor.row, g.cursor.col);
+
+        g.resize(20, 5);
+        assert!(g.max_scroll() > 0, "a shrink that small should have used history");
+        g.resize(20, 8);
+
+        assert_eq!(g.dump(), before, "the round trip lost or moved content");
+        assert_eq!((g.cursor.row, g.cursor.col), cursor);
+        assert_eq!(g.max_scroll(), 0, "the rows were never taken back out of history");
+    }
     use super::*;
 
     fn grid_with(s: &str, cols: usize, rows: usize) -> Grid {
