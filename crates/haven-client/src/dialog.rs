@@ -126,8 +126,7 @@ impl Dialog<'_> {
             return None;
         }
         let g = &theme.glyphs;
-        let panel_w =
-            if self.panel_slot || !self.panel.is_empty() { panel_width(size) } else { 0 };
+        let panel_w = if self.panel_slot || !self.panel.is_empty() { panel_width(size) } else { 0 };
 
         // Border, hint, border, and the status line keeps its own row.
         let room = (size.rows as usize).saturating_sub(5);
@@ -158,11 +157,8 @@ impl Dialog<'_> {
             let body = (size.rows as usize * 2 / 3).clamp(1, room.max(1));
             let cols = (size.cols as usize * 4 / 5).clamp(12, size.cols as usize);
             let inner = cols.saturating_sub(2).max(1);
-            let list_w = if panel_w > 0 && inner > panel_w + 4 {
-                inner - panel_w - 3
-            } else {
-                inner
-            };
+            let list_w =
+                if panel_w > 0 && inner > panel_w + 4 { inner - panel_w - 3 } else { inner };
             (body, list_w)
         } else {
             let widest = self
@@ -452,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn a_menu_is_sized_to_fit_instead()  {
+    fn a_menu_is_sized_to_fit_instead() {
         // The other half of the bargain: a menu of three shells must not
         // open as a screen-sized frame.
         let size = CellSize { cols: 120, rows: 40, pixel_width: 0, pixel_height: 0 };

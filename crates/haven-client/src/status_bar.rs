@@ -60,7 +60,44 @@ pub enum Mode {
     /// The suggestions are carried rather than computed because the command
     /// table lives in the composition root, above this crate — the same
     /// reason the key table does.
-    Command { text: String, suggestions: Vec<String>, selected: usize },
+    Command { text: String, suggestions: Vec<Suggestion>, selected: usize },
+}
+
+/// A completion, and how to press it instead.
+///
+/// The key is kept apart from the command rather than written into it: the
+/// arrows put the highlighted entry on the command line, so a label reading
+/// `split-v   C-a %` would have typed the key onto the line as well, and
+/// Enter would have run a command nobody wrote.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Suggestion {
+    pub command: String,
+    /// How to press it, as a person would write it. Empty when nothing is
+    /// bound to it, which is most of the vocabulary.
+    pub keys: String,
+    /// A symbol for the family it belongs to, or empty.
+    pub icon: String,
+}
+
+impl Suggestion {
+    pub fn new(command: impl Into<String>) -> Self {
+        Self { command: command.into(), keys: String::new(), icon: String::new() }
+    }
+
+    pub fn with_keys(mut self, keys: impl Into<String>) -> Self {
+        self.keys = keys.into();
+        self
+    }
+
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = icon.into();
+        self
+    }
+
+    fn width(&self) -> usize {
+        self.command.chars().count()
+            + if self.keys.is_empty() { 0 } else { self.keys.chars().count() + 2 }
+    }
 }
 
 impl Mode {
@@ -93,7 +130,7 @@ impl Mode {
 /// not leave a box with one obvious entry in it.
 pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget> {
     let Mode::Command { text, suggestions, selected } = mode else { return None };
-    if suggestions.is_empty() || (suggestions.len() == 1 && suggestions[0] == *text) {
+    if suggestions.is_empty() || (suggestions.len() == 1 && suggestions[0].command == *text) {
         return None;
     }
     // Two rows go to the border, and the bar keeps its own.
@@ -106,8 +143,16 @@ pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget>
     // room for it: an arrow that moves a selection you cannot see is worse
     // than no arrow at all.
     let first = selected.saturating_sub(shown - 1);
+    // One column for the symbols or none at all, rather than every row
+    // indented past an empty one.
+    let icons = theme.glyphs.icons
+        && suggestions.iter().skip(first).take(shown).any(|s| !s.icon.is_empty());
+    // A space, the symbol in two columns, a space — the width the row
+    // format below actually spends, so a long command and its key cannot
+    // meet in the middle.
+    let lead = if icons { 4 } else { 0 };
     let widest =
-        suggestions.iter().skip(first).take(shown).map(|s| s.chars().count()).max().unwrap_or(0);
+        suggestions.iter().skip(first).take(shown).map(Suggestion::width).max().unwrap_or(0) + lead;
     let inner = widest.max("completions".len());
     let cols = (inner + 4).min(size.cols as usize);
     let inner = cols.saturating_sub(4);
@@ -115,21 +160,46 @@ pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget>
     let g = &theme.glyphs;
     let mut out = Vec::with_capacity(shown + 2);
     out.push(border_row(g, cols, " completions ", theme, true));
-    for (i, name) in suggestions.iter().enumerate().skip(first).take(shown) {
+    for (i, entry) in suggestions.iter().enumerate().skip(first).take(shown) {
         // The highlighted one is what the arrows chose and what Enter runs.
-        let style = if i == *selected { theme.selection.style() } else { theme.panel.style() };
-        out.push(FrameRow {
-            spans: vec![
-                Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() },
-                Span { col: 1, text: pad(&format!(" {name}"), inner + 2), style },
+        let selected = i == *selected;
+        let style = if selected { theme.selection.style() } else { theme.panel.style() };
+        let mut spans = vec![
+            Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() },
+            Span {
+                col: 1,
+                text: pad(
+                    &if icons {
+                        format!(" {:<2} {}", entry.icon, entry.command)
+                    } else {
+                        format!(" {}", entry.command)
+                    },
+                    inner + 2,
+                ),
+                style,
+            },
+            Span {
+                col: (inner + 3) as u16,
+                text: g.vertical.clone(),
+                style: theme.panel_border.style(),
+            },
+        ];
+        // The key sits at the right edge, dim, so the column of commands
+        // stays a column and the keys read as an annotation on it. On the
+        // highlighted row it takes the highlight with everything else: a
+        // selected line in two colours reads as two lines.
+        let keys = entry.keys.chars().count();
+        if keys > 0 && keys + 2 < inner + 2 {
+            spans.insert(
+                2,
                 Span {
-                    col: (inner + 3) as u16,
-                    text: g.vertical.clone(),
-                    style: theme.panel_border.style(),
+                    col: (inner + 2 - keys) as u16,
+                    text: format!("{} ", entry.keys),
+                    style: if selected { style } else { theme.panel_dim.style() },
                 },
-            ],
-            rev: 0,
-        });
+            );
+        }
+        out.push(FrameRow { spans, rev: 0 });
     }
     out.push(border_row(g, cols, "", theme, false));
 
@@ -633,7 +703,7 @@ mod suggestion_tests {
     fn chosen(text: &str, names: &[&str], selected: usize) -> Mode {
         Mode::Command {
             text: text.into(),
-            suggestions: names.iter().map(|s| s.to_string()).collect(),
+            suggestions: names.iter().map(|s| Suggestion::new(*s)).collect(),
             selected,
         }
     }
@@ -708,6 +778,65 @@ mod suggestion_tests {
             clients: 1,
         };
         assert!(pane_numbers(Some(&status), None, &Theme::haven()).is_empty());
+    }
+
+    #[test]
+    fn a_completion_shows_its_key_and_its_symbol() {
+        let m = Mode::Command {
+            text: "s".into(),
+            suggestions: vec![
+                Suggestion::new("split-v").with_icon("◫").with_keys("C-a %"),
+                Suggestion::new("swap-pane").with_icon("⇄").with_keys("C-a o"),
+                // Bound to nothing, which is most of the vocabulary.
+                Suggestion::new("synchronize-panes").with_icon("❯"),
+            ],
+            selected: 0,
+        };
+        let w = suggestions(size(80, 24), &m, &Theme::haven()).expect("box");
+        let line = |n: usize| -> String {
+            let mut cells = vec![' '; w.rect.cols as usize + 4];
+            for span in &w.rows[n].spans {
+                for (i, c) in span.text.chars().enumerate() {
+                    let at = span.col as usize + i;
+                    if at < cells.len() {
+                        cells[at] = c;
+                    }
+                }
+            }
+            cells.iter().collect()
+        };
+        assert!(line(1).contains("◫"), "no symbol: {:?}", line(1));
+        assert!(line(1).contains("split-v"), "{:?}", line(1));
+        // The key at the right edge, and clear of the command: they used to
+        // be able to meet in the middle, because the width reserved for the
+        // symbol column was a column short of what the row spends on it.
+        assert!(line(1).trim_end().ends_with("C-a % │"), "{:?}", line(1));
+        assert!(line(1).contains("split-v  "), "the key crowded the command: {:?}", line(1));
+        // And the longest command, which is the one at risk.
+        assert!(line(3).contains("synchronize-panes"), "{:?}", line(3));
+    }
+
+    #[test]
+    fn the_ascii_theme_has_no_symbols_to_draw() {
+        // The same question the box set answers: a terminal that cannot
+        // manage `─` will make nothing of `◫`.
+        let m = Mode::Command {
+            text: "s".into(),
+            suggestions: vec![
+                Suggestion::new("split-v").with_icon("◫").with_keys("C-a %"),
+                Suggestion::new("swap-pane").with_icon("⇄"),
+            ],
+            selected: 0,
+        };
+        let w = suggestions(size(80, 24), &m, &Theme::plain()).expect("box");
+        let text: String =
+            w.rows.iter().flat_map(|r| r.spans.iter()).map(|s| s.text.clone()).collect();
+        assert!(!text.contains('◫'), "{text:?}");
+        // The key is not a glyph and stays.
+        assert!(text.contains("C-a %"), "{text:?}");
+        // And no column is left standing empty where they were.
+        assert!(text.contains(" split-v"), "{text:?}");
+        assert!(!text.contains("   split-v"), "an empty symbol column: {text:?}");
     }
 
     #[test]

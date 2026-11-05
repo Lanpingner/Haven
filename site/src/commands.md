@@ -41,6 +41,40 @@ Aliases are offered by completion deliberately: someone who types `vsplit`
 should see it in the list rather than be told after the fact that it does not
 exist.
 
+## The completion box tells you the key
+
+`Tab` completes; the box above the bar lists what matches, each with the key
+that runs it and a symbol for the family it belongs to:
+
+```
+┌─ completions ────────┐
+│ ◫  split-v     C-a % │
+│ ◫  split-h     C-a " │
+│ ⇄  swap-pane   C-a o │
+│ ⤢  zoom        C-a z │
+│ ✕  kill-pane   C-a x │
+│ ▤  container-mounts  │
+│ ⌕  grep              │
+│ Aa font-bigger   C-= │
+└──────────────────────┘
+```
+
+The symbols are by **family**, not one each: the point is that your eye
+finds the splitting commands as a group while scrolling past forty rows,
+which a unique glyph per verb would defeat as thoroughly as none at all.
+
+They are characters an ordinary monospace font has. Nerd Font icons would
+look better on the machines that have one installed and be a row of blank
+boxes everywhere else, and a terminal is not the place to require a font.
+The ASCII glyph set turns the column off entirely — the same question the
+box drawing answers: a terminal that cannot manage `─` will make nothing of
+`◫`.
+
+The key and the symbol are kept apart from the command rather than written
+into the label, because the arrows put the highlighted entry on the command
+line: a row reading `◫ split-v   C-a %` has to put `split-v` there and
+nothing else, or `Enter` runs a command nobody wrote.
+
 ## The palette tells you the key
 
 `Ctrl+A` `p` lists every command, and each one that is bound carries the key
@@ -48,10 +82,10 @@ that runs it:
 
 ```
 ┌─ command · type to search ───────────────────────────────────────┐
-│ split-v               C-a %                                     │
-│ rename-window         C-a ,                                     │
-│ zoom                  C-a z                                     │
-│ container-mounts                                                │
+│ ◫  split-v               C-a %                                  │
+│ ◇  rename-window         C-a ,                                  │
+│ ⤢  zoom                  C-a z                                  │
+│ ▤  container-mounts                                             │
 └──────────────────────────────────────────────────────────────────┘
 ```
 

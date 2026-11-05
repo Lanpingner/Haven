@@ -859,11 +859,17 @@ fn a_command_run_twice_is_listed_once() {
     let mut client = attach(&mut daemon, 40, 10);
     settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
     let pane = client.focus.expect("focus");
-    for line in [b"cargo test
-".as_slice(), b"ls -la
-", b"cargo test
-", b"vim notes
-"] {
+    for line in [
+        b"cargo test
+"
+        .as_slice(),
+        b"ls -la
+",
+        b"cargo test
+",
+        b"vim notes
+",
+    ] {
         send_input(&mut client, pane, line);
         for _ in 0..30 {
             daemon.tick(Duration::from_millis(10)).expect("tick");

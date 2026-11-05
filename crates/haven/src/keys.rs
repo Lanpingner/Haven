@@ -197,6 +197,46 @@ pub const COMMANDS: &[&str] = &[
     "zoom",
 ];
 
+/// A symbol for what a command is about, or `None`.
+///
+/// By **family**, not one per command: the point is that your eye finds the
+/// four splitting commands as a group while scrolling, which a unique glyph
+/// per verb would defeat as thoroughly as no glyph at all. A command in no
+/// family gets nothing rather than a filler symbol — a column where every
+/// row says `•` is a column of noise.
+///
+/// Kept to characters an ordinary monospace font has. Nerd Font icons would
+/// look better on the three machines that have one installed and be a row
+/// of blank boxes everywhere else, and a terminal is not the place to
+/// require a font. The ASCII glyph set turns the column off entirely; see
+/// [`Glyphs::icons`](haven_proto::theme::Glyphs::icons).
+pub fn icon(command: &str) -> Option<&'static str> {
+    let verb = command.split_whitespace().next().unwrap_or(command);
+    Some(match verb {
+        "split-h" | "split-v" | "even-horizontal" | "even-vertical" | "tiled" | "next-layout" => {
+            "◫"
+        }
+        "focus-up" | "focus-down" | "focus-left" | "focus-right" | "last-pane"
+        | "display-panes" => "⊹",
+        "resize-up" | "resize-down" | "resize-left" | "resize-right" => "↔",
+        "zoom" => "⤢",
+        "kill-pane" | "kill-window" => "✕",
+        "swap-pane" | "rotate" | "break-pane" | "join-pane" | "move-pane" => "⇄",
+        "new-window" | "new-tab" | "next" | "prev" | "last" | "select-window" => "▭",
+        "new-session" | "choose" | "rename-session" | "rename-window" | "find-window" => "◇",
+        "detach" | "detach-others" => "⏏",
+        "save-sessions" | "restore-sessions" => "⌸",
+        "copy-mode" | "paste-buffer" => "⎘",
+        "grep" | "history" => "⌕",
+        "scroll-up" | "scroll-down" | "scroll-top" | "scroll-end" => "⇕",
+        "font-bigger" | "font-smaller" | "font-reset" => "Aa",
+        "choose-shell" | "respawn-pane" | "send-keys" | "send-prefix" | "synchronize-panes" => "❯",
+        "container-mount" | "container-mounts" | "container-unmount" => "▤",
+        "command-palette" | "command-prompt" | "switch-table" => "⌨",
+        _ => return None,
+    })
+}
+
 /// Commands starting with `prefix`. An empty prefix offers everything, which
 /// is what makes the box a menu as well as a completion.
 pub fn complete(prefix: &str) -> Vec<&'static str> {
@@ -562,6 +602,24 @@ mod tests {
     /// Resolve a key through the default table exactly as the client does.
     fn bound(event: &KeyEvent) -> Option<Action> {
         Bindings::default().command(PREFIX, event).and_then(|c| parse_command(c).ok())
+    }
+
+    #[test]
+    fn every_command_has_a_symbol_and_a_family_shares_one() {
+        // A column with gaps in it reads as a mistake rather than as a
+        // distinction, so the vocabulary is covered or the column goes.
+        for command in COMMANDS {
+            assert!(icon(command).is_some(), "{command} has no symbol");
+        }
+        // By family: the point is finding the splitting commands as a group
+        // while scrolling past forty rows, which a unique glyph per verb
+        // would defeat as thoroughly as none at all.
+        assert_eq!(icon("split-h"), icon("split-v"));
+        assert_eq!(icon("scroll-up"), icon("scroll-end"));
+        assert_ne!(icon("split-h"), icon("kill-pane"));
+        // A whole line, not just a verb — what the palette holds.
+        assert_eq!(icon("command-prompt rename-window "), icon("command-prompt"));
+        assert_eq!(icon("nonsense"), None);
     }
 
     #[test]

@@ -88,7 +88,13 @@ pub enum Intercepted {
     GoTo { window: u16, pane: u32, row: u32 },
     /// Show a menu the composition root built, since only it knows what the
     /// commands are. Title, then label-and-command pairs.
-    OpenMenu { title: String, entries: Vec<(String, String)>, filterable: bool },
+    OpenMenu {
+        title: String,
+        entries: Vec<(String, String)>,
+        /// A symbol per entry, or empty. Parallel to `entries`.
+        icons: Vec<String>,
+        filterable: bool,
+    },
     /// Swallowed, and worth saying why. A key that does nothing and reports
     /// nothing is indistinguishable from a broken binding.
     Notice(String),
@@ -614,8 +620,8 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 }
                 Tick::Redraw
             }
-            Intercepted::OpenMenu { title, entries, filterable } => {
-                let mut menu = menu::Menu::new(title, entries);
+            Intercepted::OpenMenu { title, entries, icons, filterable } => {
+                let mut menu = menu::Menu::new(title, entries).with_icons(icons);
                 if filterable {
                     menu = menu.filterable();
                 }

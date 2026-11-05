@@ -34,6 +34,10 @@ pub struct Menu {
     /// The panel's contents, as they arrive. A lookup is not instant, so
     /// this is `None` until one comes back and the panel says so.
     pub detail: Option<MenuDetail>,
+    /// A symbol per entry, for a menu whose entries have families worth
+    /// seeing at a glance. Parallel to `entries` and empty when there are
+    /// none, like `subjects`.
+    pub icons: Vec<String>,
 }
 
 /// What is shown beside the list.
@@ -56,7 +60,14 @@ impl Menu {
             filterable: false,
             subjects: Vec::new(),
             detail: None,
+            icons: Vec::new(),
         }
+    }
+
+    /// A menu whose entries carry a symbol for what they are about.
+    pub fn with_icons(mut self, icons: Vec<String>) -> Self {
+        self.icons = icons;
+        self
     }
 
     /// A menu whose entries are explained in a panel beside them.
@@ -157,6 +168,12 @@ impl Menu {
             .map(|d| crate::dialog::wrap_plain(&d.lines, panel_width, theme.panel_dim.style()))
             .unwrap_or_default();
 
+        // The symbols go in the lead, not into the label: the label is what
+        // the filter matches and what a test reads, and a glyph welded onto
+        // the front of it would be matched against and printed by both.
+        // A theme with no icons leaves the column out rather than indenting
+        // every row past an empty one.
+        let icons = theme.glyphs.icons && !self.icons.is_empty();
         let rows: Vec<crate::dialog::DialogRow> = visible
             .iter()
             .enumerate()
@@ -165,11 +182,18 @@ impl Menu {
                 // A digit picks an entry outright on a short menu; a long
                 // one is reached by typing, and the numbers would be a lie
                 // past nine anyway.
-                crate::dialog::DialogRow::new(if self.filterable {
+                let row = crate::dialog::DialogRow::new(if self.filterable {
                     format!(" {label}")
                 } else {
                     format!(" {} {label}", n + 1)
-                })
+                });
+                if !icons {
+                    return row;
+                }
+                let icon = self.icons.get(*index).map(String::as_str).unwrap_or_default();
+                // Padded to the same width whether or not this entry has
+                // one, so the commands stay in a column.
+                row.with_lead(vec![(format!(" {icon:<2}"), theme.panel_dim.style())])
             })
             .collect();
         let selected = visible.iter().position(|i| *i == self.selected).unwrap_or(0);
@@ -222,6 +246,33 @@ mod tests {
             lines: lines.iter().map(|l| l.to_string()).collect(),
         });
         m
+    }
+
+    #[test]
+    fn a_symbol_sits_beside_an_entry_without_becoming_part_of_it() {
+        let m = Menu::new(
+            "command",
+            vec![("split-v".into(), "split-v".into()), ("grep".into(), "grep".into())],
+        )
+        .filterable()
+        .with_icons(vec!["◫".into(), "⌕".into()]);
+        let lines = drawn(&m, 60, 12);
+        assert!(lines.iter().any(|l| l.contains("◫") && l.contains("split-v")), "{lines:?}");
+        // The label is what the filter matches and what a command is looked
+        // up by. A glyph welded onto the front of it would be matched
+        // against and sent on as part of the command.
+        assert_eq!(m.entries[0].0, "split-v");
+        assert_eq!(m.command(), Some("split-v"));
+
+        // And a theme with no glyphs leaves the column out rather than
+        // indenting every row past an empty one.
+        let size = CellSize { cols: 60, rows: 12, pixel_width: 0, pixel_height: 0 };
+        let plain = m.widget(size, &Theme::plain()).expect("a widget");
+        let text: String =
+            plain.rows.iter().flat_map(|r| r.spans.iter()).map(|s| s.text.clone()).collect();
+        assert!(!text.contains('◫'), "{text:?}");
+        assert!(text.contains(" split-v"), "{text:?}");
+        assert!(!text.contains("   split-v"), "an empty symbol column: {text:?}");
     }
 
     fn drawn(menu: &Menu, cols: u16, rows: u16) -> Vec<String> {

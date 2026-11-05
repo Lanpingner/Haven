@@ -77,6 +77,14 @@ pub struct Glyphs {
     pub here: String,
     /// Separates the right-hand status fields.
     pub separator: String,
+    /// Whether to draw the little symbols beside commands in the palette
+    /// and the completion box.
+    ///
+    /// A glyph rather than a colour because that is what it is, and because
+    /// the question it answers is the same one the box set answers: can the
+    /// font on the other end of this link draw it. Off with the ASCII set,
+    /// where a terminal that cannot manage `─` will make nothing of `▣`.
+    pub icons: bool,
 }
 
 impl Default for Glyphs {
@@ -102,6 +110,7 @@ impl Default for Glyphs {
             trunk: "│ ".into(),
             here: "●".into(),
             separator: "·".into(),
+            icons: true,
         }
     }
 }
@@ -126,6 +135,7 @@ impl Glyphs {
             trunk: "| ".into(),
             here: "*".into(),
             separator: "|".into(),
+            icons: false,
         }
     }
 }

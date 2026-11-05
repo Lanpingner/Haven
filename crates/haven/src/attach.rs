@@ -83,7 +83,7 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode, &Bindings) -> Intercepted {
                 if step != 0 && !suggestions.is_empty() {
                     let len = suggestions.len() as i32;
                     *selected = (((*selected as i32 + step) % len + len) % len) as usize;
-                    *text = suggestions[*selected].clone();
+                    *text = suggestions[*selected].command.clone();
                     return Intercepted::Consumed;
                 }
                 let out = match &event.key {
@@ -128,7 +128,23 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode, &Bindings) -> Intercepted {
                     }
                     _ => Intercepted::Consumed,
                 };
-                *suggestions = keys::complete(text).into_iter().map(|s| s.to_string()).collect();
+                // With the key beside each, where one is bound. The box is
+                // the first place most people meet the vocabulary, and a
+                // list of commands that says nothing about which of them
+                // are one keypress away teaches nobody the keys.
+                *suggestions = keys::complete(text)
+                    .into_iter()
+                    .map(|name| {
+                        let mut entry = haven_client::status_bar::Suggestion::new(name);
+                        if let Some(keys) = keys_for(bindings, name, name) {
+                            entry = entry.with_keys(keys);
+                        }
+                        if let Some(icon) = keys::icon(name) {
+                            entry = entry.with_icon(icon);
+                        }
+                        entry
+                    })
+                    .collect();
                 // Typing moves the goalposts: a selection into the old list
                 // would point at whatever happens to sit at that index now.
                 *selected = 0;
@@ -180,6 +196,28 @@ fn key_filter() -> impl FnMut(&KeyEvent, &mut Mode, &Bindings) -> Intercepted {
 
 /// Run a bound command, including the two that change the client's own mode
 /// rather than doing something to a session.
+/// How to press a command, by what it *means* rather than how it is spelled.
+///
+/// Key tables are written the way a person writes a binding — `%`, `n`, `z`
+/// — while the vocabulary is written out in full, so comparing the two as
+/// strings found a key for about half of what was bound and said nothing
+/// about the rest: `zoom` looked unbound with `C-a z` right there. The
+/// client cannot resolve an alias, deliberately — it does not know what a
+/// command is — so the question comes back here, where the vocabulary
+/// lives.
+///
+/// `literal` is matched as written, for an entry that is a whole command
+/// line rather than a verb: `command-prompt rename-window ` finds `,`.
+fn keys_for(bindings: &Bindings, literal: &str, name: &str) -> Option<String> {
+    let want = keys::parse_command(name).ok();
+    bindings.keys_matching(|bound| {
+        bound == literal
+            || want
+                .as_ref()
+                .is_some_and(|want| keys::parse_command(bound).ok().as_ref() == Some(want))
+    })
+}
+
 fn act(command: &str, mode: &mut Mode, bindings: &Bindings) -> Intercepted {
     match keys::parse_command(command) {
         // `command-prompt` may arrive with text to start the line off with.
@@ -238,22 +276,18 @@ fn run_command(line: &str, bindings: &Bindings) -> Intercepted {
                 .iter()
                 .map(|c| {
                     let command = keys::palette_entry(c);
-                    // Compared as *actions*, not as strings: the table
-                    // says `n` and the palette says `next-window`, and
-                    // they are the same key.
-                    let want = keys::parse_command(c).ok();
-                    let keys = bindings.keys_matching(|bound| {
-                        bound == command
-                            || want.as_ref().is_some_and(|want| {
-                                keys::parse_command(bound).ok().as_ref() == Some(want)
-                            })
-                    });
-                    let label = match keys {
+                    let label = match keys_for(bindings, &command, c) {
                         Some(keys) => format!("{c:<22}{keys}"),
                         None => (*c).to_string(),
                     };
                     (label, command)
                 })
+                .collect(),
+            // By family, so the eye finds the four splitting commands as a
+            // group while scrolling past forty.
+            icons: keys::COMMANDS
+                .iter()
+                .map(|c| keys::icon(c).unwrap_or_default().to_string())
                 .collect(),
             filterable: true,
         },
@@ -1071,9 +1105,16 @@ mod tests {
 
         let down = key(Key::Named(NamedKey::Down), Modifiers::empty());
         filter(&down, &mut mode, &keys());
-        assert_eq!(mode.command_text(), Some(listed[1].as_str()), "Down did not take the next one");
+        // The command, never the label: a row reading `◫ split-v   C-a %`
+        // must put `split-v` on the line and nothing else, or Enter would
+        // run a command nobody wrote.
+        assert_eq!(
+            mode.command_text(),
+            Some(listed[1].command.as_str()),
+            "Down did not take the next one"
+        );
         filter(&down, &mut mode, &keys());
-        assert_eq!(mode.command_text(), Some(listed[2].as_str()));
+        assert_eq!(mode.command_text(), Some(listed[2].command.as_str()));
 
         // The list must not narrow as the selection moves, or the box would
         // close after one press.
@@ -1090,7 +1131,11 @@ mod tests {
         filter(&up, &mut mode, &keys());
         filter(&up, &mut mode, &keys());
         filter(&up, &mut mode, &keys());
-        assert_eq!(mode.command_text(), Some(listed[listed.len() - 1].as_str()), "Up did not wrap");
+        assert_eq!(
+            mode.command_text(),
+            Some(listed[listed.len() - 1].command.as_str()),
+            "Up did not wrap"
+        );
     }
 
     #[test]
