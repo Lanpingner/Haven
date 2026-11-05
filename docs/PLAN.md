@@ -1120,7 +1120,7 @@ rewrite.
 ## 20. Implementation status
 
 Updated as milestones land, so the plan above does not drift from the tree.
-**642 tests, zero clippy warnings, `cargo test --workspace` green.**
+**645 tests, zero clippy warnings, `cargo test --workspace` green.**
 
 | Milestone | State |
 |---|---|
@@ -1135,6 +1135,17 @@ Updated as milestones land, so the plan above does not drift from the tree.
 | **M5** daemon + attach/detach | Done bar live upgrade. `havend` as `haven server run`, framed postcard over a unix socket, per-client row-revision sync, style/cluster table shipping, `Smallest`/`Latest` resize policies, autostart, `haven attach \| ls \| kill-session \| server stop`. Verified end to end: a session outlives its client and reattach restores the screen. |
 | **M1** GPU frontend | Done bar polish. wgpu pipelines, shelf-packed glyph atlas, font fallback with a last-resort system scan, sRGB-correct colour, procedural box drawing, a winit window with vsync, and `haven screenshot` so the renderer stays reviewable without a display. No italic faces, no ligatures, no colour emoji yet. |
 | **M4** keyboard | Partial. A prefix key table resolving to a declarative `Action`, shared by the standalone and attached paths. The modal stack, configurable bindings, palette and copy mode are still to come. |
+
+**A resize at a prompt clears the prompt's rows** before reflowing, where
+shell integration has reported where the prompt began (`OSC 133;A`). A shell
+repaints on `SIGWINCH` and clears only as many rows as its own model says the
+prompt occupies — fish moves up exactly one row — so a rewrap that made the
+prompt taller leaves its first row orphaned for good. Blanking the region the
+shell is about to redraw costs nothing and removes the debris; it is guarded
+on a reported mark, on no command running, and on not being the alternate
+screen, because it discards screen content. The cleared rows lose their
+`wrapped` flags too, or the reflow joins a blank row to the one after it and
+the debris becomes one very long line.
 
 **Resizes are coalesced.** A size change is drawn at once and told to the
 daemon after 90ms of stillness, and not at all when it settles on the size

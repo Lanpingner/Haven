@@ -100,6 +100,9 @@ pub struct Terminal {
     pub command_running: bool,
     /// Its exit status, once `OSC 133;D` reports one.
     pub command_exit: Option<i32>,
+    /// Where the current prompt began, counted from the start of history,
+    /// as `OSC 133;A` last reported it.
+    pub prompt_start: Option<usize>,
     /// What this pane has run, oldest first.
     ///
     /// The shell's own history file holds more and knows less: it is one
@@ -158,6 +161,7 @@ impl Terminal {
             command: None,
             command_running: false,
             history: std::collections::VecDeque::new(),
+            prompt_start: None,
             command_exit: None,
             bell_count: 0,
             cursor_shape: CursorShape::default(),
@@ -177,6 +181,26 @@ impl Terminal {
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        // Sitting at a prompt, the rows from the prompt's start downward
+        // belong to the shell and it is about to draw them again — every
+        // shell repaints on `SIGWINCH`. Reflowing them instead leaves
+        // debris the shell will not clean up, because it clears only as
+        // many rows as *it* thinks its prompt occupies: fish moves up one
+        // row and erases from there, so a prompt that the rewrap made
+        // three rows tall leaves its first row behind, for good.
+        //
+        // Only with shell integration, which is the only way to know where
+        // a prompt began, and only when nothing is running: the output of
+        // a command is not the shell's to redraw.
+        if !self.command_running && !self.grid.is_alt {
+            if let Some(start) = self.prompt_start {
+                if let Some(row) = start.checked_sub(self.grid.max_scroll()) {
+                    if row < self.grid.num_rows() {
+                        self.grid.erase_rows_from(row);
+                    }
+                }
+            }
+        }
         self.grid.resize(cols, rows);
         // The parked screen must track geometry too, or switching back after a
         // resize shows a differently-shaped screen.
@@ -648,7 +672,10 @@ impl Perform for Terminal {
                 match params.get(1).copied() {
                     // Prompt drawn: whatever ran before has finished, and
                     // nothing new has started.
-                    Some(b"A") => self.command_running = false,
+                    Some(b"A") => {
+                        self.command_running = false;
+                        self.prompt_start = Some(self.grid.absolute_cursor_row());
+                    }
                     Some(b"C") => {
                         // A command starting while one is unfinished: the
                         // shell never sent its `D`, so the old one is
@@ -973,6 +1000,56 @@ mod tests {
         let mut e = Emulator::new(20, 4);
         e.feed(bytes);
         e
+    }
+
+    #[test]
+    fn a_resize_at_a_prompt_clears_what_the_shell_will_redraw() {
+        // A shell repaints its prompt on SIGWINCH, clearing only as many
+        // rows as *it* believes the prompt occupies — fish moves up one row
+        // and erases from there. Rewrap the prompt into three rows and the
+        // first is left behind for good, which is what a hard zoom out
+        // looked like: a line of merged prompt fragments above the live one.
+        let mut e = Emulator::new(24, 6);
+        e.feed(b"a command's output\r\n");
+        e.feed(b"\x1b]133;A\x1b\\");
+        e.feed(b"PROMPT> ");
+        e.term.resize(16, 6);
+
+        let rows: Vec<String> =
+            e.term.grid.dump().lines().map(|l| l.trim_end().to_string()).collect();
+        // Joined, because at sixteen columns the line wraps.
+        let joined: String = rows.concat();
+        assert!(joined.contains("a command's output"), "output was eaten: {rows:?}");
+        assert!(
+            !rows.iter().any(|r| r.contains("PROMPT>")),
+            "the prompt survived the resize and will be drawn again below itself: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn a_resize_while_something_is_running_keeps_what_it_printed() {
+        // The output of a command is not the shell's to redraw, and a
+        // terminal that threw it away on a resize would be unusable.
+        let mut e = Emulator::new(24, 6);
+        e.feed(b"\x1b]133;A\x1b\\");
+        e.feed(b"$ make\r\n");
+        e.feed(b"\x1b]133;C;cmdline=make\x1b\\");
+        e.feed(b"compiling everything\r\n");
+        e.term.resize(16, 6);
+
+        let text = e.term.grid.dump();
+        assert!(text.contains("compiling"), "a running command's output was cleared: {text}");
+    }
+
+    #[test]
+    fn without_shell_integration_a_resize_touches_nothing() {
+        // No mark, no idea where a prompt began, so nothing is assumed.
+        let mut e = Emulator::new(24, 6);
+        e.feed(b"$ ls\r\nfile-one  file-two\r\n$ ");
+        e.term.resize(16, 6);
+        let text = e.term.grid.dump();
+        assert!(text.contains("file-one"), "{text}");
+        assert!(text.contains("$ ls") || text.contains("$ l"), "{text}");
     }
 
     #[test]

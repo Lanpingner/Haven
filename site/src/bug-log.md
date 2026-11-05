@@ -5,6 +5,45 @@ broke, because the interesting failures were never where they looked. A
 selection, kept here because they say more about the program than a feature list
 does.
 
+## The fragment a reflow leaves, and why integration can remove it
+
+After the cursor fix, a hard zoom out still left one garbled line above the
+prompt — fragments of old prompts merged into a single very long row. I had
+written that off as what every reflowing terminal does. Then I captured
+what fish actually writes when it is resized:
+
+```
+ESC[6n  …  \r \r ESC[A ESC[K  OSC 133;A  <prompt>  \r\n <second line>  ESC[J
+```
+
+It moves up **one** row, erases from there, and redraws. One, because its
+model says its prompt is two rows tall *at the new width*. If the rewrap
+made the old prompt three rows, the first row is left behind — and nothing
+will ever clean it up, because the shell has already decided that row is
+not its.
+
+Which is a thing Haven can fix and most terminals cannot, because Haven
+knows where the prompt began: `OSC 133;A` says so. A resize at a prompt now
+blanks every row from that mark down before reflowing. The shell is about
+to draw them again — that is what a repaint on `SIGWINCH` *is* — so there
+is nothing to preserve and nothing left to be stale.
+
+Three guards, because this throws screen content away:
+
+- only when shell integration reported a prompt start, since otherwise
+  there is no honest way to know where one began;
+- only when no command is running, because the output of a command is not
+  the shell's to redraw;
+- never on the alternate screen, which has no prompt and no reflow.
+
+The cleared rows' `wrapped` flags go too. A blank row that still claims to
+continue into the next one is joined to it by the reflow, which is exactly
+how the debris became one very long line.
+
+With a real fish and six resizes from 100×30 down to 28×8 and back: the
+screen ends with one prompt, its two rows, and fish's startup art intact
+above it.
+
 ## The cursor was left one row below its own line
 
 The other half of the zoom story, and the half that was actually a bug in

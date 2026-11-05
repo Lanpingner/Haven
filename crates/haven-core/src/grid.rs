@@ -355,6 +355,27 @@ impl Grid {
             .collect()
     }
 
+    /// Where the cursor is counting from the start of history.
+    pub fn absolute_cursor_row(&self) -> usize {
+        self.scrollback.len() + self.cursor.row
+    }
+
+    /// Blank every row from `row` to the bottom of the screen.
+    ///
+    /// Used before a resize, for the rows a shell is about to redraw
+    /// anyway. The `wrapped` flags go too: a row that is cleared but still
+    /// claims to continue into the next one would be joined to it by the
+    /// reflow, which is how debris becomes a single very long line.
+    pub fn erase_rows_from(&mut self, row: usize) {
+        for r in self.rows.iter_mut().skip(row) {
+            for cell in &mut r.cells {
+                *cell = Cell::default();
+            }
+            r.wrapped = false;
+            r.touch();
+        }
+    }
+
     /// Take the newest row back out of history, for a screen that grew.
     fn unpop_scrollback(&mut self) -> Option<Row> {
         let row = self.scrollback.pop_back()?;

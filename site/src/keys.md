@@ -209,6 +209,35 @@ place, because it also fires for every `PROMPT_COMMAND` function and names the
 tab after the prompt — so `PS0` plus `history 1` is used instead, which expands
 exactly once per interactive command line.
 
+## Resizing, and what integration buys there
+
+Changing the font size, or dragging the window, changes how many rows and
+columns a pane has. That is a `SIGWINCH`, and every shell answers one by
+redrawing its prompt — so a resize is a conversation between two programs
+with different ideas about what is on the screen.
+
+Two things make that conversation go well, and the second needs integration.
+
+**A burst is one resize.** The new size is drawn immediately and the session
+is told once it has held still for 90ms, and not at all when the size it
+settles on is the one the session already has — which is what zooming in and
+back out is. Without that, each tap of `Ctrl+-` was its own signal and its
+own repainted prompt.
+
+**At a prompt, the prompt's rows are cleared first.** A shell clears only as
+many rows as *it* believes its prompt occupies: fish moves up one row and
+erases from there. Re-wrap that prompt into three rows and the first is left
+behind for good, because the shell has already decided that row is not its.
+Haven knows where the prompt began — that is the `OSC 133;A` mark — so those
+rows are blanked before the rewrap and the shell draws onto a clean screen.
+
+It is guarded three ways, since it throws screen content away: only with a
+reported prompt mark, only when no command is running (a command's output is
+not the shell's to redraw), and never on the alternate screen. Without
+integration none of it applies and a resize behaves as it does anywhere
+else, which is to say: a hard zoom leaves a line of debris above the prompt,
+in every terminal that reflows.
+
 ## Text
 
 Bold, italic and bold-italic use the family's real cuts where it has them and

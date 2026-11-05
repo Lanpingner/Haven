@@ -55,7 +55,7 @@ How the release, the installer and the two AUR packages fit together is in
 ## Try it
 
 ```sh
-cargo test --workspace     # 642 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 645 tests, incl. mc/vim/less driven on real ptys
 
 # A GPU window, attached to the daemon (which it starts if needed).
 cargo run --release -p haven -- gpu
@@ -83,6 +83,13 @@ to move, a digit to pick one outright, `Enter` to take the highlighted one,
 `Esc` to drop it. The list is the daemon's machine's, since that is where the
 pane is spawned: your shell first, then the ones Haven has integration for,
 then whatever else `/etc/shells` holds.
+
+Resizing is a conversation with the shell: a burst of zooms reaches the
+session as one resize, and where shell integration has reported a prompt
+(`OSC 133;A`), the prompt's rows are cleared before the rewrap because the
+shell is about to redraw exactly those. Without that, a hard zoom leaves a
+line of merged prompt fragments above the live one — as it does in every
+terminal that reflows.
 
 `Ctrl+=` and `Ctrl+-` make the text bigger and smaller in the window, and
 `Ctrl+0` goes back to the configured size — Alacritty's keys, and every
