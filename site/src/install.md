@@ -13,7 +13,14 @@ sudo pacman -S haven-terminal-bin
 
 That adds the project's signing key to the pacman keyring and a `[haven]`
 section to `/etc/pacman.conf`, after which `pacman -Syu` keeps Haven current
-like anything else. The key goes in first on purpose: the other order leaves
+like anything else. The key it trusts is
+
+```
+2F10059CF6636B150B9584867D04983E5D12A3E4
+```
+
+and the script prints the fingerprint it found before trusting anything, so
+you can stop if the two disagree. The key goes in first on purpose: the other order leaves
 a machine whose next upgrade fails on a signature it has no way to check.
 `add-repo.sh --remove` takes the repository back out, keeping a backup of
 the file it edited.

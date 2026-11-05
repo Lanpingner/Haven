@@ -143,9 +143,10 @@ jobs:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
-            echo "::error::No GPG_PRIVATE_KEY secret, so the repository cannot be signed." >&2
-            echo "Add one (packaging/README.md explains how), or drop this job." >&2
+          if [ -z "${GPG_PRIVATE_KEY:-}" ] || [ -z "${GPG_PASSPHRASE:-}" ]; then
+            echo "::error::The repository is signed, and that needs both the" >&2
+            echo "GPG_PRIVATE_KEY and GPG_PASSPHRASE secrets." >&2
+            echo "packaging/repo/make-signing-key.sh --push sets them." >&2
             exit 1
           fi
           mkdir -p ~/.gnupg && chmod 700 ~/.gnupg
@@ -157,11 +158,12 @@ jobs:
           [ -n "$key" ] || { echo "::error::the imported key has no secret half" >&2; exit 1; }
           echo "GPG_KEY_ID=$key" >> "$GITHUB_ENV"
           # Warm the agent, so repo-add's own call to gpg does not stop at a
-          # passphrase prompt nobody is there to answer.
-          if [ -n "${GPG_PASSPHRASE:-}" ]; then
-            echo test | gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "$GPG_PASSPHRASE" --local-user "$key" --sign --output /dev/null
-          fi
+          # passphrase prompt nobody is there to answer. The passphrase is
+          # not optional: gpg always protects an exported secret key, and
+          # then refuses the empty passphrase it protected it with, so a key
+          # with no passphrase cannot be moved here at all.
+          echo warm | gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "$GPG_PASSPHRASE" --local-user "$key" --sign --output /dev/null
           gpg --armor --export "$key" > haven-repo.pub
           echo "signing with $key"
 

@@ -65,11 +65,19 @@ The repository job signs what it publishes, so it needs a key:
 packaging/repo/make-signing-key.sh --push    # makes one, sets GPG_PRIVATE_KEY
 ```
 
-That key signs and nothing else: not an identity, certifying nobody, with no
-passphrase. A key living in CI is a key that can be taken from CI, and the
-answer to that is not a passphrase in a second secret — whoever can read one
-secret can read both — but a key worth little, easily revoked and replaced.
-Publish its fingerprint somewhere people can check it against.
+That key signs and nothing else: not an identity, certifying nobody, and
+easily revoked — which is the real answer to a key living somewhere it can
+be taken from. It also gets a random passphrase, set as a second secret.
+
+That second secret is not a security measure, and it is worth saying why
+rather than letting it look like one: whoever can read one repository secret
+can read both. It is GnuPG. An exported secret key is *always* protected,
+and gpg then refuses the empty passphrase it protected an unprotected key
+with — so a key with no passphrase cannot be moved to another machine at
+all. The script proves the export it just made can be imported and signed
+with somewhere else before it tells you it worked.
+
+Publish the fingerprint somewhere people can check it against.
 
 Without that secret the `repo` job fails loudly rather than skipping, which
 is deliberate: a release that quietly stopped shipping a repository is one

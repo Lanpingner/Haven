@@ -29,6 +29,9 @@ with `mdbook serve site --open`; the last chapter includes this repository's
 curl -fsSL https://github.com/Lanpingner/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
 sudo pacman -S haven-terminal-bin
 
+# the key that repository is signed with:
+#   2F10059CF6636B150B9584867D04983E5D12A3E4
+
 # Arch, from the AUR
 yay -S haven-terminal-bin        # the binary from the release
 yay -S haven-terminal            # or build it yourself
