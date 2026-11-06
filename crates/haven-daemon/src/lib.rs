@@ -6,7 +6,8 @@
 //! nothing here benefits from task-per-pane concurrency. Revisit if per-pane
 //! parsing ever needs its own core.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::os::fd::AsFd;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -69,6 +70,15 @@ struct SessionHost {
     policy: ResizePolicy,
     /// The size last applied, so we only resize when it actually changes.
     applied: Option<CellSize>,
+    /// Which user each pane's foreground process belongs to, keyed by the
+    /// process group it was read from.
+    ///
+    /// Cached because the status is rebuilt whenever anything in the
+    /// session changes, and reading `/proc` for every pane at that rate to
+    /// learn something that changes when you type `sudo` is work for
+    /// nothing. The process group is the key rather than a clock: it is
+    /// exactly what changes when the answer might have.
+    users: RefCell<HashMap<u32, (i32, Option<String>)>>,
 }
 
 struct Client {
@@ -606,6 +616,7 @@ impl Daemon {
         self.sessions.insert(
             id,
             SessionHost {
+                users: RefCell::default(),
                 env: cell,
                 started_unix: unix_now(),
                 runtime,
@@ -823,6 +834,7 @@ impl Daemon {
         self.sessions.insert(
             id,
             SessionHost {
+                users: RefCell::default(),
                 env: cell,
                 started_unix: unix_now(),
                 runtime,
@@ -1270,6 +1282,27 @@ impl SessionHost {
     /// Shared with the session listing, because the tree has to show the
     /// tabs of a session nobody is attached to and a count cannot be
     /// navigated.
+    /// Which user a pane is running as, when it is not the one Haven is.
+    ///
+    /// Read from the foreground process group, so `sudo vim` marks the pane
+    /// while vim is up and unmarks it when you quit, and `sudo -i` marks it
+    /// until the root shell exits.
+    fn user_of(&self, pane: haven_proto::PaneId) -> Option<String> {
+        let runtime = self.runtime.pane(pane)?;
+        let group = runtime.foreground_pid()?;
+        if let Some((cached, user)) = self.users.borrow().get(&pane.0) {
+            if *cached == group {
+                return user.clone();
+            }
+        }
+        let uid = runtime.foreground_uid();
+        let user = uid
+            .filter(|uid| *uid != haven_pty::our_uid())
+            .map(|uid| user_name(uid).unwrap_or_else(|| format!("uid {uid}")));
+        self.users.borrow_mut().insert(pane.0, (group, user.clone()));
+        user
+    }
+
     fn windows(&self) -> Vec<haven_proto::WindowInfo> {
         let session = &self.runtime.session;
         // Solved once rather than per pane: a client labelling panes needs
@@ -1317,6 +1350,7 @@ impl SessionHost {
                                 .unwrap_or_default(),
                             command,
                             running,
+                            user: self.user_of(p),
                         }
                     })
                     .collect(),
@@ -1522,6 +1556,22 @@ pub fn socket_path(name: &str) -> PathBuf {
     base.join("haven").join(format!("{uid}-{name}.sock"))
 }
 
+/// A user's name, from `/etc/passwd`.
+///
+/// Parsed rather than asked of `getpwuid`, which is not reentrant and whose
+/// answer this does not need: the one name that matters is root's, every
+/// passwd file has it, and a uid this cannot name is shown as a number
+/// rather than as nothing.
+fn user_name(uid: u32) -> Option<String> {
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        let name = fields.next()?;
+        let found: u32 = fields.nth(1)?.parse().ok()?;
+        (found == uid).then(|| name.to_string())
+    })
+}
+
 /// Which rows of a pane to preview, when it is taller than the panel.
 ///
 /// A shell's news is at the **bottom**: the prompt you are at, and whatever
@@ -1553,6 +1603,24 @@ fn preview_window(grid: &Grid, rows: usize) -> std::ops::Range<usize> {
 /// Silence the unused-import warning for a type used only in a signature.
 #[doc(hidden)]
 pub fn _grid_anchor(_: &Grid) {}
+
+#[cfg(test)]
+mod user_tests {
+    #[test]
+    fn root_is_named_rather_than_numbered() {
+        // Every passwd file has it, which is the point: the one name that
+        // matters resolves without asking a name service.
+        assert_eq!(super::user_name(0).as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn a_uid_with_no_name_is_shown_as_a_number_rather_than_as_nothing() {
+        // A container pane running as uid 65533 is still not yours, and a
+        // mark that disappears because the name lookup failed is the
+        // failure you would not notice.
+        assert_eq!(super::user_name(4_000_000_001), None);
+    }
+}
 
 #[cfg(test)]
 mod preview_tests {

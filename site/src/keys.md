@@ -305,3 +305,34 @@ The right-hand end shows what the client is doing when it is doing something —
 
 The client keeps that row for itself and never offers it to the daemon, so no
 pane is ever laid out underneath it.
+
+## When a pane is not yours
+
+A pane you ran `sudo -i` in an hour ago looks exactly like one you did not.
+The shell's own prompt is usually the only thing saying otherwise, and it is
+saying it in whichever window you are not looking at.
+
+Haven reads the user of each pane's **foreground process group** — the same
+process the tab name and "something is still running" already come from —
+and marks a pane whose user is not the one Haven itself runs as:
+
+- the status bar names it beside the mode indicator, in the alert colour,
+  for the pane you are typing into
+- the session tree names it on the pane's own row, `pane 3  vim  [root]`,
+  which is where you go looking for a pane you left somewhere
+
+`sudo vim` marks the pane while vim is up and unmarks it when you quit;
+`sudo -i` marks it until the root shell exits. The *effective* user is what
+is read, so a pane counts as root from the moment `sudo` execs rather than
+once whatever it is running gets going.
+
+It is compared against Haven's own user rather than against zero, so a
+daemon that is itself running as root does not mark every pane it has — and
+`sudo -u postgres psql` is marked `[postgres]`, because the question is
+whether this pane is you, not whether it is root.
+
+The user comes from `/proc`, so this is Linux only; elsewhere no pane is
+marked rather than a wrong one being marked. The lookup is cached against
+the foreground process group, which is exactly what changes when the answer
+might have, so the status does not read `/proc` for every pane on every
+update.

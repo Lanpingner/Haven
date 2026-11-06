@@ -210,6 +210,22 @@ impl Pty {
         (!args.is_empty()).then_some(args)
     }
 
+    /// The effective user of whatever is in the foreground, when the
+    /// kernel will say.
+    ///
+    /// The *effective* id, which is the one that decides what the thing can
+    /// do: `sudo` is setuid, so a pane that has just typed `sudo vim` reads
+    /// as root from the moment sudo execs, which is the moment worth
+    /// marking.
+    ///
+    /// Read from the process group leader — the same process the title and
+    /// "is something running" already come from — so `sudo -i` and a plain
+    /// `sudo make install` both answer, and a background `sudo` the pane is
+    /// not talking to does not.
+    pub fn foreground_uid(&self) -> Option<u32> {
+        uid_of(self.foreground_pid()?)
+    }
+
     /// The foreground process group's pid, via `tcgetpgrp`. This is what a tab
     /// title should show and what "something is still running" must check —
     /// the direct child is usually just the shell.
@@ -300,6 +316,29 @@ impl Write for Pty {
     }
 }
 
+/// A process's effective uid, from `/proc`.
+///
+/// `None` on anything without a Linux `/proc` — the same quiet degradation
+/// as `cwd` and `foreground_command`, which have always been best effort.
+/// A terminal that refuses to mark a root pane is worse than one that does
+/// not know how, but neither is a reason to fail a status update.
+fn uid_of(pid: i32) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    // `Uid:\treal\teffective\tsaved\tfilesystem`
+    let line = status.lines().find_map(|l| l.strip_prefix("Uid:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Haven's own effective user.
+///
+/// What a pane's user is compared against, rather than a hardcoded zero: a
+/// daemon that is itself running as root would otherwise mark every pane it
+/// has, and a mark every pane carries says nothing about any of them.
+pub fn our_uid() -> u32 {
+    // SAFETY: `geteuid` takes nothing, cannot fail and touches no memory.
+    unsafe { libc::geteuid() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +350,30 @@ mod tests {
             size: PtySize { cols: 40, rows: 10, pixel_width: 320, pixel_height: 160 },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_uid_is_read_out_of_proc_correctly() {
+        // Against a process whose answer is known for certain — this one.
+        // The parse is the part that would quietly return `None` and take
+        // the mark with it.
+        assert_eq!(uid_of(std::process::id() as i32), Some(our_uid()));
+        // And a pid that cannot exist answers nothing rather than zero,
+        // which would read as root.
+        assert_eq!(uid_of(-1), None);
+    }
+
+    #[test]
+    fn an_ordinary_pane_runs_as_whoever_started_haven() {
+        // The other half of marking a root pane: the mark has to be absent
+        // from every pane that is not one, or it says nothing about the one
+        // that is.
+        let mut pty = Pty::spawn(&sh("sleep 1")).expect("spawn");
+        // The uid is read from the foreground group, which is the shell
+        // here, so this also covers `foreground_pid` pointing somewhere
+        // real.
+        assert_eq!(pty.foreground_uid(), Some(our_uid()));
+        let _ = pty.hangup(std::time::Duration::from_millis(200));
     }
 
     fn read_to_end(pty: &mut Pty) -> String {

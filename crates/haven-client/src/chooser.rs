@@ -138,15 +138,21 @@ impl Chooser {
                 let tab_is_last = index + 1 == info.tabs.len();
                 for (pane_index, pane) in window.panes.iter().enumerate() {
                     let active = active_window && pane.id == window.active_pane;
+                    // Whose pane it is, when that is not whose Haven is.
+                    // The tree is where you go looking for a pane you left
+                    // somewhere, and "the one I sudo'd in" is exactly the
+                    // kind of thing you are looking for.
+                    let user =
+                        pane.user.as_deref().map(|user| format!("  [{user}]")).unwrap_or_default();
                     rows.push(Row {
                         indent: 2,
                         // What it is doing, if the shell says so; what it
                         // calls itself otherwise. A bare id names nothing.
                         text: match (pane.command.as_str(), pane.title.as_str()) {
-                            ("", "") => format!("pane {}", pane.id),
-                            ("", title) => format!("pane {}  {title}", pane.id),
+                            ("", "") => format!("pane {}{user}", pane.id),
+                            ("", title) => format!("pane {}  {title}{user}", pane.id),
                             (command, _) => format!(
-                                "pane {}  {command}{}",
+                                "pane {}  {command}{}{user}",
                                 pane.id,
                                 if pane.running { " …" } else { "" }
                             ),
@@ -341,6 +347,7 @@ mod tests {
                         title: "fish".into(),
                         command: "cargo test".into(),
                         running: true,
+                        user: None,
                     },
                     PaneInfo {
                         id: 11,
@@ -348,6 +355,7 @@ mod tests {
                         title: "vim".into(),
                         command: String::new(),
                         running: false,
+                        user: None,
                     },
                 ],
                 active_pane: 11,

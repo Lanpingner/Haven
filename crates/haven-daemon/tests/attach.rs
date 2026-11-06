@@ -851,6 +851,20 @@ fn a_panes_history_comes_back_marked_as_this_panes_own() {
 }
 
 #[test]
+fn a_pane_running_as_you_is_not_marked() {
+    // The mark is only worth having if it is absent everywhere else. This
+    // is the half that can be tested without being root: a pane the test
+    // started is the test's own user, and the status must say nothing
+    // about it.
+    let mut daemon = daemon();
+    let mut client = attach(&mut daemon, 40, 10);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].frame.status.is_some());
+    let status = client.frame.status.as_ref().expect("status");
+    let pane = &status.windows[0].panes[0];
+    assert_eq!(pane.user, None, "an ordinary pane was marked as somebody else's");
+}
+
+#[test]
 fn a_command_run_twice_is_listed_once() {
     // A pane's history is mostly repetition — `cargo test` over and over —
     // and the modal listed every run, so the list you were reading to find

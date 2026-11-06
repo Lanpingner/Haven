@@ -373,8 +373,19 @@ pub fn build(
         (_, _, Some((offset, total))) => Some(format!(" SCROLL {offset}/{total} ")),
         _ => None,
     };
-    let tail = alert.as_ref().map(|a| a.chars().count()).unwrap_or(0) + right.chars().count();
+    // Whose pane you are typing into, when it is not yours. Standing
+    // information rather than an answer to something that just happened, so
+    // it keeps its own place beside the mode alert instead of taking turns
+    // with it: a root pane is root whether or not you are also in copy mode,
+    // and that is the one you would least like to be wrong about.
+    let user = elevated(status).map(|user| format!(" {user} "));
+    let tail = alert.as_ref().map(|a| a.chars().count()).unwrap_or(0)
+        + user.as_ref().map(|u| u.chars().count()).unwrap_or(0)
+        + right.chars().count();
     spans.fill_to(cols.saturating_sub(tail), theme.bar.style());
+    if let Some(user) = user {
+        spans.push(&user, theme.bar_alert.style());
+    }
     if let Some(alert) = alert {
         spans.push(&alert, theme.bar_alert.style());
     }
@@ -423,6 +434,14 @@ impl Spans {
     fn finish(self) -> Vec<Span> {
         self.spans
     }
+}
+
+/// The user the focused pane is running as, when it is not Haven's own.
+fn elevated(status: Option<&SessionStatus>) -> Option<&str> {
+    let s = status?;
+    let window = s.windows.iter().find(|w| w.id == s.active_window)?;
+    let pane = window.panes.iter().find(|p| p.id == window.active_pane)?;
+    pane.user.as_deref()
 }
 
 fn right_text(status: Option<&SessionStatus>, now_unix: u64, theme: &Theme) -> String {
@@ -489,6 +508,7 @@ mod tests {
             title: format!("pane{id}"),
             command: String::new(),
             running: false,
+            user: None,
         }
     }
 
@@ -536,6 +556,40 @@ mod tests {
 
     fn theme() -> Theme {
         Theme::haven()
+    }
+
+    #[test]
+    fn a_root_pane_says_so_on_the_bar() {
+        // A pane you ran `sudo -i` in an hour ago looks exactly like one
+        // you did not, and the shell's own prompt is the only thing saying
+        // otherwise — in whichever window you are not looking at.
+        let plain = status();
+        let mut elevated = plain.clone();
+        elevated.windows[0].panes[0].user = Some("root".into());
+        let bar = |s: &SessionStatus| {
+            text(
+                &build(size(80, 24), Some(s), &Mode::Normal, 1000, &theme(), &Default::default())
+                    .unwrap(),
+            )
+        };
+        assert!(bar(&elevated).contains("root"), "{:?}", bar(&elevated));
+        // And an ordinary pane does not, or the mark means nothing.
+        assert!(!bar(&plain).contains("root"), "{:?}", bar(&plain));
+    }
+
+    #[test]
+    fn the_root_mark_does_not_take_turns_with_the_mode() {
+        // It is standing information, not an answer to something that just
+        // happened: a root pane is root whether or not you are also in copy
+        // mode, and that is the one you would least like to be wrong about.
+        let mut status = status();
+        status.windows[0].panes[0].user = Some("root".into());
+        let state = BarState { copy: Some("COPY".into()), ..Default::default() };
+        let line = text(
+            &build(size(80, 24), Some(&status), &Mode::Normal, 1000, &theme(), &state).unwrap(),
+        );
+        assert!(line.contains("root"), "{line:?}");
+        assert!(line.contains("COPY"), "{line:?}");
     }
 
     #[test]
@@ -717,6 +771,7 @@ mod suggestion_tests {
             title: String::new(),
             command: String::new(),
             running: false,
+            user: None,
         };
         let status = SessionStatus {
             session: SessionId(1),
@@ -769,6 +824,7 @@ mod suggestion_tests {
                     title: String::new(),
                     command: String::new(),
                     running: false,
+                    user: None,
                 }],
                 active_pane: 1,
                 zoomed: false,

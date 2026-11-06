@@ -235,6 +235,7 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
                     title: String::new(),
                     command: String::new(),
                     running: false,
+                    user: None,
                 },
                 PaneInfo {
                     id: 8,
@@ -242,6 +243,7 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
                     title: String::new(),
                     command: String::new(),
                     running: false,
+                    user: None,
                 },
             ],
             active_pane: 8,
@@ -458,6 +460,7 @@ fn find_window_goes_to_the_tab_whose_name_matches() {
             title: String::new(),
             command: String::new(),
             running: false,
+            user: None,
         }],
         active_pane: id,
         zoomed: false,

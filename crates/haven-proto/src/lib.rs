@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -678,6 +678,13 @@ pub struct PaneInfo {
     pub command: String,
     /// Whether that command is still going.
     pub running: bool,
+    /// The user this pane is running as, when it is not the one Haven is.
+    ///
+    /// `Some("root")` is the case worth having: a pane you ran `sudo -i`
+    /// in an hour ago looks exactly like one you did not, and the shell's
+    /// own prompt is the only thing saying otherwise — in whichever window
+    /// you are not looking at.
+    pub user: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]

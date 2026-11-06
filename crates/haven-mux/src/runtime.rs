@@ -71,6 +71,17 @@ impl PaneRuntime {
         self.pty.foreground_command()
     }
 
+    /// The process group this pane is talking to, for a caller that caches
+    /// something about it and wants to know when to look again.
+    pub fn foreground_pid(&self) -> Option<i32> {
+        self.pty.foreground_pid()
+    }
+
+    /// Which user the foreground process is running as.
+    pub fn foreground_uid(&self) -> Option<u32> {
+        self.pty.foreground_uid()
+    }
+
     /// What the shell last said it was running, and whether it still is.
     /// Needs shell integration (`OSC 133`); without it there is nothing to
     /// report and the caller falls back to the title.
