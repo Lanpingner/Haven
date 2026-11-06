@@ -7,7 +7,7 @@ use vte::{Params, Parser, Perform};
 
 use crate::charset::{Charset, Charsets};
 use crate::color::{Color, Palette, Rgb};
-use crate::grid::{EraseMode, Grid};
+use crate::grid::{EraseMode, Grid, Links};
 use crate::style::{Attrs, Style, StyleTable, Underline};
 
 /// Reported for `DA1`: VT220 (62), 132 columns (1), selective erase (6),
@@ -87,6 +87,13 @@ pub struct Terminal {
     /// primary is parked in `inactive`.
     pub grid: Grid,
     pub styles: StyleTable,
+    /// Where `OSC 8` targets are kept.
+    ///
+    /// On the terminal rather than on the grid, as the style table is:
+    /// cells on both screens and in scrollback index into one table, so
+    /// switching to the alternate screen does not change what an id means
+    /// under a cell that is still on the other one.
+    pub links: Links,
     pub modes: Modes,
     pub palette: Palette,
     pub title: Option<String>,
@@ -155,6 +162,7 @@ impl Terminal {
         Self {
             grid: Grid::new(cols, rows),
             styles: StyleTable::default(),
+            links: Links::default(),
             modes: Modes::default(),
             palette: Palette::default(),
             title: None,
@@ -765,6 +773,22 @@ impl Perform for Terminal {
             b"111" => self.palette.bg = Palette::default().bg,
             b"112" => self.palette.cursor = Palette::default().cursor,
             // OSC 52: clipboard. The client decides whether to honour it.
+            // OSC 8: a hyperlink. `OSC 8 ; params ; target ST` opens one
+            // and an empty target closes it, so the terminal stamps every
+            // cell written in between.
+            //
+            // The `id=` parameter — which says two runs are the *same*
+            // link, for a URL split across lines — is parsed and ignored:
+            // what it buys is highlighting the other half when you hover
+            // one, and nothing yet asks that question.
+            b"8" => {
+                let target = params.get(2).copied().unwrap_or(b"");
+                self.grid.cursor.link = if target.is_empty() {
+                    0
+                } else {
+                    self.links.intern(&String::from_utf8_lossy(target))
+                };
+            }
             b"52" => {
                 if let Some(data) = params.get(2) {
                     // The payload is base64; handing a client the encoded
@@ -1000,6 +1024,57 @@ mod tests {
         let mut e = Emulator::new(20, 4);
         e.feed(bytes);
         e
+    }
+
+    #[test]
+    fn osc_8_marks_the_cells_written_between_it_and_its_close() {
+        let e = emu(b"see \x1b]8;;https://example.com/a\x1b\\here\x1b]8;;\x1b\\ now");
+        let term = &e.term;
+        let row = &term.grid.rows()[0];
+        let link_at = |col: usize| term.links.get(row.cells[col].link);
+
+        // `see ` is before the link and ` now` is after its close.
+        assert_eq!(link_at(0), None, "the text before the link was marked");
+        assert_eq!(link_at(4), Some("https://example.com/a"));
+        assert_eq!(link_at(7), Some("https://example.com/a"), "the run stopped early");
+        assert_eq!(link_at(8), None, "the close was ignored");
+
+        // One target interned once, however many cells point at it.
+        assert_eq!(term.links.len(), 1);
+    }
+
+    #[test]
+    fn a_link_survives_the_sgr_that_follows_it() {
+        // `OSC 8` is not an SGR attribute and `SGR 0` does not end it. A
+        // terminal that reset the link on every colour change would lose
+        // most real links, since anything that colours its output changes
+        // colour inside the link text.
+        let e = emu(b"\x1b]8;;https://example.com/\x1b\\\x1b[31mred\x1b[0mplain");
+        let row = &e.term.grid.rows()[0];
+        assert_eq!(e.term.links.get(row.cells[0].link), Some("https://example.com/"));
+        assert_eq!(
+            e.term.links.get(row.cells[3].link),
+            Some("https://example.com/"),
+            "SGR 0 closed the link"
+        );
+    }
+
+    #[test]
+    fn the_id_parameter_is_tolerated_rather_than_rejected() {
+        // `OSC 8 ; id=x ; target` is the common form from anything that
+        // splits a link across lines. Reading the target out of the wrong
+        // field would make the pane link to `id=x`.
+        let e = emu(b"\x1b]8;id=7;https://example.com/\x1b\\x");
+        let row = &e.term.grid.rows()[0];
+        assert_eq!(e.term.links.get(row.cells[0].link), Some("https://example.com/"));
+    }
+
+    #[test]
+    fn a_cell_is_still_twelve_bytes() {
+        // The link id went into padding that was already being paid for.
+        // If this ever grows, every screen and every scrollback row costs
+        // more, which is the thing the cell model is built around.
+        assert_eq!(std::mem::size_of::<crate::Cell>(), 12);
     }
 
     #[test]

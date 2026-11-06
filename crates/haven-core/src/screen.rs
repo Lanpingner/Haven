@@ -18,6 +18,13 @@ pub struct ScreenCell {
     pub wide: bool,
     /// The placeholder column owned by the wide cell to its left.
     pub spacer: bool,
+    /// What this cell points at, from `OSC 8`, already resolved.
+    ///
+    /// Resolved like the text and the style, for the same reason: a
+    /// frontend should not need a pane's interning tables to know that the
+    /// thing under the pointer is a URL. Shared rather than copied, since
+    /// a run of cells is one link and the screen is rebuilt every frame.
+    pub link: Option<std::sync::Arc<str>>,
 }
 
 impl Default for ScreenCell {
@@ -28,15 +35,21 @@ impl Default for ScreenCell {
 
 impl ScreenCell {
     pub fn new(text: impl Into<String>, style: Style) -> Self {
-        Self { text: text.into(), style, wide: false, spacer: false }
+        Self { text: text.into(), style, wide: false, spacer: false, link: None }
+    }
+
+    /// The same cell, pointing somewhere.
+    pub fn linked(mut self, link: Option<std::sync::Arc<str>>) -> Self {
+        self.link = link;
+        self
     }
 
     pub fn blank() -> Self {
-        Self { text: " ".into(), style: Style::default(), wide: false, spacer: false }
+        Self { text: " ".into(), style: Style::default(), wide: false, spacer: false, link: None }
     }
 
     pub fn is_blank(&self) -> bool {
-        self.text == " " && self.style == Style::default()
+        self.text == " " && self.style == Style::default() && self.link.is_none()
     }
 
     /// Columns this cell occupies.

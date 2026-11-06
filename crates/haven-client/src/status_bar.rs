@@ -165,7 +165,12 @@ pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget>
         let selected = i == *selected;
         let style = if selected { theme.selection.style() } else { theme.panel.style() };
         let mut spans = vec![
-            Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() },
+            Span {
+                col: 0,
+                text: g.vertical.clone(),
+                style: theme.panel_border.style(),
+                link: None,
+            },
             Span {
                 col: 1,
                 text: pad(
@@ -177,11 +182,13 @@ pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget>
                     inner + 2,
                 ),
                 style,
+                link: None,
             },
             Span {
                 col: (inner + 3) as u16,
                 text: g.vertical.clone(),
                 style: theme.panel_border.style(),
+                link: None,
             },
         ];
         // The key sits at the right edge, dim, so the column of commands
@@ -196,6 +203,7 @@ pub fn suggestions(size: CellSize, mode: &Mode, theme: &Theme) -> Option<Widget>
                     col: (inner + 2 - keys) as u16,
                     text: format!("{} ", entry.keys),
                     style: if selected { style } else { theme.panel_dim.style() },
+                    link: None,
                 },
             );
         }
@@ -252,7 +260,10 @@ pub fn pane_numbers(
                     cols: (label.chars().count() as u16).min(pane.rect.cols),
                     rows: 1,
                 },
-                rows: vec![FrameRow { spans: vec![Span { col: 0, text: label, style }], rev: 0 }],
+                rows: vec![FrameRow {
+                    spans: vec![Span { col: 0, text: label, style, link: None }],
+                    rev: 0,
+                }],
             }
         })
         .collect()
@@ -278,17 +289,24 @@ pub fn border_row(
         col: 0,
         text: format!("{left}{}", g.horizontal.repeat(before)),
         style: theme.panel_border.style(),
+        link: None,
     }];
     let mut at = 1 + before;
     if !title.is_empty() {
         let width = title.chars().count();
-        spans.push(Span { col: at as u16, text: title, style: theme.panel_title.style() });
+        spans.push(Span {
+            col: at as u16,
+            text: title,
+            style: theme.panel_title.style(),
+            link: None,
+        });
         at += width;
     }
     spans.push(Span {
         col: at as u16,
         text: format!("{}{right}", g.horizontal.repeat(after)),
         style: theme.panel_border.style(),
+        link: None,
     });
     FrameRow { spans, rev: 0 }
 }
@@ -415,7 +433,7 @@ impl Spans {
         let room = self.cols - self.used;
         let text: String = text.chars().take(room).collect();
         let width = text.chars().count();
-        self.spans.push(Span { col: self.used as u16, text, style });
+        self.spans.push(Span { col: self.used as u16, text, style, link: None });
         self.used += width;
     }
 

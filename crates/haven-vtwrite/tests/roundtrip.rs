@@ -7,7 +7,7 @@
 //! serializer early (M2.5) rather than with the TUI frontend.
 
 use haven_core::Emulator;
-use haven_vtwrite::{snapshot, Caps, ColorDepth, Serializer};
+use haven_vtwrite::{snapshot, snapshot_linked, Caps, ColorDepth, Serializer};
 
 /// Byte streams that exercise the parts of the model worth protecting.
 fn corpus() -> Vec<(&'static str, &'static [u8])> {
@@ -80,6 +80,64 @@ fn the_corpus_round_trips_with_synchronized_output() {
         std::panic::catch_unwind(|| round_trip(bytes, caps, 24, 6))
             .unwrap_or_else(|_| panic!("`{name}` failed with sync markers"));
     }
+}
+
+#[test]
+fn a_hyperlink_survives_the_round_trip() {
+    // core -> serializer -> parser -> core, for `OSC 8`. The link table is
+    // interned per terminal, so the ids on the two sides need not match —
+    // what has to match is what the cells point *at*.
+    let caps = Caps { hyperlinks: true, ..Default::default() };
+    let bytes = b"go \x1b]8;;https://example.com/a\x1b\\there\x1b]8;;\x1b\\ back";
+
+    let mut source = Emulator::new(40, 4);
+    source.feed(bytes);
+    let mut serializer = Serializer::new(caps);
+    let emitted = serializer.frame_snapshot(linked(&source), (source.term.grid.cursor.row, 0));
+
+    let mut replayed = Emulator::new(40, 4);
+    replayed.feed(&emitted);
+
+    assert_eq!(linked(&source), linked(&replayed), "emitted: {:?}", escape(&emitted));
+}
+
+#[test]
+fn a_frame_never_ends_inside_a_link() {
+    // Everything the host terminal draws after an unclosed `OSC 8` belongs
+    // to the link as far as it is concerned — including the next frame's
+    // first cell, and whatever the user types at the cursor we just moved
+    // to.
+    let caps = Caps { hyperlinks: true, ..Default::default() };
+    let mut emu = Emulator::new(40, 4);
+    // Ends *inside* the link: no close in the input at all.
+    emu.feed(b"\x1b]8;;https://example.com/\x1b\\trailing");
+    let mut s = Serializer::new(caps);
+    let out = s.frame_snapshot(linked(&emu), (0, 0));
+    let text = escape(&out);
+    let last_open = text.rfind("]8;;https").expect("the link was never opened");
+    let last_close = text.rfind("]8;;\\u{1b}").expect("the link was never closed");
+    assert!(last_close > last_open, "the frame ended inside the link: {text}");
+}
+
+#[test]
+fn a_terminal_that_cannot_do_links_is_sent_none() {
+    // The text still arrives; only the markup is dropped. A terminal that
+    // does not know `OSC 8` shows the escape as garbage, which is worse
+    // than a link you cannot click.
+    let mut emu = Emulator::new(40, 4);
+    emu.feed(b"\x1b]8;;https://example.com/\x1b\\text");
+    let mut s = Serializer::new(Caps { hyperlinks: false, ..Default::default() });
+    let out = s.frame_snapshot(linked(&emu), (0, 0));
+    assert!(!escape(&out).contains("]8;"), "{}", escape(&out));
+    assert!(escape(&out).contains("text"));
+}
+
+fn linked(emu: &Emulator) -> haven_vtwrite::Snapshot {
+    snapshot_linked(&emu.term.grid, &emu.term.styles, Some(&emu.term.links))
+}
+
+fn escape(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).escape_debug().to_string()
 }
 
 #[test]

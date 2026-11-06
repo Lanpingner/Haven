@@ -6,15 +6,21 @@
 //! the grid's representation into both of them.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use haven_core::{blank_screen, Cell, CellFlags, Cursor, Palette, Screen, ScreenCell, Style};
 use haven_proto::{CellSize, Layout, PaneId, PaneRect, RowRle, Tables};
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Span {
     pub col: u16,
     pub text: String,
     pub style: Style,
+    /// What this run points at, from `OSC 8`.
+    ///
+    /// Shared rather than copied: a URL is long, a run of a hundred cells
+    /// is one link, and every frame rebuilds these.
+    pub link: Option<Arc<str>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -36,6 +42,8 @@ pub struct PaneFrame {
     /// they only ever grow and an index never changes meaning.
     pub styles: Vec<Style>,
     pub clusters: Vec<String>,
+    /// `OSC 8` targets, in the same append-only way.
+    pub links: Vec<Arc<str>>,
     /// Modes that change how this client must encode input.
     pub app_cursor_keys: bool,
     pub bracketed_paste: bool,
@@ -64,6 +72,13 @@ impl PaneFrame {
         self.styles.get(cell.style.0 as usize).copied().unwrap_or_default()
     }
 
+    fn link(&self, cell: &Cell) -> Option<Arc<str>> {
+        match cell.link {
+            0 => None,
+            id => self.links.get(id as usize - 1).cloned(),
+        }
+    }
+
     fn text(&self, cell: &Cell) -> String {
         match cell.cluster {
             0 => cell.c.to_string(),
@@ -85,9 +100,13 @@ impl PaneFrame {
             }
             let style = self.style(cell);
             let text = self.text(cell);
+            let link = self.link(cell);
             match spans.last_mut() {
-                Some(span) if span.style == style => span.text.push_str(&text),
-                _ => spans.push(Span { col: i as u16, text, style }),
+                // A run breaks where the link changes as well as where the
+                // style does: two adjacent words pointing at different URLs
+                // are two runs however alike they look.
+                Some(span) if span.style == style && span.link == link => span.text.push_str(&text),
+                _ => spans.push(Span { col: i as u16, text, style, link }),
             }
         }
         FrameRow { spans, rev: self.rev }
@@ -180,6 +199,10 @@ impl FrameModel {
         if entry.clusters.len() >= tables.clusters_from as usize {
             entry.clusters.truncate(tables.clusters_from as usize);
             entry.clusters.extend(tables.clusters.iter().cloned());
+        }
+        if entry.links.len() >= tables.links_from as usize {
+            entry.links.truncate(tables.links_from as usize);
+            entry.links.extend(tables.links.iter().map(|l| Arc::from(l.as_str())));
         }
         self.generation += 1;
     }
@@ -398,7 +421,8 @@ fn place(screen: &mut Screen, rect: &PaneRect, rows: &[FrameRow], cols: usize) {
         for span in &row.spans {
             let start = rect.col as usize + span.col as usize;
             for (col, ch) in (start..right_edge).zip(span.text.chars()) {
-                screen[screen_row][col] = ScreenCell::new(ch.to_string(), span.style);
+                screen[screen_row][col] =
+                    ScreenCell::new(ch.to_string(), span.style).linked(span.link.clone());
             }
         }
     }
@@ -685,6 +709,8 @@ mod tests {
             styles: vec![red],
             clusters_from: 0,
             clusters: vec![],
+            links_from: 0,
+            links: vec![],
         });
 
         let row = vec![Cell::new('a'), Cell { c: 'b', style: StyleId(1), ..Cell::default() }];
@@ -706,6 +732,8 @@ mod tests {
             styles: vec![],
             clusters_from: 0,
             clusters: vec!["e\u{0301}".into()],
+            links_from: 0,
+            links: vec![],
         });
         let row = vec![Cell { c: 'e', cluster: 1, ..Cell::default() }];
         frame.apply_snapshot(PaneId(1), &[RowRle::encode(&row)], Cursor::default(), 1);
@@ -723,6 +751,8 @@ mod tests {
             styles: vec![Style::default()],
             clusters_from: 0,
             clusters: vec![],
+            links_from: 0,
+            links: vec![],
         });
         assert_eq!(frame.pane(PaneId(1)).unwrap().styles.len(), 1, "the gap was accepted");
     }

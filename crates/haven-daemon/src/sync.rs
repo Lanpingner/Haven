@@ -14,9 +14,10 @@ use haven_proto::{Layout, PaneId};
 pub struct PaneSync {
     /// Revision last sent, per row.
     pub rows: Vec<u32>,
-    /// How many style and cluster entries this client knows about.
+    /// How many style, cluster and link entries this client knows about.
     pub styles_sent: u16,
     pub clusters_sent: u16,
+    pub links_sent: u16,
     pub cursor: Option<haven_core::Cursor>,
     pub title: Option<String>,
     pub modes: Option<crate::PaneModes>,

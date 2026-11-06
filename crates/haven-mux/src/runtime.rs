@@ -42,6 +42,11 @@ impl PaneRuntime {
         &self.emulator.term.styles
     }
 
+    /// The `OSC 8` targets this pane's cells point at.
+    pub fn links(&self) -> &haven_core::Links {
+        &self.emulator.term.links
+    }
+
     /// The geometry the child was last told about.
     pub fn size(&self) -> PtySize {
         self.size

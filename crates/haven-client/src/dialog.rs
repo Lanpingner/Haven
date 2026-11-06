@@ -220,8 +220,12 @@ impl Dialog<'_> {
                 (false, Some(style)) => style,
                 (false, None) => theme.panel.style(),
             };
-            let mut spans: Vec<Span> =
-                vec![Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() }];
+            let mut spans: Vec<Span> = vec![Span {
+                col: 0,
+                text: g.vertical.clone(),
+                style: theme.panel_border.style(),
+                link: None,
+            }];
             let mut col = 1usize;
             let mut used = 0usize;
             // A row of nothing but a hint, when the filter admits nothing.
@@ -230,6 +234,7 @@ impl Dialog<'_> {
                     col: col as u16,
                     text: pad(NOTHING, list_w),
                     style: theme.panel_dim.style(),
+                    link: None,
                 });
                 used = list_w;
                 col += list_w;
@@ -246,13 +251,14 @@ impl Dialog<'_> {
                         // The highlight takes the whole row: a selected line
                         // in two colours reads as two lines.
                         style: if selected { style } else { *lead_style },
+                        link: None,
                     });
                     col += width;
                     used += width;
                 }
                 let rest = list_w.saturating_sub(used);
                 let text: String = row.text.chars().take(rest).collect();
-                spans.push(Span { col: col as u16, text: pad(&text, rest), style });
+                spans.push(Span { col: col as u16, text: pad(&text, rest), style, link: None });
                 col += rest;
                 used = list_w;
             } else {
@@ -262,6 +268,7 @@ impl Dialog<'_> {
                     col: col as u16,
                     text: pad("", list_w),
                     style: theme.panel.style(),
+                    link: None,
                 });
                 used = list_w;
                 col += list_w;
@@ -273,6 +280,7 @@ impl Dialog<'_> {
                     col: col as u16,
                     text: format!(" {} ", g.vertical),
                     style: theme.panel_border.style(),
+                    link: None,
                 });
                 col += 3;
                 let mut taken = 0usize;
@@ -282,7 +290,12 @@ impl Dialog<'_> {
                         break;
                     }
                     let clipped: String = text.chars().take(width).collect();
-                    spans.push(Span { col: col as u16, text: clipped, style: *run_style });
+                    spans.push(Span {
+                        col: col as u16,
+                        text: clipped,
+                        style: *run_style,
+                        link: None,
+                    });
                     col += width;
                     taken += width;
                 }
@@ -291,6 +304,7 @@ impl Dialog<'_> {
                         col: col as u16,
                         text: pad("", panel_w - taken),
                         style: theme.panel.style(),
+                        link: None,
                     });
                     col += panel_w - taken;
                 }
@@ -299,6 +313,7 @@ impl Dialog<'_> {
                 col: col as u16,
                 text: g.vertical.clone(),
                 style: theme.panel_border.style(),
+                link: None,
             });
             out.push(FrameRow { spans, rev: 0 });
         }
@@ -311,12 +326,23 @@ impl Dialog<'_> {
         };
         out.push(FrameRow {
             spans: vec![
-                Span { col: 0, text: g.vertical.clone(), style: theme.panel_border.style() },
-                Span { col: 1, text: pad(&hint, inner), style: theme.panel_dim.style() },
+                Span {
+                    col: 0,
+                    text: g.vertical.clone(),
+                    style: theme.panel_border.style(),
+                    link: None,
+                },
+                Span {
+                    col: 1,
+                    text: pad(&hint, inner),
+                    style: theme.panel_dim.style(),
+                    link: None,
+                },
                 Span {
                     col: (inner + 1) as u16,
                     text: g.vertical.clone(),
                     style: theme.panel_border.style(),
+                    link: None,
                 },
             ],
             rev: 0,

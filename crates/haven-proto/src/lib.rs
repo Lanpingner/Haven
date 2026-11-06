@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -445,11 +445,16 @@ pub struct Tables {
     /// Index of the first cluster in `clusters`.
     pub clusters_from: u16,
     pub clusters: Vec<String>,
+    /// Index of the first link in `links`.
+    pub links_from: u16,
+    /// `OSC 8` targets, so a cell carrying a link id means something to the
+    /// client that has to draw or open it.
+    pub links: Vec<String>,
 }
 
 impl Tables {
     pub fn is_empty(&self) -> bool {
-        self.styles.is_empty() && self.clusters.is_empty()
+        self.styles.is_empty() && self.clusters.is_empty() && self.links.is_empty()
     }
 }
 

@@ -850,6 +850,60 @@ fn a_panes_history_comes_back_marked_as_this_panes_own() {
     assert_eq!(haven_client::help_subject("cargo test"), "cargo");
 }
 
+/// A pane that prints one `OSC 8` hyperlink and then waits.
+fn link_spawner(
+    _env: haven_daemon::SessionEnv,
+    _containers: haven_daemon::ContainerSettings,
+) -> Box<dyn FnMut(PaneRequest) -> io::Result<Pty>> {
+    Box::new(|request| {
+        Pty::spawn(&PtyConfig {
+            program: Some("/bin/sh".into()),
+            args: vec![
+                "-c".into(),
+                // `\033\\` is ST: the terminator the serializer uses too.
+                // Doubled backslashes throughout: Rust unescapes once and
+                // the shell's `printf` unescapes again, so `\\033` is what
+                // reaches it as `\033` and leaves as ESC.
+                "printf 'go \\033]8;;https://example.com/a\\033\\\\here\\033]8;;\\033\\\\ back\\n'; \
+                 while read l; do :; done"
+                    .into(),
+            ],
+            size: request.size,
+            ..Default::default()
+        })
+    })
+}
+
+#[test]
+fn a_hyperlink_reaches_the_client_that_has_to_open_it() {
+    // The whole chain in one test: a program writes `OSC 8`, the parser
+    // stamps the cells, the daemon interns the target and ships the table,
+    // and the client ends up holding a span that knows where it points.
+    let mut daemon = Daemon::detached(link_spawner);
+    let mut client = attach(&mut daemon, 40, 10);
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| {
+            c[0].frame
+                .panes
+                .values()
+                .any(|p| p.rows.iter().any(|row| row.spans.iter().any(|s| s.link.is_some())))
+        }),
+        "no link arrived"
+    );
+
+    let pane = client.frame.panes.values().next().expect("a pane");
+    let linked: Vec<&haven_client::frame::Span> =
+        pane.rows.iter().flat_map(|r| r.spans.iter()).filter(|s| s.link.is_some()).collect();
+    for span in &linked {
+        assert_eq!(span.link.as_deref(), Some("https://example.com/a"));
+    }
+    let text: String = linked.iter().map(|s| s.text.clone()).collect();
+    assert!(text.contains("here"), "the wrong cells were marked: {text:?}");
+    // And only those: the run breaks where the link ends.
+    assert!(!text.contains("go "), "text before the link was marked: {text:?}");
+    assert!(!text.contains("back"), "text after the close was marked: {text:?}");
+}
+
 #[test]
 fn a_pane_running_as_you_is_not_marked() {
     // The mark is only worth having if it is absent everywhere else. This

@@ -27,16 +27,83 @@ pub struct Cell {
     pub flags: CellFlags,
     /// Index into the grid's [`Clusters`] table; 0 means "just `c`".
     pub cluster: ClusterId,
+    /// Index into the terminal's [`Links`] table; 0 means "not a link".
+    ///
+    /// Its own field rather than part of the style, because a style is
+    /// interned and a URL is not a colour: folding `OSC 8` into `Style`
+    /// would make a fresh style for every distinct link and fill a table
+    /// that exists to be small. It costs nothing — `Cell` was 9 bytes in a
+    /// 12-byte box, and this lands in the padding.
+    pub link: LinkId,
 }
 
 impl Default for Cell {
     fn default() -> Self {
-        Self { c: ' ', style: StyleId::DEFAULT, flags: CellFlags::empty(), cluster: 0 }
+        Self { c: ' ', style: StyleId::DEFAULT, flags: CellFlags::empty(), cluster: 0, link: 0 }
     }
 }
 
 /// Index into a grid's cluster table. 0 is reserved for "no cluster".
 pub type ClusterId = u16;
+
+/// Index into the terminal's link table. 0 is reserved for "no link".
+pub type LinkId = u16;
+
+/// Interned `OSC 8` targets: the URLs cells point at.
+///
+/// Interned for the same reason clusters are — the text is long, the cells
+/// are many, and a run of a hundred cells in one link should cost one
+/// string. Never emptied: a link that scrolled into history is still a link
+/// when you scroll back to it.
+#[derive(Clone, Debug)]
+pub struct Links {
+    targets: Vec<String>,
+    index: HashMap<String, LinkId>,
+}
+
+impl Default for Links {
+    fn default() -> Self {
+        // Slot 0 is the "not a link" sentinel and is never read.
+        Self { targets: vec![String::new()], index: HashMap::new() }
+    }
+}
+
+impl Links {
+    pub fn intern(&mut self, target: &str) -> LinkId {
+        if let Some(&id) = self.index.get(target) {
+            return id;
+        }
+        let Ok(id) = LinkId::try_from(self.targets.len()) else {
+            // 65k distinct links on one pane: stop marking them rather than
+            // panicking in a parser. The text is still there.
+            return 0;
+        };
+        self.targets.push(target.to_string());
+        self.index.insert(target.to_string(), id);
+        id
+    }
+
+    pub fn get(&self, id: LinkId) -> Option<&str> {
+        if id == 0 {
+            return None;
+        }
+        self.targets.get(id as usize).map(String::as_str)
+    }
+
+    /// Every target, slot 0 included, for a client that is being sent the
+    /// table.
+    pub fn all(&self) -> &[String] {
+        &self.targets
+    }
+
+    pub fn len(&self) -> usize {
+        self.targets.len() - 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 /// Interned grapheme clusters: emoji with ZWJ, base characters with combining
 /// marks, anything that is one *cell* but several `char`s.
@@ -140,6 +207,10 @@ pub struct Cursor {
     pub row: usize,
     pub col: usize,
     pub style: StyleId,
+    /// The link cells are being written into, from `OSC 8`. Carried on the
+    /// cursor beside the style because it is the same kind of thing: part
+    /// of the pen, not part of the character.
+    pub link: LinkId,
     /// Deferred wrap: the cursor sits *on* the last column with a pending
     /// wrap, rather than off the edge. Getting this wrong is why some
     /// terminals drop a character at column 80.
@@ -679,11 +750,12 @@ impl Grid {
         }
 
         let (row, col, style) = (self.cursor.row, self.cursor.col, self.cursor.style);
+        let link = self.cursor.link;
         let flags = if width == 2 { CellFlags::WIDE } else { CellFlags::empty() };
-        self.rows[row].cells[col] = Cell { c, style, flags, cluster: 0 };
+        self.rows[row].cells[col] = Cell { c, style, flags, cluster: 0, link };
         if width == 2 {
             self.rows[row].cells[col + 1] =
-                Cell { c: ' ', style, flags: CellFlags::WIDE_SPACER, cluster: 0 };
+                Cell { c: ' ', style, flags: CellFlags::WIDE_SPACER, cluster: 0, link };
         }
         self.rows[row].touch();
 

@@ -15,7 +15,10 @@ fn size(cols: u16, rows: u16) -> CellSize {
 }
 
 fn row(text: &str) -> FrameRow {
-    FrameRow { spans: vec![Span { col: 0, text: text.into(), style: Style::default() }], rev: 1 }
+    FrameRow {
+        spans: vec![Span { col: 0, text: text.into(), style: Style::default(), link: None }],
+        rev: 1,
+    }
 }
 
 fn pane(frame: &mut FrameModel, id: u32, rect: (u16, u16, u16, u16), lines: &[&str]) {

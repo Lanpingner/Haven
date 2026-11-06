@@ -64,6 +64,7 @@ fn run_with(cfg: PtyConfig, host: HostCaps, typed: &[u8]) -> io::Result<()> {
         synchronized_output: host.synchronized_output,
         underline_styles: host.underline_styles,
         utf8: host.utf8,
+        hyperlinks: host.hyperlinks,
     });
     let mut decoder = Decoder::default();
     decoder.tier = host.key_tier();
@@ -344,7 +345,7 @@ pub fn composite<F>(
     let mut cursor = (0usize, 0usize);
 
     for (rect, pane) in mux.visible() {
-        blit(&mut out, rect, pane.grid(), pane.styles(), screen);
+        blit(&mut out, rect, pane.grid(), pane.styles(), pane.links(), screen);
         draw_separators(&mut out, rect, screen);
         if rect.pane == active {
             let grid_cursor = pane.grid().cursor;
@@ -366,7 +367,14 @@ pub fn composite<F>(
 }
 
 /// Copy a pane's cells into the screen, clipped to its rectangle.
-fn blit(out: &mut Snapshot, rect: PaneRect, grid: &Grid, styles: &StyleTable, screen: CellSize) {
+fn blit(
+    out: &mut Snapshot,
+    rect: PaneRect,
+    grid: &Grid,
+    styles: &StyleTable,
+    links: &haven_core::Links,
+    screen: CellSize,
+) {
     let max_col = (rect.col as usize + rect.cols as usize).min(screen.cols as usize);
     for (r, row) in grid.rows().iter().enumerate().take(rect.rows as usize) {
         let screen_row = rect.row as usize + r;
@@ -383,6 +391,7 @@ fn blit(out: &mut Snapshot, rect: PaneRect, grid: &Grid, styles: &StyleTable, sc
                 style: styles.get(cell.style),
                 wide: cell.flags.contains(haven_core::CellFlags::WIDE),
                 spacer: cell.flags.contains(haven_core::CellFlags::WIDE_SPACER),
+                link: links.get(cell.link).map(std::sync::Arc::from),
             };
         }
     }

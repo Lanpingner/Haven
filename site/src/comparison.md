@@ -22,6 +22,7 @@ welcome as pull requests against this page.
 | Configurable keys | yes | yes | yes | yes | yes | **yes** — server-side, live, same vocabulary as the command line |
 | Copy mode & search | selection only | yes | yes | selection only | yes | **yes** — vi keys, search over the whole history |
 | Save & restore | n/a | yes (sessions) | yes | n/a | plugin (`resurrect`) | **built in** — layout, names and directories, with an allowlist for programs |
+| Hyperlinks (`OSC 8`) | no | yes | yes | yes | passes through | **yes** — Ctrl+click, and re-emitted in the TUI |
 | Ligatures / images | no / no | yes / kitty graphics | yes / sixel + kitty | yes / kitty graphics | n/a | **not yet** / not yet (cell model reserves placements) |
 | Colour emoji | no | yes | yes | yes | n/a | **yes** — `COLR`, `CBDT` and `sbix`, untinted |
 | Maturity | stable, packaged | stable, packaged | stable, packaged | stable, packaged | ancient and bulletproof | **v0.0.1**, from source, Linux/X11 tested |

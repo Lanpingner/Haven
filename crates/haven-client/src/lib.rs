@@ -14,6 +14,7 @@ pub mod frame;
 pub mod frontend;
 pub mod input;
 pub mod menu;
+pub mod open;
 pub mod status_bar;
 
 /// Themes live in the protocol crate: the daemon owns the configuration and
@@ -804,6 +805,27 @@ impl<F: Frontend, T: Transport> Client<F, T> {
     /// *pointer* decides, not the focused one — reading or clicking in one
     /// pane while typing in another is the ordinary case.
     fn mouse(&mut self, event: input::MouseEvent) -> Result<Tick, TransportError> {
+        // Ctrl+click on a hyperlink, before anything else looks at the
+        // event — including a program that asked for the mouse. That is the
+        // convention everywhere else, and the reason for it is that the one
+        // thing an application cannot do for you is follow a link it has
+        // already handed to the terminal.
+        if event.pressed
+            && !event.motion
+            && event.button == MouseButton::Left
+            && event.mods.contains(Modifiers::CTRL)
+        {
+            if let Some(target) = self.link_at(event.col, event.row) {
+                self.frame.notice = Some(match open::open(&target) {
+                    open::Opened::Launched(t) => format!("opening {}", one_line(&t)),
+                    // Shown rather than opened: see `open.rs` for why the
+                    // list of schemes is as short as it is.
+                    open::Opened::Shown(t) => format!("link: {}", one_line(&t)),
+                    open::Opened::Failed(why) => format!("could not open: {why}"),
+                });
+                return Ok(Tick::Redraw);
+            }
+        }
         if !self.mouse_enabled || self.copy.is_some() || self.chooser.is_some() {
             return Ok(Tick::Idle);
         }
@@ -864,6 +886,24 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             _ if event.motion => self.drag(event),
             _ => Ok(Tick::Idle),
         }
+    }
+
+    /// What the cell at these screen coordinates points at, from `OSC 8`.
+    ///
+    /// Read off the composed frame rather than asked of the daemon: the
+    /// client already has every cell on the screen, and a round trip to
+    /// answer a click is a round trip the click can be faster than.
+    fn link_at(&self, col: u16, row: u16) -> Option<std::sync::Arc<str>> {
+        let pane = self.frame.pane(self.pane_at(col, row)?)?;
+        let line = pane.rows.get((row - pane.rect.row) as usize)?;
+        let local = col - pane.rect.col;
+        line.spans
+            .iter()
+            .find(|span| {
+                let width = span.text.chars().count() as u16;
+                local >= span.col && local < span.col + width
+            })
+            .and_then(|span| span.link.clone())
     }
 
     /// Which pane a rule belongs to, and which way it runs: the pane above or

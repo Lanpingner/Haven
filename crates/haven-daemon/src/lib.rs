@@ -1391,7 +1391,12 @@ fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
         // render with the wrong colours.
         let styles_len = styles.len().min(u16::MAX as usize) as u16;
         let clusters_len = grid.clusters().len().min(u16::MAX as usize) as u16;
-        if styles_len > state.styles_sent || clusters_len > state.clusters_sent {
+        let links = pane.links();
+        let links_len = links.len().min(u16::MAX as usize) as u16;
+        if styles_len > state.styles_sent
+            || clusters_len > state.clusters_sent
+            || links_len > state.links_sent
+        {
             let tables = Tables {
                 pane: rect.pane,
                 styles_from: state.styles_sent,
@@ -1402,9 +1407,14 @@ fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
                 clusters: (state.clusters_sent..clusters_len)
                     .map(|i| grid.clusters().get(i + 1).unwrap_or_default().to_string())
                     .collect(),
+                links_from: state.links_sent,
+                links: (state.links_sent..links_len)
+                    .map(|i| links.get(i + 1).unwrap_or_default().to_string())
+                    .collect(),
             };
             state.styles_sent = styles_len;
             state.clusters_sent = clusters_len;
+            state.links_sent = links_len;
             let _ = client.framed.queue(&ServerMsg::Tables(tables));
         }
 

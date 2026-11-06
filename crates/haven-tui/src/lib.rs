@@ -110,6 +110,9 @@ impl TuiFrontend {
                 synchronized_output: host.synchronized_output,
                 underline_styles: host.underline_styles,
                 utf8: host.utf8,
+                // Passed straight through: the host terminal already knows
+                // how this desktop opens a URL.
+                hyperlinks: host.hyperlinks,
             }),
             decoder,
             raw: Some(raw),
@@ -137,6 +140,9 @@ impl TuiFrontend {
                 synchronized_output: host.synchronized_output,
                 underline_styles: host.underline_styles,
                 utf8: host.utf8,
+                // Passed straight through: the host terminal already knows
+                // how this desktop opens a URL.
+                hyperlinks: host.hyperlinks,
             }),
             decoder,
             raw: None,

@@ -336,3 +336,39 @@ marked rather than a wrong one being marked. The lookup is cached against
 the foreground process group, which is exactly what changes when the answer
 might have, so the status does not read `/proc` for every pane on every
 update.
+
+
+## Links
+
+A program can mark its output as a hyperlink — `OSC 8` — and many do: `ls`
+with `--hyperlink`, `gcc` and `rustc` on diagnostics, `gh`, `delta`, most
+test runners. Haven carries them from the pane to whichever client is
+looking at it.
+
+**In the window**, `Ctrl+click` follows one. **In the TUI frontend** the
+link is re-emitted to the terminal Haven is running inside, when that
+terminal says it understands `OSC 8`, so clicking works the way it already
+does there — the host knows how this desktop opens a URL and Haven would be
+guessing.
+
+### What a click will and will not open
+
+`http`, `https` and `mailto` are handed to `xdg-open`. **Anything else is
+shown in the status bar instead of opened**, including `file://`.
+
+That is deliberate, and the reason is worth stating. An `OSC 8` target is
+written by whatever is running in the pane, the text it hides behind is
+arbitrary, and the target is invisible until something shows it to you.
+`cat` a file from anywhere and it can put a link reading `the docs` on your
+screen pointing at `file:///tmp/evil.desktop` — and handing that to the
+desktop's launcher turns printed output into one click from running a
+program. `file://` is both the scheme that reaches a `.desktop` entry and
+the one build tools emit most, which is exactly the combination that gets
+clicked without being read.
+
+Seeing where a link goes and deciding yourself is a worse experience than
+clicking it, and a much better one than finding out afterwards.
+
+The browser is launched by the **client**, never the daemon: when you are
+attached over SSH the daemon is on another machine, and the browser belongs
+beside the screen you are looking at.

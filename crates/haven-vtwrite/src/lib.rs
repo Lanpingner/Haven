@@ -9,7 +9,7 @@
 //! cheaper to rewrite wholesale than to patch, and that decision is made per
 //! row by [`Serializer`].
 
-use haven_core::{CellFlags, Grid, Palette, Style, StyleTable};
+use haven_core::{CellFlags, Grid, Links, Palette, Style, StyleTable};
 
 mod style;
 
@@ -25,6 +25,11 @@ pub struct Caps {
     pub underline_styles: bool,
     /// When false, box drawing is re-encoded through DEC Special Graphics.
     pub utf8: bool,
+    /// `OSC 8`. When the destination understands hyperlinks, ours are passed
+    /// through to it and it is the one that makes them clickable — which is
+    /// the right answer in a terminal we are a guest in: the host already
+    /// knows how this desktop opens a URL, and we would be guessing.
+    pub hyperlinks: bool,
 }
 
 impl Default for Caps {
@@ -34,6 +39,7 @@ impl Default for Caps {
             synchronized_output: false,
             underline_styles: true,
             utf8: true,
+            hyperlinks: false,
         }
     }
 }
@@ -44,6 +50,15 @@ pub use haven_core::{Screen as Snapshot, ScreenCell as RenderCell};
 
 /// Flatten a grid into content-only cells.
 pub fn snapshot(grid: &Grid, styles: &StyleTable) -> Snapshot {
+    snapshot_linked(grid, styles, None)
+}
+
+/// As [`snapshot`], resolving `OSC 8` targets through a link table.
+///
+/// Separate because the table lives on the terminal rather than on the grid,
+/// and the callers that have only a grid — the round-trip test, a capture of
+/// a scrollback region — should not have to invent one.
+pub fn snapshot_linked(grid: &Grid, styles: &StyleTable, links: Option<&Links>) -> Snapshot {
     grid.rows()
         .iter()
         .map(|row| {
@@ -54,6 +69,7 @@ pub fn snapshot(grid: &Grid, styles: &StyleTable) -> Snapshot {
                     style: styles.get(cell.style),
                     wide: cell.flags.contains(CellFlags::WIDE),
                     spacer: cell.flags.contains(CellFlags::WIDE_SPACER),
+                    link: links.and_then(|table| table.get(cell.link)).map(std::sync::Arc::from),
                 })
                 .collect()
         })
@@ -67,6 +83,9 @@ pub struct Serializer {
     prev: Option<Snapshot>,
     /// The pen and cursor position we believe the destination is in.
     pen: Style,
+    /// The hyperlink we believe the destination has open, so one is opened
+    /// and closed per run rather than per cell.
+    link: Option<std::sync::Arc<str>>,
     pos: Option<(usize, usize)>,
     /// Whether the destination currently shows a cursor, so DECTCEM is only
     /// written when it changes rather than on every frame.
@@ -80,6 +99,7 @@ impl Serializer {
             palette: Palette::default(),
             prev: None,
             pen: Style::default(),
+            link: None,
             pos: None,
             cursor_shown: true,
         }
@@ -91,6 +111,7 @@ impl Serializer {
         self.prev = None;
         self.pos = None;
         self.pen = Style::default();
+        self.link = None;
     }
 
     /// Serialize the difference between the last frame and this grid.
@@ -134,6 +155,14 @@ impl Serializer {
                     self.emit_row(index, old, new, &mut out);
                 }
             }
+        }
+
+        // Never end a frame inside a link. The next thing written at that
+        // position is the cursor, and anything the host terminal draws after
+        // an unclosed `OSC 8` belongs to the link as far as it is concerned.
+        if self.link.is_some() {
+            out.extend_from_slice(open_link(None).as_bytes());
+            self.link = None;
         }
 
         // Leave the cursor where the application put it.
@@ -298,6 +327,10 @@ impl Serializer {
             if cell.spacer {
                 continue;
             }
+            if self.caps.hyperlinks && cell.link != self.link {
+                out.extend_from_slice(open_link(cell.link.as_deref()).as_bytes());
+                self.link = cell.link.clone();
+            }
             if cell.style != self.pen {
                 let sgr = sgr_transition(
                     &self.pen,
@@ -373,4 +406,18 @@ pub fn dec_graphics_byte(c: char) -> Option<u8> {
         '·' => b'~',
         _ => return None,
     })
+}
+
+/// `OSC 8` open, or close when there is no target.
+///
+/// The `id=` parameter is left empty: it exists to tell a terminal that two
+/// separate runs are one link, which matters for a URL broken across lines
+/// and which the pane that wrote it has already decided. Passing through
+/// what we were given would be better still — see the note in the parser
+/// about why we do not keep it yet.
+///
+/// Terminated with `ST` rather than `BEL`: both are allowed, and a stray
+/// `BEL` in a terminal that does not understand the sequence rings a bell.
+fn open_link(target: Option<&str>) -> String {
+    format!("\x1b]8;;{}\x1b\\", target.unwrap_or(""))
 }
