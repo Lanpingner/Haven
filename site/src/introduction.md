@@ -1,40 +1,57 @@
 <div class="hero">
 
-<img class="mark" src="./logo.svg" alt="" width="84" height="84">
+<div class="hero-copy">
 
-# Haven Terminal
+<img class="mark" src="./logo.svg" alt="" width="64" height="64">
 
-<p class="tagline">A GPU terminal with the multiplexer already inside it.</p>
+# A terminal with the multiplexer inside it
 
-Haven is a keyboard-first terminal emulator in Rust. Sessions, window tabs and
-recursive pane splits are part of the core — not a tmux process layered on top,
-translating escape sequences twice.
+<p class="tagline">Sessions, tabs and recursive splits are part of the core —
+not a tmux process layered on top, translating escape sequences twice.</p>
 
-<div class="pills">
-<span class="pill"><b>Rust</b> · 13 crates · ~30k lines</span>
-<span class="pill"><b>wgpu</b> Vulkan / Metal / DX12 / GL</span>
-<span class="pill"><b>645</b> tests, zero clippy warnings</span>
-<span class="pill"><b>MIT</b> OR Apache-2.0</span>
-<span class="pill">v0.0.1 · <b>pre-release</b></span>
-</div>
+Haven is a GPU-accelerated, keyboard-first terminal emulator in Rust. One
+parser, one grid model, one keymap, and a daemon that keeps your shells alive
+when the window goes away.
 
 <div class="cta">
-<a class="primary" href="./build.md">Build it</a>
+<a class="primary" href="./install.md">Install it</a>
 <a href="./comparison.md">How it compares</a>
 <a href="https://github.com/Lanpingner/Haven">GitHub</a>
 </div>
 
+<div class="pills">
+<span class="pill"><b>wgpu</b> Vulkan / Metal / DX12 / GL</span>
+<span class="pill"><b>MIT</b> OR Apache-2.0</span>
+<span class="pill">v0.0.3</span>
 </div>
 
-<div class="shot angled reveal" data-tilt>
-<div class="frame">
-<img src="./img/panes.png" width="1180" height="693" alt="One Haven window with three panes: cargo tree at the top left, git log below it, and vim with Rust syntax highlighting on the right, under a status bar.">
+</div>
+
+<div class="scene" data-scene>
+<div class="scene-inner">
+<div class="glow"></div>
+<div class="pane pane-a"><img src="./img/pane-shell.png" width="620" height="440" alt="A shell pane showing cargo tree and git log output."><span class="tag">bash</span></div>
+<div class="pane pane-b"><img src="./img/pane-htop.png" width="620" height="440" alt="A pane running htop."><span class="tag">htop</span></div>
+<div class="pane pane-c"><img src="./img/pane-vim.png" width="620" height="440" alt="A pane running vim with Rust syntax highlighting."><span class="tag">vim</span></div>
+<div class="statusbar"><span class="session">haven-0</span> <span class="tab-active">1:cargo*</span> <span>2:htop</span> <span>3:vim</span> <span>· 3 panes · 2 clients · 3:12:07</span></div>
+<div class="chip chip-a"><span class="chip-dot"></span> <span><b>Ctrl+A d</b> — detached, still running</span></div>
+<div class="chip chip-b"><span><b>haven attach</b> — same session, over SSH</span></div>
 </div>
 </div>
 
-<p class="caption">One window, three panes, one process. Captured with
-<code>haven screenshot</code>, which renders through the same GPU pipeline the
-window uses — so this is the real renderer, not a mock-up.</p>
+</div>
+
+<p class="caption">Three panes, three programs, one process — each plane above
+is a real capture from <code>haven screenshot</code>, which renders through the
+same GPU pipeline the window uses. Move the pointer, or scroll, and they
+assemble into the single window they actually are.</p>
+
+<div class="band reveal">
+<div class="stat"><span class="n">645</span><span class="l">tests, zero clippy warnings</span></div>
+<div class="stat"><span class="n">13</span><span class="l">crates, ~30k lines of Rust</span></div>
+<div class="stat"><span class="n">0%</span><span class="l">idle CPU, no wakeups</span></div>
+<div class="stat"><span class="n">3</span><span class="l">ways to run one binary</span></div>
+</div>
 
 ## One codebase, one parser, one keymap
 
