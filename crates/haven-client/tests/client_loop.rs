@@ -2,6 +2,7 @@
 //! and no daemon. See `docs/PLAN.md` §16.
 
 use haven_client::input::InputEvent;
+use haven_client::ChooseOnAttach;
 use haven_client::{Client, KeyEvent, Modifiers, NamedKey, ScriptedFrontend, Tick};
 use haven_core::{Cell, Cursor};
 use haven_proto::transport::ScriptedTransport;
@@ -1006,4 +1007,84 @@ fn the_shell_menu_can_be_asked_for_a_pane_instead() {
     let menu = client.menu.as_ref().expect("no menu");
     assert_eq!(menu.entries[0].1, "split-v /bin/bash");
     assert!(menu.title.contains("pane"), "{}", menu.title);
+}
+
+fn session_info(id: u32, name: &str) -> haven_proto::SessionInfo {
+    haven_proto::SessionInfo {
+        id: SessionId(id),
+        name: name.into(),
+        windows: 1,
+        panes: 1,
+        clients: 0,
+        size: size(80, 24),
+        tabs: Vec::new(),
+    }
+}
+
+#[test]
+fn attaching_with_no_session_named_asks_which_one_when_there_are_several() {
+    let server = ScriptedTransport::new([
+        ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1), build: 0 },
+        ServerMsg::Sessions {
+            sessions: vec![session_info(1, "work"), session_info(2, "other")],
+            daemon_build: 0,
+        },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 6), []), server);
+
+    client.attach_choosing(None, ChooseOnAttach::WhenSeveral).unwrap();
+    // Asking for the listing is what makes the question answerable.
+    assert!(
+        client.transport.sent.iter().any(|m| matches!(m, ClientMsg::ListSessions)),
+        "the listing was never asked for: {:?}",
+        client.transport.sent
+    );
+    client.tick().unwrap();
+
+    let chooser = client.chooser.as_ref().expect("the tree should be open");
+    assert!(
+        chooser.rows.iter().any(|r| r.choice == haven_client::chooser::Choice::NewSession),
+        "making a new session has to be one of the answers"
+    );
+}
+
+#[test]
+fn one_session_is_not_a_question_worth_asking() {
+    let server = ScriptedTransport::new([
+        ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1), build: 0 },
+        ServerMsg::Sessions { sessions: vec![session_info(1, "work")], daemon_build: 0 },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 6), []), server);
+
+    client.attach_choosing(None, ChooseOnAttach::WhenSeveral).unwrap();
+    client.tick().unwrap();
+    assert!(client.chooser.is_none(), "a prompt with one answer is a keystroke to dismiss");
+
+    // Unless it was asked for outright, where "new session" is the point.
+    let server = ScriptedTransport::new([
+        ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1), build: 0 },
+        ServerMsg::Sessions { sessions: vec![session_info(1, "work")], daemon_build: 0 },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 6), []), server);
+    client.attach_choosing(None, ChooseOnAttach::Always).unwrap();
+    client.tick().unwrap();
+    assert!(client.chooser.is_some(), "--choose means ask");
+}
+
+#[test]
+fn naming_a_session_is_already_an_answer() {
+    let server = ScriptedTransport::new([ServerMsg::Hello {
+        protocol: PROTOCOL_VERSION,
+        session: SessionId(2),
+        build: 0,
+    }]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 6), []), server);
+
+    client.attach_choosing(Some(SessionId(2)), ChooseOnAttach::Always).unwrap();
+    client.tick().unwrap();
+    assert!(client.chooser.is_none(), "-t said which one");
+    assert!(
+        !client.transport.sent.iter().any(|m| matches!(m, ClientMsg::ListSessions)),
+        "nothing to list: the session was named"
+    );
 }

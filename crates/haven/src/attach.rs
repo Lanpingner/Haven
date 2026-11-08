@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use haven_client::bindings::{self, Bindings};
 use haven_client::input::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use haven_client::status_bar::Mode;
+use haven_client::ChooseOnAttach;
 use haven_client::{Client, Intercepted, Tick};
 use haven_proto::transport::SocketTransport;
 use haven_proto::{ClientMsg, SessionId, Transport};
@@ -312,6 +313,7 @@ fn run_command(line: &str, bindings: &Bindings) -> Intercepted {
 pub fn run_gpu(
     socket: &Path,
     session: Option<SessionId>,
+    choose: ChooseOnAttach,
     config: haven_render::WindowConfig,
     config_path: std::path::PathBuf,
 ) -> io::Result<()> {
@@ -331,7 +333,7 @@ pub fn run_gpu(
             eprintln!("haven: could not remember the font size: {e}");
         }
     });
-    haven_render::window::run(transport, session, config, wake, Some(filter), Some(saver))
+    haven_render::window::run(transport, session, choose, config, wake, Some(filter), Some(saver))
         .map_err(|e| io::Error::other(e.to_string()))
 }
 
@@ -339,26 +341,36 @@ pub fn run_gpu(
 ///
 /// Separate so tests and `haven dump` can hand in known capabilities rather
 /// than writing escape sequences at whatever is reading them.
-pub fn run_probed(socket: &Path, session: Option<SessionId>) -> io::Result<()> {
+pub fn run_probed(
+    socket: &Path,
+    session: Option<SessionId>,
+    choose: ChooseOnAttach,
+) -> io::Result<()> {
     let transport = connect_or_start(socket)?;
     let frontend = TuiFrontend::enter_probed()?;
-    drive(transport, frontend, session)
+    drive(transport, frontend, session, choose)
 }
 
-pub fn run(socket: &Path, session: Option<SessionId>, host: HostCaps) -> io::Result<()> {
+pub fn run(
+    socket: &Path,
+    session: Option<SessionId>,
+    host: HostCaps,
+    choose: ChooseOnAttach,
+) -> io::Result<()> {
     let transport = connect_or_start(socket)?;
     let frontend = TuiFrontend::enter(host)?;
-    drive(transport, frontend, session)
+    drive(transport, frontend, session, choose)
 }
 
 fn drive(
     transport: SocketTransport,
     frontend: TuiFrontend,
     session: Option<SessionId>,
+    choose: ChooseOnAttach,
 ) -> io::Result<()> {
     let mut client = Client::new(frontend, transport);
     client.key_filter = Some(Box::new(key_filter()));
-    client.attach(session).map_err(to_io)?;
+    client.attach_choosing(session, choose).map_err(to_io)?;
 
     let stdin = rustix::stdio::stdin();
     loop {

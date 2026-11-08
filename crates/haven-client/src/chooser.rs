@@ -21,6 +21,10 @@ pub enum Choice {
     Session(SessionId),
     Window(u16),
     Pane(u32),
+    /// Make one, and go there. The chooser is where you are already
+    /// deciding which session you want, so it is where "none of these"
+    /// belongs.
+    NewSession,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -59,6 +63,8 @@ impl Chooser {
     pub fn previewed(&self, sessions: &[SessionInfo]) -> Option<u32> {
         let row = self.rows.get(self.selected)?;
         match row.choice {
+            // Nothing exists to preview yet.
+            Choice::NewSession => None,
             Choice::Pane(id) => Some(id),
             Choice::Window(index) => {
                 let session = self.session_of(self.selected)?;
@@ -164,6 +170,27 @@ impl Chooser {
                     });
                 }
             }
+        }
+
+        // "None of these." Last, because it is the answer you want least
+        // often, and never marked current, so opening the tree still lands
+        // on where you are.
+        //
+        // Only once there is a listing to be none of, though: an empty
+        // `rows` is how the client knows the listing has not arrived yet,
+        // and it settles the selection onto the active pane on the first
+        // rebuild that has rows. A row that is always present would make
+        // that rebuild look like a user who had already chosen, and the
+        // tree would open on this row instead of where you are.
+        if !rows.is_empty() {
+            rows.push(Row {
+                indent: 0,
+                text: "+ new session".into(),
+                choice: Choice::NewSession,
+                current: false,
+                last: true,
+                parent_last: false,
+            });
         }
 
         // Several rows can be current at once — the active window and the
@@ -387,6 +414,9 @@ mod tests {
                 Choice::Window(0),
                 Choice::Pane(10),
                 Choice::Pane(11),
+                // Last, and always offered: the tree is where you decide
+                // which session you want, so "none of these" lives here.
+                Choice::NewSession,
             ]
         );
     }

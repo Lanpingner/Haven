@@ -56,6 +56,28 @@ own small loop instead. Running `haven attach` against an autostarted daemon
 costs nothing and has all of it, which is why this has not been worth
 moving.
 
+## Which session you get
+
+`haven attach -t <id>` names one. Without it, the daemon joins the first
+session that exists and creates one when there are none — which is right
+when there is one session and a guess when there are several.
+
+So when there are several, attaching **opens the session tree over the top**
+and the guess becomes a default rather than a decision: pick a session, a tab
+inside one, or `+ new session` at the bottom of the list to start somewhere
+fresh. `Esc` keeps whatever you were given.
+
+```sh
+haven attach            # asks, when there is more than one session
+haven attach --choose   # asks even when there is one: "+ new session" is on
+                        # that list too
+haven attach -t 2       # no question; you already said
+```
+
+It is the same tree that `Ctrl+A` `s` opens, for the same reason the command
+line and the keys resolve to the same actions: a second picker that did
+almost this would be a second place to fix.
+
 ## Headless
 
 ```sh

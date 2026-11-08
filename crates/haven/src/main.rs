@@ -36,6 +36,9 @@ options:
   --send <text>    type this at the child; \\n \\r \\t \\e \\xNN are decoded
   --socket <path>  daemon socket (default: $XDG_RUNTIME_DIR/haven/<uid>-default.sock)
   -t <id>          session id, for attach and kill-session
+  --choose         on attach, ask which session (or make one) even
+                   when there is only one. Without it the tree opens
+                   only when there are several to choose between
   --out <path>     screenshot output (PPM; default haven.ppm)
   --gpu <backend>  auto (default), gl or vulkan
   --gpu-power <p>  low (default, the integrated GPU) or high (discrete).
@@ -62,6 +65,9 @@ struct Args {
     font_size: Option<f32>,
     gpu: haven_render::GpuPreference,
     target: Option<u32>,
+    /// `--choose`: ask which session to attach to even when there is only
+    /// one, because "new session" is on that list too.
+    choose: bool,
     subcommand: Option<String>,
     program: Option<PathBuf>,
     rest: Vec<OsString>,
@@ -83,6 +89,7 @@ impl Default for Args {
             font_size: None,
             gpu: haven_render::GpuPreference::default(),
             target: None,
+            choose: false,
             subcommand: None,
             program: None,
             rest: Vec::new(),
@@ -106,6 +113,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<(String, Args), String>
             "--login" => args.login = true,
             "--no-integrate" => args.integrate = false,
             "--raw" => args.raw = true,
+            "--choose" => args.choose = true,
             "--send" => args.send = decode_escapes(&value("--send")?),
             "--socket" => args.socket = Some(PathBuf::from(value("--socket")?)),
             "--out" => args.out = Some(PathBuf::from(value("--out")?)),
@@ -229,6 +237,22 @@ fn main() -> ExitCode {
     }
 }
 
+/// Whether to ask which session to join.
+///
+/// Naming one with `-t` is an answer already. Otherwise the daemon joins the
+/// first session that exists, which is right when there is one and a guess
+/// when there are several — so ask then, and always with `--choose`.
+fn choose_policy(args: &Args) -> haven_client::ChooseOnAttach {
+    use haven_client::ChooseOnAttach;
+    if args.choose {
+        ChooseOnAttach::Always
+    } else if args.target.is_some() {
+        ChooseOnAttach::Never
+    } else {
+        ChooseOnAttach::WhenSeveral
+    }
+}
+
 fn socket_of(args: &Args) -> PathBuf {
     args.socket.clone().unwrap_or_else(|| haven_daemon::socket_path("default"))
 }
@@ -269,7 +293,7 @@ fn gpu(args: Args) -> ExitCode {
         font_size: size,
         gpu: args.gpu,
     };
-    match haven::attach::run_gpu(&socket, session, config, config_path) {
+    match haven::attach::run_gpu(&socket, session, choose_policy(&args), config, config_path) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("haven: {e}");
@@ -282,7 +306,7 @@ fn gpu(args: Args) -> ExitCode {
 fn attach(args: Args) -> ExitCode {
     let socket = socket_of(&args);
     let session = args.target.map(haven_proto::SessionId);
-    match haven::attach::run_probed(&socket, session) {
+    match haven::attach::run_probed(&socket, session, choose_policy(&args)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("haven: {e}");

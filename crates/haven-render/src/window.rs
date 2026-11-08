@@ -409,6 +409,7 @@ impl Default for WindowConfig {
 struct App<T: Transport> {
     client: Client<GpuFrontend, T>,
     session: Option<SessionId>,
+    choose: haven_client::ChooseOnAttach,
     config: WindowConfig,
     instance: wgpu::Instance,
     modifiers: ModifiersState,
@@ -469,7 +470,7 @@ impl<T: Transport> ApplicationHandler<Wake> for App<T> {
                 let caps = self.client.frontend.caps();
                 // Attach only once the real geometry is known, so the daemon
                 // never sizes a session to a placeholder.
-                if self.client.attach(self.session).is_err() {
+                if self.client.attach_choosing(self.session, self.choose).is_err() {
                     event_loop.exit();
                     return;
                 }
@@ -615,6 +616,8 @@ impl<T: Transport> App<T> {
 pub fn run<T: Transport + 'static>(
     transport: T,
     session: Option<SessionId>,
+    // Whether to ask which session, when none was named.
+    choose: haven_client::ChooseOnAttach,
     config: WindowConfig,
     wake: Option<std::os::fd::OwnedFd>,
     key_filter: Option<haven_client::KeyFilter>,
@@ -639,8 +642,15 @@ pub fn run<T: Transport + 'static>(
     let mut client = Client::new(GpuFrontend::new(), transport);
     client.key_filter = key_filter;
     client.font_saver = font_saver;
-    let mut app =
-        App { client, session, config, instance, modifiers: ModifiersState::empty(), error: None };
+    let mut app = App {
+        client,
+        session,
+        choose,
+        config,
+        instance,
+        modifiers: ModifiersState::empty(),
+        error: None,
+    };
     event_loop.run_app(&mut app).map_err(|e| RenderError::Device(e.to_string()))?;
     if let Some(e) = app.error.take() {
         return Err(e);

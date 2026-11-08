@@ -183,6 +183,20 @@ fn unix_now() -> u64 {
 /// ones you can still count down to faster than you can type.
 const DIGIT_LIMIT: usize = 12;
 
+/// Whether attaching should ask which session to join.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ChooseOnAttach {
+    /// Join whatever the daemon picks, as `-t` and scripts want.
+    #[default]
+    Never,
+    /// Ask when there is more than one session, which is the only time the
+    /// daemon's choice is a guess.
+    WhenSeveral,
+    /// Ask regardless, for `--choose`: someone who typed it means it, even
+    /// with one session, because "new session" is on that list too.
+    Always,
+}
+
 /// Drives one client session: pulls input from a [`Frontend`], pushes it at a
 /// [`Transport`], folds server messages into a [`FrameModel`], presents.
 pub struct Client<F, T> {
@@ -201,6 +215,11 @@ pub struct Client<F, T> {
     pub mode: status_bar::Mode,
     /// The session tree, while it is open.
     pub chooser: Option<chooser::Chooser>,
+    /// Open the tree as soon as the session listing arrives, so attaching
+    /// with no session named asks which one rather than silently joining the
+    /// first. Cleared once it has fired: this is about arriving, not about
+    /// every later listing.
+    pending_chooser: Option<ChooseOnAttach>,
     /// Copy mode, while it is up. Modal: it owns the keyboard.
     pub copy: Option<copy::CopyMode>,
     /// A list of things to pick, while one is up. Modal like the chooser.
@@ -282,6 +301,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             key_filter: None,
             mode: status_bar::Mode::Normal,
             chooser: None,
+            pending_chooser: None,
             copy: None,
             menu: None,
             buffers: Vec::new(),
@@ -309,6 +329,21 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         &mut self,
         session: Option<haven_proto::SessionId>,
     ) -> Result<(), TransportError> {
+        self.attach_choosing(session, ChooseOnAttach::Never)
+    }
+
+    /// Attach, and say whether to ask which session first.
+    ///
+    /// Naming a session is an answer already, so `-t` never asks. Otherwise
+    /// the daemon joins the first session that exists, which is the right
+    /// guess when there is only one and a coin toss when there are several —
+    /// so the tree is opened over the top and the guess becomes a default
+    /// rather than a decision.
+    pub fn attach_choosing(
+        &mut self,
+        session: Option<haven_proto::SessionId>,
+        choose: ChooseOnAttach,
+    ) -> Result<(), TransportError> {
         let mut caps = self.frontend.caps();
         self.frame.size = caps.size;
         caps.size = status_bar::reserve(caps.size);
@@ -317,6 +352,11 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             caps,
             env: haven_proto::client_environment(),
         })?;
+        if session.is_none() && choose != ChooseOnAttach::Never {
+            // The listing decides whether there is anything to ask about.
+            self.transport.send(ClientMsg::ListSessions)?;
+            self.pending_chooser = Some(choose);
+        }
         self.attached = true;
         Ok(())
     }
@@ -1031,6 +1071,19 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             chooser::Choice::Pane(id) => {
                 self.transport.send(ClientMsg::Action(Action::SelectPane(id)))
             }
+            chooser::Choice::NewSession => {
+                // Same clearing as moving to an existing session: the panes
+                // we hold belong to the one we are leaving.
+                let mut caps = self.frontend.caps();
+                caps.size = status_bar::reserve(caps.size);
+                self.frame.panes.clear();
+                self.frame.status = None;
+                self.transport.send(ClientMsg::NewSession {
+                    name: None,
+                    caps,
+                    env: haven_proto::client_environment(),
+                })
+            }
         }
     }
 
@@ -1489,6 +1542,15 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
             ServerMsg::Sessions { sessions, .. } => {
                 self.sessions = sessions;
+                if let Some(when) = self.pending_chooser.take() {
+                    // Only worth asking when there is a choice to make: one
+                    // session and a prompt is a keystroke to dismiss on every
+                    // single attach.
+                    if when == ChooseOnAttach::Always || self.sessions.len() > 1 {
+                        self.chooser =
+                            Some(chooser::Chooser::new(&self.sessions, self.frame.status.as_ref()));
+                    }
+                }
                 // The listing is what the chooser was waiting for.
                 let open = self.chooser.is_some();
                 self.refresh_chooser();
