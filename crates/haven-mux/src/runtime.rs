@@ -144,9 +144,28 @@ impl<F> MuxRuntime<F> {
         self.session.active_window().rects(self.size)
     }
 
+    /// The rectangles of one named window, for a caller that knows which
+    /// window it is drawing rather than relying on the session's current
+    /// one. Two clients can be on different windows at once.
+    pub fn rects_of(&self, window: haven_proto::WindowId) -> Vec<PaneRect> {
+        match self.session.window(window) {
+            Some(window) => window.rects(self.size),
+            None => self.rects(),
+        }
+    }
+
+    /// Visible panes of one named window, in draw order.
+    pub fn visible_of(&self, window: haven_proto::WindowId) -> Vec<(PaneRect, &PaneRuntime)> {
+        self.in_rects(self.rects_of(window))
+    }
+
     /// Visible panes and their rectangles, in draw order.
     pub fn visible(&self) -> Vec<(PaneRect, &PaneRuntime)> {
-        self.rects()
+        self.in_rects(self.rects())
+    }
+
+    fn in_rects(&self, rects: Vec<PaneRect>) -> Vec<(PaneRect, &PaneRuntime)> {
+        rects
             .into_iter()
             .filter(|r| r.cols > 0 && r.rows > 0)
             .filter_map(|rect| self.panes.get(&rect.pane.0).map(|pane| (rect, pane)))

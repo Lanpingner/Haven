@@ -84,3 +84,29 @@ and keeps tmux's `window` in the protocol and the command names, with
 
 So the session tree has three levels, not four: the desktop window is the thing
 looking at it.
+
+## What belongs to a client, and what to the session
+
+A session owns the tabs, the panes and everything running in them. A *client*
+owns where it is looking.
+
+| | |
+|---|---|
+| The session | tabs, pane trees, what each pane is running, names, layouts |
+| Each client | **which tab it is on**, which pane is focused in it, how far back it is reading, its own size |
+
+So two clients on one session browse its tabs independently: select tab 2 in
+the GPU window and the client on the other end of an SSH connection stays on
+tab 1, with its own status bar marking its own tab. The same already went for
+the scrollback — [the offset is per client](./keys.md#scrollback) — and the
+current tab follows the same rule for the same reason.
+
+tmux does not work this way: clients attached to one session share its current
+window, and getting two views means a second session in the same group. Haven
+makes it a property of the reader instead, because that is what people
+attaching twice turn out to want.
+
+A client whose tab is closed by somebody else falls back to a live one rather
+than being left pointing at nothing. What a *pane* shows is still shared, of
+course: that is one program with one screen, and two clients watching it see
+the same thing.

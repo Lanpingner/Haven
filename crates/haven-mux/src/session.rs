@@ -22,7 +22,21 @@ pub struct Session {
     pub id: SessionId,
     pub name: String,
     pub windows: Vec<Window>,
+    /// The session's own current window: what a freshly attached client
+    /// starts on, what a restore writes back, and what standalone mode uses.
     pub active: usize,
+    /// Which window the *caller* is looking at, when that is not the
+    /// session's own.
+    ///
+    /// Two clients on one session each have their own current window, so
+    /// "the current window" is a property of whoever is asking. The daemon
+    /// sets this to the acting client's window before anything that reads or
+    /// changes the current window, and clears it afterwards. `None` means
+    /// the session's `active`, which is the standalone case.
+    ///
+    /// It is deliberately not part of a session's saved state: it belongs to
+    /// a client, and the clients are gone by the time anything is saved.
+    pub view: Option<WindowId>,
     /// The window before this one, by id rather than index: indices shift
     /// when a window closes and would point at a different window.
     last_window: Option<WindowId>,
@@ -58,6 +72,7 @@ impl Session {
             windows: vec![window],
             active: 0,
             last_window: None,
+            view: None,
             next_pane: 2,
             next_window: 2,
         };
@@ -70,12 +85,54 @@ impl Session {
         id
     }
 
+    /// The index of the window the caller is on: their own view if they set
+    /// one and it still exists, otherwise the session's.
+    ///
+    /// A view that names a window which has since been closed falls back
+    /// rather than panicking — the client that was watching it has not been
+    /// told yet, and its next action must land somewhere real.
+    pub fn current_index(&self) -> usize {
+        self.view
+            .and_then(|id| self.windows.iter().position(|w| w.id == id))
+            .unwrap_or(self.active)
+            .min(self.windows.len().saturating_sub(1))
+    }
+
+    /// The window the caller is on.
     pub fn active_window(&self) -> &Window {
-        &self.windows[self.active]
+        &self.windows[self.current_index()]
     }
 
     pub fn active_window_mut(&mut self) -> &mut Window {
-        &mut self.windows[self.active]
+        let index = self.current_index();
+        &mut self.windows[index]
+    }
+
+    /// Look through this view for the duration of `f`, then put back
+    /// whatever was there before. Every read and write of "the current
+    /// window" inside resolves against `view`.
+    pub fn viewing<T>(&mut self, view: Option<WindowId>, f: impl FnOnce(&mut Self) -> T) -> T {
+        let had = self.view;
+        self.view = view;
+        let out = f(self);
+        self.view = had;
+        out
+    }
+
+    /// The id of the window the caller is on, for a client to remember.
+    pub fn current_window(&self) -> WindowId {
+        self.active_window().id
+    }
+
+    /// The window visited before this one. `last-window` is per client for
+    /// the same reason the current window is, so the daemon carries this
+    /// across with the view.
+    pub fn window_before(&self) -> Option<WindowId> {
+        self.last_window
+    }
+
+    pub fn set_window_before(&mut self, id: Option<WindowId>) {
+        self.last_window = id;
     }
 
     pub fn active_pane(&self) -> PaneId {
@@ -92,6 +149,13 @@ impl Session {
 
     pub fn layout(&self, size: CellSize) -> Layout {
         self.active_window().layout(size)
+    }
+
+    /// The layout of one named window, for a caller holding the session
+    /// immutably — the per-client render path, which cannot set a view.
+    /// A window that has closed falls back to the session's own.
+    pub fn layout_of(&self, id: WindowId, size: CellSize) -> Layout {
+        self.window(id).unwrap_or_else(|| &self.windows[self.active]).layout(size)
     }
 
     /// Add a window whose pane tree is given rather than grown by splitting.
@@ -196,13 +260,13 @@ impl Session {
 
     pub fn next_window(&mut self) {
         if !self.windows.is_empty() {
-            self.go_to((self.active + 1) % self.windows.len());
+            self.go_to((self.current_index() + 1) % self.windows.len());
         }
     }
 
     pub fn previous_window(&mut self) {
         if !self.windows.is_empty() {
-            self.go_to((self.active + self.windows.len() - 1) % self.windows.len());
+            self.go_to((self.current_index() + self.windows.len() - 1) % self.windows.len());
         }
     }
 
@@ -217,11 +281,17 @@ impl Session {
 
     /// Move to a window, remembering where we were.
     fn go_to(&mut self, index: usize) {
-        if index == self.active {
+        let from = self.current_index();
+        if index == from {
             return;
         }
-        self.last_window = self.windows.get(self.active).map(|w| w.id);
-        self.active = index;
+        self.last_window = self.windows.get(from).map(|w| w.id);
+        // A client with a view of its own moves only itself; without one,
+        // this is the session's current window.
+        match self.view {
+            Some(_) => self.view = self.windows.get(index).map(|w| w.id),
+            None => self.active = index,
+        }
         // Arriving is what clears the bell: it means "rang since you last
         // looked", and you are looking.
         if let Some(window) = self.windows.get_mut(index) {
@@ -232,7 +302,7 @@ impl Session {
 
     /// Mark the window holding a pane as having rung.
     pub fn note_bell(&mut self, pane: PaneId) {
-        let active = self.active;
+        let active = self.current_index();
         for (i, window) in self.windows.iter_mut().enumerate() {
             if window.root.contains(pane) {
                 window.bell = i != active;

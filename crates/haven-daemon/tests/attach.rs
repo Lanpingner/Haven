@@ -166,6 +166,100 @@ fn two_clients_on_one_session_see_the_same_screen() {
 }
 
 #[test]
+fn two_clients_browse_the_tabs_independently() {
+    let mut daemon = daemon();
+    let mut first = attach(&mut daemon, 40, 8);
+    let mut second = attach(&mut daemon, 40, 8);
+    settle(&mut daemon, &mut [&mut first, &mut second], |c| {
+        c[0].focus.is_some() && c[1].focus.is_some()
+    });
+    let shared = first.focus.unwrap();
+    assert_eq!(second.focus, Some(shared), "both should start on the session's tab");
+
+    // The first client opens a second tab and moves to it. The current tab
+    // belongs to the client, so the second client must stay where it is.
+    send_action(&mut first, Action::NewWindow { program: None }).unwrap();
+    assert!(
+        settle(&mut daemon, &mut [&mut first, &mut second], |c| {
+            c[0].focus.is_some_and(|p| p != shared)
+        }),
+        "the new tab never became the first client's"
+    );
+    let opened = first.focus.unwrap();
+
+    assert_eq!(
+        second.focus,
+        Some(shared),
+        "opening a tab in one client moved the other: it is still on {:?}, \
+         expected {shared:?}",
+        second.focus
+    );
+
+    // And each goes on typing into its own pane.
+    send_input(&mut first, opened, b"mine\n");
+    send_input(&mut second, shared, b"yours\n");
+    assert!(
+        settle(&mut daemon, &mut [&mut first, &mut second], |c| {
+            c[0].frame.pane_text(opened).contains("got:mine")
+                && c[1].frame.pane_text(shared).contains("got:yours")
+        }),
+        "panes did not stay apart:\nfirst:\n{}\nsecond:\n{}",
+        first.frame.pane_text(opened),
+        second.frame.pane_text(shared),
+    );
+
+    // The second client can now walk to the tab the first one opened, and
+    // the first one does not follow it back.
+    send_action(&mut second, Action::NextWindow).unwrap();
+    assert!(
+        settle(&mut daemon, &mut [&mut first, &mut second], |c| { c[1].focus == Some(opened) }),
+        "the second client could not reach the other tab"
+    );
+    assert_eq!(first.focus, Some(opened), "the first client should not have moved");
+}
+
+#[test]
+fn closing_a_tab_leaves_the_other_client_where_it_was() {
+    let mut daemon = daemon();
+    let mut first = attach(&mut daemon, 40, 8);
+    let mut second = attach(&mut daemon, 40, 8);
+    settle(&mut daemon, &mut [&mut first, &mut second], |c| {
+        c[0].focus.is_some() && c[1].focus.is_some()
+    });
+    let a = first.focus.unwrap();
+
+    // Three tabs, with the two clients parked on different ones: a is left
+    // empty, the second client sits on b, the first opens and keeps c.
+    send_action(&mut first, Action::NewWindow { program: None }).unwrap();
+    settle(&mut daemon, &mut [&mut first, &mut second], |c| c[0].focus.is_some_and(|p| p != a));
+    let b = first.focus.unwrap();
+    send_action(&mut first, Action::NewWindow { program: None }).unwrap();
+    settle(&mut daemon, &mut [&mut first, &mut second], |c| {
+        c[0].focus.is_some_and(|p| p != a && p != b)
+    });
+    let c = first.focus.unwrap();
+
+    send_action(&mut second, Action::NextWindow).unwrap();
+    assert!(
+        settle(&mut daemon, &mut [&mut first, &mut second], |cl| cl[1].focus == Some(b)),
+        "the second client could not park on the middle tab: {:?}",
+        second.focus
+    );
+
+    // The first client kills the tab it is on. Its own view has to land
+    // somewhere real; the second client must not be moved by it.
+    send_action(&mut first, Action::CloseWindow).unwrap();
+    assert!(
+        settle(&mut daemon, &mut [&mut first, &mut second], |cl| {
+            cl[0].focus.is_some_and(|p| p != c)
+        }),
+        "the first client stayed on the tab it closed: {:?}",
+        first.focus
+    );
+    assert_eq!(second.focus, Some(b), "closing another client's tab moved this one off its own");
+}
+
+#[test]
 fn a_client_that_disappears_leaves_the_session_running() {
     let mut daemon = daemon();
     let pane;

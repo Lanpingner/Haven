@@ -90,6 +90,16 @@ struct Client {
     keys_sent: Option<haven_proto::KeyTable>,
     caps: ClientCaps,
     session: Option<u32>,
+    /// Which tab this client is looking at.
+    ///
+    /// The current window belongs to the client, not to the session: two
+    /// clients on one session browse its tabs independently, the same way
+    /// they already read its scrollback at their own pace. `None` until the
+    /// client attaches, after which it always names a window.
+    window: Option<haven_proto::WindowId>,
+    /// The tab this client was on before, for `last-window`. Per client for
+    /// the same reason.
+    window_before: Option<haven_proto::WindowId>,
     sync: SyncState,
     /// The status last sent. Window names come from pane titles, which arrive
     /// after the first layout and change while the layout does not, so tying
@@ -231,6 +241,8 @@ impl Daemon {
             framed: Framed::new(stream),
             caps: ClientCaps::null(CellSize::default()),
             session: None,
+            window: None,
+            window_before: None,
             sync: SyncState::default(),
             theme_sent: None,
             keys_sent: None,
@@ -446,13 +458,21 @@ impl Daemon {
                     state.offset = 0;
                     state.snapshotted = false;
                 }
+                let view = self.clients.get(index).and_then(|c| c.window);
                 if let Some(host) = self.host_of(index) {
                     // Synchronized windows send everything typed in one pane
                     // to all of them, which is the whole point of the mode.
-                    let targets = if host.runtime.session.active_window().synchronized
-                        && host.runtime.session.active_pane() == pane
-                    {
-                        host.runtime.input_targets()
+                    // Which window that is depends on the client doing the
+                    // typing: the flag and the active pane are both the
+                    // typist's tab, not the session's.
+                    let broadcast = host.runtime.session.viewing(view, |session| {
+                        session.active_window().synchronized && session.active_pane() == pane
+                    });
+                    let targets = if broadcast {
+                        host.runtime.session.view = view;
+                        let all = host.runtime.input_targets();
+                        host.runtime.session.view = None;
+                        all
                     } else {
                         vec![pane]
                     };
@@ -645,9 +665,16 @@ impl Daemon {
     /// end the same way, and a second copy of this was how the two could
     /// have drifted.
     fn join(&mut self, index: usize, id: u32, caps: ClientCaps) {
+        // A client arrives on the session's own current tab and from then on
+        // moves independently. Giving it an explicit window here, rather than
+        // leaving it to follow `session.active`, is what keeps two fresh
+        // clients from moving together until one of them picks a tab.
+        let start = self.sessions.get(&id).map(|h| h.runtime.session.current_window());
         let client = &mut self.clients[index];
         client.caps = caps;
         client.session = Some(id);
+        client.window = start;
+        client.window_before = None;
         client.sync.invalidate();
         // The theme is sent once per session; a client that moved to another
         // one has to be told again.
@@ -981,7 +1008,15 @@ impl Daemon {
     }
 
     fn act(&mut self, index: usize, action: Action) -> io::Result<()> {
+        let view = self.clients.get(index).and_then(|c| c.window);
+        let before = self.clients.get(index).and_then(|c| c.window_before);
         let Some(host) = self.host_of(index) else { return Ok(()) };
+        // The acting client's tab is the current one for the whole of this
+        // action: splitting, closing and focusing all mean "in the window I
+        // am looking at", and another client may be looking at a different
+        // one.
+        host.runtime.session.view = view;
+        host.runtime.session.set_window_before(before);
         let runtime = &mut host.runtime;
         let ended = match action {
             Action::SplitColumns { program } => {
@@ -1091,6 +1126,20 @@ impl Daemon {
                 false
             }
         };
+        // Whatever the action left current is this client's tab now — that
+        // covers selecting one outright, stepping to the next, and the ones
+        // that move you implicitly, like breaking a pane into its own tab.
+        // The view is cleared because it belongs to a client and the session
+        // outlives every one of them.
+        if let Some(host) = self.host_of(index) {
+            let current = host.runtime.session.current_window();
+            let before = host.runtime.session.window_before();
+            host.runtime.session.view = None;
+            if let Some(client) = self.clients.get_mut(index) {
+                client.window = Some(current);
+                client.window_before = before;
+            }
+        }
         if ended {
             let id = self.clients[index].session.take();
             if let Some(id) = id {
@@ -1263,14 +1312,24 @@ impl SessionHost {
 
     /// What the status line needs. Window names fall back to the active
     /// pane's title, which is what a shell sets and what a user recognises.
-    fn status(&self, clients: u16) -> haven_proto::SessionStatus {
+    /// `on` is the window the reading client is looking at, which is what
+    /// its status bar must mark as active — not the session's own, which
+    /// belongs to whichever client last chose one.
+    fn status(
+        &self,
+        clients: u16,
+        on: Option<haven_proto::WindowId>,
+    ) -> haven_proto::SessionStatus {
         let session = &self.runtime.session;
         let windows = self.windows();
+        let active = on
+            .filter(|id| session.window(*id).is_some())
+            .or_else(|| session.windows.get(session.active).map(|w| w.id));
         haven_proto::SessionStatus {
             session: session.id,
             name: self.name().to_string(),
             windows,
-            active_window: session.windows.get(session.active).map(|w| w.id.0).unwrap_or(0),
+            active_window: active.map(|id| id.0).unwrap_or(0),
             started_unix: self.started_unix,
             clients,
         }
@@ -1363,7 +1422,14 @@ impl SessionHost {
 
 /// Bring one client up to date with one session.
 fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
-    let layout = host.runtime.session.layout(host.runtime.size());
+    // Everything below is drawn from the window *this* client is on. The
+    // session has no single current window once two clients are attached.
+    let on = client
+        .window
+        .filter(|id| host.runtime.session.window(*id).is_some())
+        .unwrap_or_else(|| host.runtime.session.current_window());
+    client.window = Some(on);
+    let layout = host.runtime.session.layout_of(on, host.runtime.size());
     if client.sync.layout_changed(&layout) {
         let _ = client.framed.queue(&ServerMsg::Layout(layout.clone()));
         // Panes that vanished must not keep stale row revisions.
@@ -1376,13 +1442,13 @@ fn sync_one(client: &mut Client, host: &SessionHost, clients: u16) {
         }
     }
 
-    let status = host.status(clients);
+    let status = host.status(clients, Some(on));
     if client.last_status.as_ref() != Some(&status) {
         let _ = client.framed.queue(&ServerMsg::Status(status.clone()));
         client.last_status = Some(status);
     }
 
-    for (rect, pane) in host.runtime.visible() {
+    for (rect, pane) in host.runtime.visible_of(on) {
         let grid = pane.grid();
         let styles = pane.styles();
         let state = client.sync.pane(rect.pane);
