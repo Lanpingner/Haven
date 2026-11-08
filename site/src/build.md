@@ -9,7 +9,7 @@ Arch package and a one-line installer, and neither needs a toolchain.
 git clone https://github.com/Lanpingner/Haven
 cd Haven
 
-cargo test --workspace     # 645 tests, incl. mc/vim/less driven on real ptys
+cargo test --workspace     # 686 tests, incl. mc/vim/less driven on real ptys
 ```
 
 ## Run it

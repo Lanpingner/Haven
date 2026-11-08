@@ -22,7 +22,7 @@ when the window goes away.
 <div class="pills">
 <span class="pill"><b>wgpu</b> Vulkan / Metal / DX12 / GL</span>
 <span class="pill"><b>MIT</b> OR Apache-2.0</span>
-<span class="pill">v0.0.3</span>
+<span class="pill">v0.0.4</span>
 </div>
 
 </div>
@@ -47,7 +47,7 @@ same GPU pipeline the window uses. Move the pointer, or scroll, and they
 assemble into the single window they actually are.</p>
 
 <div class="band reveal">
-<div class="stat"><span class="n">645</span><span class="l">tests, zero clippy warnings</span></div>
+<div class="stat"><span class="n">686</span><span class="l">tests, zero clippy warnings</span></div>
 <div class="stat"><span class="n">13</span><span class="l">crates, ~30k lines of Rust</span></div>
 <div class="stat"><span class="n">0%</span><span class="l">idle CPU, no wakeups</span></div>
 <div class="stat"><span class="n">3</span><span class="l">ways to run one binary</span></div>
