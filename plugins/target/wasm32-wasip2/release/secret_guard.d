@@ -1,0 +1,1 @@
+/Projects/HavenTerminal/plugins/target/wasm32-wasip2/release/secret_guard.wasm: /Projects/HavenTerminal/crates/haven-plugin-api/src/lib.rs /Projects/HavenTerminal/crates/haven-plugin-api/wit/world.wit /Projects/HavenTerminal/plugins/useful/secret-guard/src/lib.rs

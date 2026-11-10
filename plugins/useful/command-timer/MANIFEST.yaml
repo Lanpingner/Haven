@@ -1,0 +1,17 @@
+# The index entry a repository publishes for this plugin, in the shape
+# `crates/haven-plugin/src/index.rs` validates.
+name: command-timer
+version: 0.1.0
+summary: how long the last command took, when it took long enough to matter
+file: pool/command-timer-0.1.0.tar.gz
+# 64 zeros: the real digest is computed at publish time, over the
+# artifact named above, and the index's signature covers it.
+sha256: 0000000000000000000000000000000000000000000000000000000000000000
+# Cargo turns the hyphen in a package name into an underscore, so this is
+# the file the build actually produces.
+entry: command_timer.wasm
+events: [command-ended]
+# Nothing at all: it needs no programs, no network and no filesystem,
+# and it never reads what a pane is showing.
+capabilities:
+  read-pane-content: false

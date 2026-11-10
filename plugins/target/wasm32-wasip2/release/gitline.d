@@ -1,0 +1,1 @@
+/Projects/HavenTerminal/plugins/target/wasm32-wasip2/release/gitline.wasm: /Projects/HavenTerminal/crates/haven-plugin-api/src/lib.rs /Projects/HavenTerminal/crates/haven-plugin-api/wit/world.wit /Projects/HavenTerminal/plugins/useful/gitline/src/lib.rs

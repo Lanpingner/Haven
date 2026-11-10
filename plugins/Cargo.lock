@@ -15,7 +15,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
+name = "build-errors"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
 name = "clock"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
+name = "command-timer"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
+name = "cwd-crumbs"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
+name = "disk-free"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
+name = "docker-status"
 version = "0.1.0"
 dependencies = [
  "haven-plugin-api",
@@ -42,6 +77,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fail-watch"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
 name = "fail_probe"
 version = "0.1.0"
 dependencies = [
@@ -53,6 +95,27 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "git-stash"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
+name = "git-wip"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
+name = "gitline"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
 
 [[package]]
 name = "hashbrown"
@@ -107,6 +170,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
+name = "load-average"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
 name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -137,6 +207,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pomodoro"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
 name = "prettyplease"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -156,6 +233,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "python-venv"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -166,6 +250,13 @@ dependencies = [
 
 [[package]]
 name = "sandbox_probe"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
+name = "secret-guard"
 version = "0.1.0"
 dependencies = [
  "haven-plugin-api",
@@ -227,6 +318,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh-marker"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
 name = "syn"
 version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -242,6 +340,13 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "url-hints"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
 
 [[package]]
 name = "wasm-encoder"

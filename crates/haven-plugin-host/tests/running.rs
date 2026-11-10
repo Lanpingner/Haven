@@ -126,7 +126,7 @@ fn what_a_plugin_remembers_outlives_the_instance() {
                 wasm: &wasm,
                 granted: &Capabilities::default(),
                 store_path: Some(store_path.clone()),
-                world: Box::new(session()),
+                world: session().into(),
             },
         )
         .expect("load")
@@ -178,7 +178,7 @@ fn a_plugin_that_refuses_to_start_is_a_load_failure_with_a_reason() {
             wasm: &wasm,
             granted: &Capabilities::default(),
             store_path: None,
-            world: Box::new(session()),
+            world: session().into(),
         },
     )
     .expect_err("init returned an error");

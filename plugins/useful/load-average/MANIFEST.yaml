@@ -1,0 +1,22 @@
+# The entry load-average wants in a repository's `plugins.yaml`. See
+# `crates/haven-plugin/src/index.rs` for the schema this matches.
+name: load-average
+version: 0.1.0
+summary: the one-minute load average, bold when it exceeds the core count
+file: pool/load-average-0.1.0.tar.gz
+# Computed at publish time, over the artifact named above: the signature
+# covers this file and this hash covers the download.
+sha256: 0000000000000000000000000000000000000000000000000000000000000000
+# Underscored, because that is what cargo names a `cdylib` whose crate
+# has a hyphen in it.
+entry: load_average.wasm
+# `tick` is the whole point: a load average read once at startup is a
+# number that was true this morning. `started` is for having something
+# to draw before the first tick arrives.
+events: [started, tick]
+capabilities:
+  # `uptime` for the figure, `nproc` for the count to judge it against.
+  # Both do one thing and read nothing; the allowlist covers `argv[0]`
+  # only, so a general-purpose program here would be a general-purpose
+  # permission.
+  exec: [uptime, nproc]

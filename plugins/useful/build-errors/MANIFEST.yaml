@@ -1,0 +1,21 @@
+# The index entry a repository publishes for this plugin, in the shape
+# `crates/haven-plugin/src/index.rs` validates.
+name: build-errors
+version: 0.1.0
+summary: errors and warnings in what the build just printed
+file: pool/build-errors-0.1.0.tar.gz
+# 64 zeros: the real digest is computed at publish time, over the
+# artifact named above, and the index's signature covers it.
+sha256: 0000000000000000000000000000000000000000000000000000000000000000
+# Cargo turns the hyphen in a package name into an underscore, so this is
+# the file the build actually produces.
+entry: build_errors.wasm
+# `command-ended` is where it counts, `command-began` is where it forgets
+# so a stale number does not sit beside a running build, and
+# `pane-focus` is where a count from another pane is discarded.
+events: [command-began, command-ended, pane-focus]
+# Diagnostics are the pane's contents: the compiler wrote them to the
+# terminal and nowhere a plugin can otherwise reach. Only two integers
+# are kept, in memory, and nothing is stored or sent.
+capabilities:
+  read-pane-content: true

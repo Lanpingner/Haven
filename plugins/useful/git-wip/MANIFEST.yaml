@@ -1,0 +1,15 @@
+# The entry git-wip wants in a repository's `plugins.yaml`. See
+# `crates/haven-plugin/src/index.rs` for the schema this matches.
+name: git-wip
+version: 0.1.0
+summary: how many lines of uncommitted work are sitting in the tree
+file: pool/git-wip-0.1.0.tar.gz
+# Computed at publish time, over the artifact named above: the
+# signature covers this file and this hash covers the download.
+sha256: 0000000000000000000000000000000000000000000000000000000000000000
+entry: git-wip.wasm
+# Every event that can change the answer, and no others: each one costs
+# a `git diff`.
+events: [started, pane-focus, cwd-changed, command-ended, tick]
+capabilities:
+  exec: [git]

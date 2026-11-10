@@ -1,0 +1,11 @@
+# The index entry a repository publishes for this plugin.
+#
+# `sha256` is the artifact's, computed at publish time by
+# `plugins/publish.sh` — the zeros are a placeholder, and an index
+# carrying them would be refused by the first thing that checked it.
+- name: clock
+  version: 0.1.0
+  summary: the time, on the status bar
+  file: pool/clock-0.1.0.tar.gz
+  sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  entry: clock.wasm

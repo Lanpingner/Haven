@@ -58,9 +58,25 @@ replayable against a recorded event stream with no terminal attached,
 which is how they are tested.
 
 **`render` is pure.** It is called when Haven is drawing, not when the
-plugin feels like it, so no plugin can cause a redraw storm. Do not put
-work in `render` that belongs in `on_event` — cache it in a `static` or
-in the store and let `render` format what is already known.
+plugin feels like it, so no plugin can cause a redraw storm.
+
+Concretely, and this is a contract you can rely on: the daemon calls
+`render` on **every** plugin on every tick, whatever events that plugin
+subscribed to. A plugin whose segment is a pure function of
+`host::panes()` can therefore do its work in `render` and declare
+`events: []` — `host::panes()` is answered from a snapshot the daemon
+has already built, so it is a cheap call and always current.
+
+What must *not* go in `render` is anything expensive: `host::run`
+spawns a process and `host::pane_text` copies a screen. Do those on an
+event and keep the answer in a `thread_local!` or in the store, and let
+`render` format what is already known. A plugin that shells out to `git`
+per draw would be unforgivable.
+
+Omit `capabilities` entirely to ask for nothing. `capabilities: {}` is a
+parse error — Haven's YAML reader has no flow mappings — and a key with
+nothing under it is one too, so the way to say "nothing" is to say
+nothing.
 
 ### What you may ask of the host
 
