@@ -66,6 +66,25 @@ fn sh(script: &str, size: (u16, u16)) -> Run {
     run_app(Path::new("/bin/sh"), &["-c", script], &[("TERM", "xterm-256color")], "", size, 400)
 }
 
+/// The same, in a shell that has `read -d`.
+///
+/// `/bin/sh` is bash on some distributions and dash on others, and dash
+/// has no `read -d` — so a test that needs one was passing on Arch and
+/// failing on Ubuntu's CI, where `/bin/sh` is dash. The test is about
+/// Haven's reply path and not about what `sh` can do, so it asks for a
+/// shell that can read a delimited answer rather than working around
+/// the absence of one.
+///
+/// `None` when there is no bash, so a machine without it skips the test
+/// instead of failing it.
+fn bash(script: &str, size: (u16, u16)) -> Option<Run> {
+    let bash = ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
+        .into_iter()
+        .map(Path::new)
+        .find(|path| path.exists())?;
+    Some(run_app(bash, &["-c", script], &[("TERM", "xterm-256color")], "", size, 400))
+}
+
 // --- the emulator against a real pty ---------------------------------------
 
 #[test]
@@ -79,11 +98,14 @@ fn cpr_reply_round_trips_back_into_the_child() {
     // The child asks where the cursor is and reads our answer off its stdin.
     // This proves the whole reply path, which is what stops shells stalling on
     // their startup probes (`docs/PLAN.md` §9.4).
-    let run = sh(
+    let Some(run) = bash(
         "printf '\\033[3;7H\\033[6n'; IFS=';' read -r -d R row col; \
          printf '\\033[9;1Hgot %s %s' \"${row#*[}\" \"$col\"",
         (20, 10),
-    );
+    ) else {
+        eprintln!("skipping: no bash, and `read -d` is where the reply is read");
+        return;
+    };
     assert!(run.contains("got 3 7"), "screen was:\n{}", run.screen());
 }
 
