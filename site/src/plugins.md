@@ -15,6 +15,26 @@ That order is deliberate. Distribution is the part you cannot retrofit:
 once people are installing plugins by pasting a `curl | sh`, a signature
 is a migration rather than a feature.
 
+## The repository
+
+```console
+$ haven plugin repo add https://github.com/haven-terminal/plugins.git \
+      --key '2F10 059C F663 6B15 0B95 8486 7D04 983E 5D12 A3E4'
+$ haven plugin repo update
+```
+
+That is a git repository, so Haven clones it shallowly and pulls on each
+update — one of [the three kinds](#what-a-repository-is).
+
+The fingerprint is the same key the Haven releases and the pacman
+repository are signed with, and it is published in more than one place
+on purpose: in `haven-repo.pub` on every release, in
+[`packaging/README.md`](https://github.com/haven-terminal/Haven/blob/master/packaging/README.md),
+and in that repository's own README. A fingerprint that only ever
+appears beside the thing it signs is a fingerprint nobody has verified,
+so compare it against whichever of those did not come to you the same
+way the repository did.
+
 ## What there is to install
 
 Sixteen plugins ship in the repository, under `plugins/useful`. They are
