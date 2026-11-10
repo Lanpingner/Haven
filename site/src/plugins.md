@@ -506,10 +506,28 @@ and nothing is trusted from it.
 | `haven plugin repo update [<name>]` | fetch and verify indices |
 | `haven plugin search [<text>]` | what the repositories offer |
 | `haven plugin info <name>` | where it comes from, and what it asks for |
-| `haven plugin install <name>` | fetch, verify, unpack |
+| `haven plugin install <name>...` | fetch, verify, unpack — several at once if you like |
+| `haven plugin install --all` | everything the repositories offer |
 | `haven plugin remove <name>` | uninstall |
 | `haven plugin list` | what is installed, and what has a newer version |
 | `Ctrl+A` `u` | all of the above in one box — see [the browser](#the-browser) |
+
+To take the lot:
+
+```console
+$ haven plugin install --all
+```
+
+It still asks about each plugin that wants something, because "install
+everything" is not the same sentence as "let everything read my screen".
+Three of the sixteen want exactly that. `--yes` answers for you, and is
+what a script should pass; without a terminal to ask in, the command
+tells you how many it could not ask about and exits non-zero rather than
+reporting success for having installed nothing.
+
+Plugins are loaded when a session is made, so a terminal that is already
+open does not have what you just installed. Open a new one, or restart
+the daemon.
 
 Removing a repository leaves what you installed from it alone, and says
 so — it still works, it just has nowhere to update from.

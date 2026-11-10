@@ -449,3 +449,57 @@ fn a_repository_name_that_is_a_path_is_refused() {
         "a cache directory escaped"
     );
 }
+
+#[test]
+fn install_all_takes_everything_and_still_asks_about_each() {
+    let haven = Haven::new("all");
+    haven.add();
+
+    // Both fixture plugins ask for something — one to run `git`, one to
+    // read what panes show — so with nobody to ask, nothing is installed
+    // and the reason is said once rather than per plugin.
+    let refused = haven.fails(&["install", "--all"]);
+    assert!(refused.contains("0 installed"), "{refused}");
+    assert!(refused.contains("2 want permissions"), "{refused}");
+    assert!(
+        refused.matches("nobody to ask").count() == 1,
+        "the same paragraph should not be repeated per plugin:\n{refused}"
+    );
+    assert!(haven.ok(&["list"]).contains("no plugins installed"));
+
+    // And with the answer given, everything arrives.
+    let all = haven.ok(&["install", "--all", "--yes"]);
+    assert!(all.contains("2 installed"), "{all}");
+    let listed = haven.ok(&["list"]);
+    assert!(listed.contains("gitline"), "{listed}");
+    assert!(listed.contains("urls"), "{listed}");
+
+    // Run again: nothing to do, and it says so rather than reinstalling.
+    let again = haven.ok(&["install", "--all", "--yes"]);
+    assert!(again.contains("0 installed, 2 already there"), "{again}");
+}
+
+#[test]
+fn several_names_install_in_one_command() {
+    let haven = Haven::new("several");
+    haven.add();
+    let out = haven.ok(&["install", "gitline", "urls", "--yes"]);
+    assert!(out.contains("installed gitline"), "{out}");
+    assert!(out.contains("installed urls"), "{out}");
+
+    // And a name that is not there fails without stopping the others.
+    let haven = Haven::new("several-bad");
+    haven.add();
+    let out = haven.fails(&["install", "gitline", "nonesuch", "--yes"]);
+    assert!(out.contains("installed gitline"), "the good one should still land:\n{out}");
+    assert!(out.contains("nonesuch"), "{out}");
+    assert!(haven.ok(&["list"]).contains("gitline"));
+}
+
+#[test]
+fn install_with_no_name_says_what_to_do() {
+    let haven = Haven::new("no-name");
+    haven.add();
+    let out = haven.fails(&["install"]);
+    assert!(out.contains("--all"), "{out}");
+}

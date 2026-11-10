@@ -43,6 +43,8 @@ pub struct Options {
     /// Accept the key the repository itself serves, without being shown
     /// it first. For scripts, which have nobody to show it to.
     pub trust_repo_key: bool,
+    /// `install --all`: everything the repositories offer.
+    pub all: bool,
     /// Put the whole lot under one directory, for trying this out without
     /// touching a real configuration.
     pub root: Option<String>,
@@ -67,7 +69,23 @@ pub fn run(options: Options) -> ExitCode {
         ["search"] => search(None, &paths),
         ["search", text] => search(Some(text), &paths),
         ["info", name] => info(name, &paths),
-        ["install", name] => install(name, &options, &paths),
+        ["install"] if options.all => install_all(&options, &paths),
+        ["install"] => Err("`install` needs a plugin name, or `--all`".to_string()),
+        // Several at once, because "install these four" is a normal thing
+        // to want and typing the command four times is not.
+        ["install", names @ ..] => {
+            let mut failed = 0;
+            for name in names {
+                if let Err(why) = install(name, &options, &paths) {
+                    eprintln!("haven: {name}: {why}");
+                    failed += 1;
+                }
+            }
+            if failed > 0 {
+                return ExitCode::FAILURE;
+            }
+            Ok(())
+        }
         ["remove", name] | ["rm", name] => remove(name, &paths),
         ["list"] => list(&paths),
         ["repo"] => Err("`haven plugin repo` needs add, list, remove or update".to_string()),
@@ -374,9 +392,111 @@ fn find(name: &str, paths: &Paths) -> Result<(Source, Plugin), String> {
     }
 }
 
-fn install(name: &str, options: &Options, paths: &Paths) -> Result<(), String> {
-    let (source, plugin) = find(name, paths)?;
+/// Everything the repositories offer that is not already installed.
+///
+/// Prompts for each plugin that asks for something, rather than taking
+/// `--all` as permission for all of it: three of the plugins Haven ships
+/// want to read what your panes are showing, and "install everything"
+/// is not the same sentence as "let everything read my screen". `--yes`
+/// still answers for you, as it does everywhere else.
+///
+/// One plugin failing does not stop the rest. A repository that is down,
+/// an artifact that does not match its hash, a grant declined — each is
+/// one line and the next plugin is tried.
+fn install_all(options: &Options, paths: &Paths) -> Result<(), String> {
+    let offered = available(paths)?;
+    if offered.is_empty() {
+        println!("nothing to install (have you run `haven plugin repo update`?)");
+        return Ok(());
+    }
     let installed = Installed::load(paths).map_err(|e| e.to_string())?;
+
+    // A name offered by two repositories cannot be chosen for you — see
+    // `find`. Counted and named at the end rather than stopping the run.
+    let mut ambiguous: Vec<&str> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for (_, plugin) in &offered {
+        if seen.contains(&plugin.name.as_str()) {
+            if !ambiguous.contains(&plugin.name.as_str()) {
+                ambiguous.push(&plugin.name);
+            }
+        } else {
+            seen.push(&plugin.name);
+        }
+    }
+
+    let mut added = 0;
+    let mut already = 0;
+    let mut refused = 0;
+    let mut needs_terminal = 0;
+    let mut failed = 0;
+    for (_, plugin) in &offered {
+        if ambiguous.contains(&plugin.name.as_str()) {
+            continue;
+        }
+        if installed
+            .get(&plugin.name)
+            .is_some_and(|r| r.version == plugin.version && r.sha256 == plugin.sha256)
+        {
+            already += 1;
+            continue;
+        }
+        match install_one(&plugin.name, options, paths) {
+            Ok(()) => added += 1,
+            // Each of these reads differently in the summary, which is
+            // why the reason is carried rather than parsed back out of a
+            // message.
+            Err(NotInstalled::Declined) => refused += 1,
+            Err(NotInstalled::NeedsTerminal) => needs_terminal += 1,
+            Err(NotInstalled::Failed(why)) => {
+                eprintln!("haven: {}: {why}", plugin.name);
+                failed += 1;
+            }
+        }
+    }
+
+    println!();
+    print!("{added} installed, {already} already there");
+    if refused > 0 {
+        print!(", {refused} declined");
+    }
+    if failed > 0 {
+        print!(", {failed} failed");
+    }
+    println!();
+    if needs_terminal > 0 {
+        // Said once rather than per plugin: nine copies of the same
+        // paragraph is not nine pieces of information.
+        println!(
+            "{needs_terminal} want permissions and there was nobody to ask. Run this in a \
+             terminal to be asked about each, or `--yes` to grant what they ask for."
+        );
+    }
+    for name in &ambiguous {
+        println!(
+            "  `{name}` is in more than one repository, so it was skipped — \
+             install it by name from the one you want"
+        );
+    }
+    // A declined grant is a decision and exits cleanly. Something that
+    // could not be asked, or that broke, is an obstacle: a script running
+    // `install --all` and getting a clean exit having installed nothing
+    // would be told the opposite of what happened.
+    match (failed, needs_terminal) {
+        (0, 0) => Ok(()),
+        (0, n) => Err(format!("{n} could not be asked about")),
+        (f, 0) => Err(format!("{f} did not install")),
+        (f, n) => Err(format!("{f} did not install and {n} could not be asked about")),
+    }
+}
+
+fn install(name: &str, options: &Options, paths: &Paths) -> Result<(), String> {
+    install_one(name, options, paths).map_err(|e| e.to_string())
+}
+
+fn install_one(name: &str, options: &Options, paths: &Paths) -> Result<(), NotInstalled> {
+    let (source, plugin) = find(name, paths).map_err(NotInstalled::Failed)?;
+    let installed = Installed::load(paths).map_err(|e| NotInstalled::Failed(e.to_string()))?;
 
     if let Some(record) = installed.get(name) {
         if record.version == plugin.version && record.sha256 == plugin.sha256 {
@@ -397,21 +517,23 @@ fn install(name: &str, options: &Options, paths: &Paths) -> Result<(), String> {
     let granted = if asking.is_empty() {
         plugin.capabilities.clone()
     } else {
-        if !agreed(&plugin, &asking, options.yes)? {
-            return Err("not installed".to_string());
+        match agreed(&plugin, &asking, options.yes) {
+            Consent::Granted => plugin.capabilities.clone(),
+            Consent::Declined => return Err(NotInstalled::Declined),
+            Consent::NoTerminal => return Err(NotInstalled::NeedsTerminal),
         }
-        plugin.capabilities.clone()
     };
 
-    let record =
-        store::install(&source, &plugin, &granted, &Tools, paths).map_err(|e| e.to_string())?;
+    let record = store::install(&source, &plugin, &granted, &Tools, paths)
+        .map_err(|e| NotInstalled::Failed(e.to_string()))?;
     println!("installed {} {} from {}", record.name, record.version, record.repo);
     if !granted.is_empty() {
         println!("  granted {granted}");
     }
-    // Said plainly, because it is the state of this work and a user who
-    // installs something expecting it to do something deserves to know.
-    println!("  (nothing loads plugins yet: this is the distribution half)");
+    // Loaded when a session is made, so an open terminal does not
+    // already have it. Worth one line: otherwise the obvious conclusion
+    // from "installed" and nothing on the bar is that it is broken.
+    println!("  (open a new terminal, or restart the daemon, to load it)");
     Ok(())
 }
 
@@ -467,8 +589,45 @@ fn grouped(fingerprint: &str) -> String {
     format!("{}  {}", first.join(" "), second.join(" "))
 }
 
+/// Why an install did not happen, for a caller that has to tell the
+/// difference.
+///
+/// `install --all` reports these separately, and the only honest way to
+/// do that is to carry the reason. Matching on the text of an error
+/// message works until somebody improves the wording.
+#[derive(Debug)]
+enum NotInstalled {
+    /// The user said no.
+    Declined,
+    /// It needs permissions and there was nobody to ask.
+    NeedsTerminal,
+    Failed(String),
+}
+
+impl std::fmt::Display for NotInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Declined => write!(f, "not installed"),
+            Self::NeedsTerminal => write!(
+                f,
+                "it asks for permissions and there is nobody here to grant them — run this \
+                 in a terminal, or pass `--yes` if you have read what it wants"
+            ),
+            Self::Failed(why) => write!(f, "{why}"),
+        }
+    }
+}
+
 /// Put the grant to the user, and get a yes or a no.
-fn agreed(plugin: &Plugin, asking: &Capabilities, yes: bool) -> Result<bool, String> {
+#[derive(Debug, PartialEq, Eq)]
+enum Consent {
+    Granted,
+    Declined,
+    /// Nobody was there to be asked.
+    NoTerminal,
+}
+
+fn agreed(plugin: &Plugin, asking: &Capabilities, yes: bool) -> Consent {
     println!("{} {} wants to:", plugin.name, plugin.version);
     for line in asking.lines() {
         println!("  - {line}");
@@ -482,20 +641,24 @@ fn agreed(plugin: &Plugin, asking: &Capabilities, yes: bool) -> Result<bool, Str
     }
     if yes {
         println!("granted (--yes)");
-        return Ok(true);
+        return Consent::Granted;
     }
     if !std::io::stdin().is_terminal() {
-        return Err(format!(
-            "`{}` asks for permissions and there is nobody here to grant them — \
-             run this in a terminal, or pass `--yes` if you have read the above",
-            plugin.name
-        ));
+        return Consent::NoTerminal;
     }
     print!("\nallow this? [y/N] ");
-    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    if std::io::stdout().flush().is_err() {
+        return Consent::NoTerminal;
+    }
     let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
-    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return Consent::NoTerminal;
+    }
+    if matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+        Consent::Granted
+    } else {
+        Consent::Declined
+    }
 }
 
 /// Compile the plugin now, so that opening a terminal does not.
@@ -587,7 +750,8 @@ repositories:
 plugins:
   haven plugin search [<text>]      what the repositories offer
   haven plugin info <name>          where it comes from, and what it asks for
-  haven plugin install <name>       fetch, verify and unpack it
+  haven plugin install <name>...    fetch, verify and unpack them
+  haven plugin install --all        everything the repositories offer
   haven plugin remove <name>
   haven plugin list                 what is installed
 
@@ -601,6 +765,8 @@ options:
                        shown it. For scripts; interactively you are shown the
                        fingerprint and asked
   --name <n>           what to call the repository (default: from its URL)
+  --all                with `install`, every plugin not already installed.
+                       Still asks about each one that wants something
   --yes                grant what a plugin asks for without being asked
   --root <dir>         keep sources, keys and plugins under <dir> instead of
                        the usual places
