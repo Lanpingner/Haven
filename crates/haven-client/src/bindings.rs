@@ -268,6 +268,9 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("p", "prev"),
     ("d", "detach"),
     ("s", "choose"),
+    // `u` for what you open it to find out: whether anything you have
+    // installed has moved on.
+    ("u", "plugins"),
     (":", "command-prompt"),
     ("[", "copy-mode"),
     ("]", "paste-buffer"),

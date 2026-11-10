@@ -420,6 +420,10 @@ impl Daemon {
                     problem,
                 });
             }
+            ClientMsg::ListPlugins => {
+                let repos = plugin_repos();
+                let _ = self.clients[index].framed.queue(&ServerMsg::Plugins { repos });
+            }
             ClientMsg::ListShells => {
                 let shells: Vec<String> =
                     haven_shell::available().iter().map(|p| p.display().to_string()).collect();
@@ -1767,4 +1771,71 @@ mod preview_tests {
         // has.
         assert_eq!(text(&grid, preview_window(&grid, 2)), vec!["line 0", "line 1"]);
     }
+}
+
+/// The plugin repositories, as the browser shows them.
+///
+/// All the verifying happens here, on the daemon's own disk, so that a
+/// client is handed conclusions rather than evidence. A repository whose
+/// cached index does not verify — or which has never been refreshed —
+/// comes back with `problem` set rather than silently empty: "nothing to
+/// show" and "something is wrong" are different answers and a browser
+/// that conflates them is a browser that hides the interesting case.
+fn plugin_repos() -> Vec<haven_proto::RepoInfo> {
+    use haven_plugin::repo::{self, Paths, Sources};
+    use haven_plugin::store::Installed;
+
+    let paths = Paths::standard();
+    let Ok(sources) = Sources::load(&paths) else { return Vec::new() };
+    // One read of what is installed, for every repository: the record is
+    // not per-repository and re-reading it per row would be a file read
+    // per keystroke once a client refreshes this.
+    let installed = Installed::load(&paths).unwrap_or_default();
+
+    sources
+        .list
+        .iter()
+        .map(|source| {
+            let changes = repo::changes(&source.name, &paths)
+                .into_iter()
+                .map(|change| haven_proto::PluginChange {
+                    summary: change.kind.summary(),
+                    name: change.name,
+                    when: change.when,
+                })
+                .collect();
+            let mut info = haven_proto::RepoInfo {
+                name: source.name.clone(),
+                url: source.url.clone(),
+                key: haven_plugin::sign::short(&source.fingerprint),
+                checked: source.trust.is_verified(),
+                problem: None,
+                plugins: Vec::new(),
+                changes,
+            };
+            match repo::cached(source, &paths) {
+                Ok(index) => {
+                    info.plugins = index
+                        .plugins
+                        .iter()
+                        .map(|plugin| haven_proto::PluginInfo {
+                            name: plugin.name.clone(),
+                            version: plugin.version.clone(),
+                            summary: plugin.summary.clone().unwrap_or_default(),
+                            installed: installed
+                                .get(&plugin.name)
+                                .map(|record| record.version.clone()),
+                            asks: plugin.capabilities.lines(),
+                            granted: installed
+                                .get(&plugin.name)
+                                .map(|record| record.granted.lines())
+                                .unwrap_or_default(),
+                        })
+                        .collect();
+                }
+                Err(e) => info.problem = Some(e.to_string()),
+            }
+            info
+        })
+        .collect()
 }

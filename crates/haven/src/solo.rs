@@ -291,6 +291,10 @@ fn apply<F: FnMut(haven_mux::PaneRequest) -> io::Result<Pty>>(
         | Action::SendPrefix
         | Action::EnterCommand(_)
         | Action::Choose
+        // Standalone mode has no daemon, and the plugin repositories are
+        // the daemon's: over SSH they are on the far machine, so the
+        // browser asks whoever is holding the sessions.
+        | Action::Plugins
         | Action::NewSession
         // Standalone mode draws straight from the grid, with no view to move
         // and no client to hold a paste buffer.

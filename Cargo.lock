@@ -1509,6 +1509,7 @@ dependencies = [
  "haven-client",
  "haven-core",
  "haven-mux",
+ "haven-plugin",
  "haven-proto",
  "haven-pty",
  "haven-shell",

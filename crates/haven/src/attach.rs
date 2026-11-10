@@ -251,6 +251,7 @@ fn run_command(line: &str, bindings: &Bindings) -> Intercepted {
     match keys::parse_command(line.trim()) {
         Ok(Action::Detach) => Intercepted::Detach,
         Ok(Action::Choose) => Intercepted::OpenChooser,
+        Ok(Action::Plugins) => Intercepted::OpenPlugins,
         Ok(Action::NewSession) => Intercepted::NewSession,
         Ok(Action::Scroll(rows)) => Intercepted::Scroll(rows),
         Ok(Action::Copy) => Intercepted::EnterCopy,

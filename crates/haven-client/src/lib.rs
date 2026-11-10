@@ -15,6 +15,7 @@ pub mod frontend;
 pub mod input;
 pub mod menu;
 pub mod open;
+pub mod plugins;
 pub mod status_bar;
 
 /// Themes live in the protocol crate: the daemon owns the configuration and
@@ -58,6 +59,8 @@ pub enum Intercepted {
     /// Show the session tree. The client owns it, because only the client
     /// holds both the session listing and the attached session's windows.
     OpenChooser,
+    /// Show the plugin repositories and what is in them.
+    OpenPlugins,
     /// Make a session and move to it. The client owns this for the same
     /// reason it owns attaching: the daemon has to be told this client's
     /// size, and only the frontend knows it.
@@ -215,6 +218,8 @@ pub struct Client<F, T> {
     pub mode: status_bar::Mode,
     /// The session tree, while it is open.
     pub chooser: Option<chooser::Chooser>,
+    /// The plugin browser, while it is open.
+    pub plugins: Option<plugins::Browser>,
     /// Open the tree as soon as the session listing arrives, so attaching
     /// with no session named asks which one rather than silently joining the
     /// first. Cleared once it has fired: this is about arriving, not about
@@ -301,6 +306,7 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             key_filter: None,
             mode: status_bar::Mode::Normal,
             chooser: None,
+            plugins: None,
             pending_chooser: None,
             copy: None,
             menu: None,
@@ -487,6 +493,34 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         Ok(Tick::Redraw)
     }
 
+    /// Drive the plugin browser. Like the tree, it owns the keyboard
+    /// while it is up: a modal that let keys through to the shell behind
+    /// it would be a nasty surprise.
+    fn plugins_key(&mut self, event: &input::KeyEvent) -> Result<Tick, TransportError> {
+        use input::{Key, KeyState, NamedKey};
+        if event.state == KeyState::Release {
+            return Ok(Tick::Idle);
+        }
+        let Some(browser) = self.plugins.as_mut() else { return Ok(Tick::Idle) };
+        match &event.key {
+            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Enter) => self.plugins = None,
+            Key::Named(NamedKey::Up) => browser.move_by(-1),
+            Key::Named(NamedKey::Down) => browser.move_by(1),
+            Key::Char('k') if browser.filter.is_empty() => browser.move_by(-1),
+            Key::Char('j') if browser.filter.is_empty() => browser.move_by(1),
+            Key::Named(NamedKey::Backspace) => {
+                browser.filter.pop();
+                browser.resettle();
+            }
+            Key::Char(c) if !event.mods.contains(input::Modifiers::CTRL) => {
+                browser.filter.push(*c);
+                browser.resettle();
+            }
+            _ => {}
+        }
+        Ok(Tick::Redraw)
+    }
+
     /// Ask what the selected pane is showing, for the tree's preview.
     ///
     /// Nothing is asked for a pane already on screen beside the list: the
@@ -599,6 +633,20 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             }
             Intercepted::OpenChooser => {
                 self.open_chooser()?;
+                Tick::Redraw
+            }
+            Intercepted::OpenPlugins => {
+                // Opened now, filled when the answer arrives. Waiting for
+                // the reply to open it would spend that round trip
+                // passing keystrokes to the pane behind it — press the
+                // key and type `j`, and the `j` lands at the shell
+                // prompt.
+                //
+                // Asked for rather than kept up to date: a listing nobody
+                // is looking at is a file read per tick, and the browser
+                // is cheap to reopen.
+                self.plugins = Some(plugins::Browser::loading());
+                self.transport.send(ClientMsg::ListPlugins)?;
                 Tick::Redraw
             }
             Intercepted::NewSession => {
@@ -1169,6 +1217,11 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         {
             self.frame.widgets.push(widget);
         }
+        if let Some(widget) =
+            self.plugins.as_ref().and_then(|p| p.widget(self.frame.size, &self.frame.theme))
+        {
+            self.frame.widgets.push(widget);
+        }
     }
 
     /// Why the session ended, if it ended badly.
@@ -1296,6 +1349,9 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 if self.chooser.is_some() {
                     return self.chooser_key(&key);
                 }
+                if self.plugins.is_some() {
+                    return self.plugins_key(&key);
+                }
                 if self.menu.is_some() {
                     return self.menu_key(&key);
                 }
@@ -1349,6 +1405,29 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                     ));
                 }
                 self.fatal.is_some()
+            }
+            ServerMsg::Plugins { repos } => {
+                // Only if the browser is still open: the answer is a round
+                // trip late, and by now the box may have been dismissed.
+                if self.plugins.is_some() {
+                    if repos.is_empty() {
+                        // Nothing to browse, so close it and say so on the
+                        // bar rather than leaving an empty box over a pane.
+                        self.plugins = None;
+                        self.frame.notice = Some(
+                            "no plugin repositories — `haven plugin repo add <url>` adds one"
+                                .into(),
+                        );
+                    } else {
+                        // `filled`, not `new`: anything typed into the box
+                        // while it waited is a search the user has already
+                        // started, and replacing the browser outright
+                        // would throw it away.
+                        let open = self.plugins.take().unwrap_or_default();
+                        self.plugins = Some(open.filled(repos));
+                    }
+                }
+                true
             }
             ServerMsg::Tables(tables) => {
                 self.frame.apply_tables(&tables);

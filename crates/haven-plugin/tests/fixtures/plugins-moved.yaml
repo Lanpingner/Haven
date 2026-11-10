@@ -1,0 +1,24 @@
+# A repository's index, as `haven plugin repo update` fetches it. This one
+# is a test fixture: the artifacts in pool/ are real tarballs and the
+# signature beside it was made by GnuPG with the key in repo-key.asc.
+repo: haven-test
+description: a repository that exists to be tested against
+plugins:
+  - name: gitline
+    version: 0.3.0
+    summary: the branch and its state, in the status line
+    file: pool/gitline-0.2.1.tar.gz
+    sha256: ba201fa547336620002fa4c78e684a729c71315ca68d5181d46d5fbdb4e6fceb
+    entry: gitline.wasm
+    events: [pane-focus, cwd-change]
+    capabilities:
+      exec: [git]
+      fs: ['$CWD:ro']
+  - name: urls
+    version: 1.0.0
+    summary: find links in what a pane is showing
+    file: pool/urls-1.0.0.tar.gz
+    sha256: 87674910449d3ddb3c44ce2d8593eb8c8922d5657d30cbe008d653c112466e88
+    entry: urls.wasm
+    capabilities:
+      read-pane-content: true

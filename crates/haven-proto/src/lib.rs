@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -318,6 +318,13 @@ pub enum ClientMsg {
     /// Control-mode queries, which the CLI is built on: anything `haven ls`
     /// can do, a script can do (`docs/PLAN.md` §14.2).
     ListSessions,
+    /// The plugin repositories, what is in them, and what changed.
+    ///
+    /// Asked of the daemon rather than read off the client's own disk,
+    /// for the same reason the config is the daemon's: over SSH the
+    /// plugins are on the far machine, and a browser showing the local
+    /// ones would be showing the wrong thing with no way to tell.
+    ListPlugins,
     /// What shells the *daemon's* machine has, and what containers it could
     /// put one in. Asked for rather than guessed at by the client, because
     /// the pane is spawned where the daemon is: a client's idea of where
@@ -630,6 +637,10 @@ pub enum ServerMsg {
         /// when a rebuild appears to have changed nothing.
         daemon_build: u64,
     },
+    /// Reply to [`ClientMsg::ListPlugins`].
+    Plugins {
+        repos: Vec<RepoInfo>,
+    },
     /// Version skew, in words rather than as a decode failure.
     Refused {
         reason: String,
@@ -690,6 +701,51 @@ pub struct PaneInfo {
     /// own prompt is the only thing saying otherwise — in whichever window
     /// you are not looking at.
     pub user: Option<String>,
+}
+
+/// One plugin repository, flattened for the browser.
+///
+/// Everything here is already the *result* of verification: the daemon
+/// has checked the signature on the cached index before building this,
+/// so a client never decides what to trust. A repository whose index
+/// does not verify arrives with `problem` set and no plugins, which is
+/// the honest thing to show rather than an empty repository.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct RepoInfo {
+    pub name: String,
+    pub url: String,
+    /// The pinned key, short form, as it is shown.
+    pub key: String,
+    /// Whether that key was ever checked against a fingerprint from
+    /// outside the repository. False is not an error; it is a fact worth
+    /// keeping on screen.
+    pub checked: bool,
+    /// Why there is nothing to show, when there is nothing to show.
+    pub problem: Option<String>,
+    pub plugins: Vec<PluginInfo>,
+    /// What the last few refreshes found, newest first.
+    pub changes: Vec<PluginChange>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct PluginInfo {
+    pub name: String,
+    pub version: String,
+    pub summary: String,
+    /// The version installed, if one is.
+    pub installed: Option<String>,
+    /// What it asks to be allowed to do, as lines a person can read.
+    pub asks: Vec<String>,
+    /// What it was actually granted, when it is installed.
+    pub granted: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct PluginChange {
+    pub name: String,
+    /// `new, 0.2.1`, `0.2.1 → 0.3.0`, `gone, was 1.0`.
+    pub summary: String,
+    pub when: u64,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]

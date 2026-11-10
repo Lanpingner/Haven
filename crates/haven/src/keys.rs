@@ -101,6 +101,8 @@ pub enum Action {
     EnterCommand(String),
     /// Open the session tree.
     Choose,
+    /// The plugin repositories, what is in them, and what changed.
+    Plugins,
     /// Move the view through the pane's history, in rows. Negative goes back
     /// towards the live screen.
     Scroll(i32),
@@ -136,6 +138,7 @@ pub const PAGE_ROWS: i32 = 20;
 /// see it offered rather than be told it does not exist after the fact.
 pub const COMMANDS: &[&str] = &[
     "choose",
+    "plugins",
     "choose-shell",
     "container-mount",
     "container-mounts",
@@ -224,6 +227,7 @@ pub fn icon(command: &str) -> Option<&'static str> {
         "swap-pane" | "rotate" | "break-pane" | "join-pane" | "move-pane" => "⇄",
         "new-window" | "new-tab" | "next" | "prev" | "last" | "select-window" => "▭",
         "new-session" | "choose" | "rename-session" | "rename-window" | "find-window" => "◇",
+        "plugins" => "⊞",
         "detach" | "detach-others" => "⏏",
         "save-sessions" | "restore-sessions" => "⌸",
         "copy-mode" | "paste-buffer" => "⎘",
@@ -457,6 +461,7 @@ pub fn parse_command(line: &str) -> Result<Action, String> {
         "kill-pane" | "killp" => Action::ClosePane,
         "zoom" => Action::ToggleZoom,
         "choose" | "choose-tree" => Action::Choose,
+        "plugins" | "choose-plugin" => Action::Plugins,
         // Every bound key must have a name, or a binding table could not
         // express what the built-in one already does.
         "focus-left" | "select-pane-left" => Action::Focus(Edge::Left),
@@ -550,6 +555,7 @@ pub fn to_proto(action: Action) -> Option<haven_proto::Action> {
         // listing the client already holds.
         Action::DisplayPanes
         | Action::FindWindow(_)
+        | Action::Plugins
         | Action::ChooseShell(_)
         | Action::ContainerShell { .. }
         | Action::ContainerMounts { .. }

@@ -108,6 +108,11 @@ impl Paths {
     pub fn clone_dir(&self, name: &str) -> PathBuf {
         self.repo_dir(name).join("git")
     }
+
+    /// What each refresh of this repository found.
+    pub fn changes_file(&self, name: &str) -> PathBuf {
+        self.repo_dir(name).join("changes.yaml")
+    }
 }
 
 /// A repository as the user added it.
@@ -404,6 +409,191 @@ pub struct Refreshed {
     /// so, because "nothing new" is the answer most of the time and is
     /// worth being told plainly.
     pub changed: bool,
+    /// What moved, if anything did.
+    pub changes: Vec<Change>,
+}
+
+/// One difference between the index a repository served and the one it
+/// served last time.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Change {
+    pub name: String,
+    pub kind: ChangeKind,
+    /// Seconds since the epoch, when the refresh that saw it ran.
+    pub when: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ChangeKind {
+    Added {
+        version: String,
+    },
+    /// A version moved. Both ends, because "0.2.1 → 0.3.0" is the useful
+    /// form and the old one is gone from the index by the time anyone
+    /// reads this.
+    Updated {
+        from: String,
+        to: String,
+    },
+    /// Still the same version, different bytes. A repository re-publishing
+    /// a version is either a mistake or someone going back and changing
+    /// what a released version is, and both are worth seeing.
+    Republished {
+        version: String,
+    },
+    Removed {
+        version: String,
+    },
+}
+
+impl ChangeKind {
+    /// A short line for a list, without the plugin's name — whatever
+    /// shows this has the name already.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::Added { version } => format!("new, {version}"),
+            Self::Updated { from, to } => format!("{from} → {to}"),
+            Self::Republished { version } => format!("{version} republished"),
+            Self::Removed { version } => format!("gone, was {version}"),
+        }
+    }
+}
+
+/// What changed between two indices, newest-interesting first.
+fn differences(before: Option<&Index>, after: &Index, when: u64) -> Vec<Change> {
+    // No "before" is a repository being added, and everything in it being
+    // "new" is noise rather than news: there is nothing to have missed.
+    let Some(before) = before else { return Vec::new() };
+    let mut out = Vec::new();
+    for plugin in &after.plugins {
+        match before.plugin(&plugin.name) {
+            None => out.push(Change {
+                name: plugin.name.clone(),
+                kind: ChangeKind::Added { version: plugin.version.clone() },
+                when,
+            }),
+            Some(was) if was.version != plugin.version => out.push(Change {
+                name: plugin.name.clone(),
+                kind: ChangeKind::Updated { from: was.version.clone(), to: plugin.version.clone() },
+                when,
+            }),
+            Some(was) if was.sha256 != plugin.sha256 => out.push(Change {
+                name: plugin.name.clone(),
+                kind: ChangeKind::Republished { version: plugin.version.clone() },
+                when,
+            }),
+            Some(_) => {}
+        }
+    }
+    for was in &before.plugins {
+        if after.plugin(&was.name).is_none() {
+            out.push(Change {
+                name: was.name.clone(),
+                kind: ChangeKind::Removed { version: was.version.clone() },
+                when,
+            });
+        }
+    }
+    out
+}
+
+/// How many changes are kept per repository.
+///
+/// A log, not a history: it exists so that "what moved?" has an answer
+/// after an update, and a list nobody can read to the end answers
+/// nothing. Oldest are dropped.
+const KEEP_CHANGES: usize = 50;
+
+/// Read the recorded changes for a repository, newest first.
+///
+/// Best effort: this is a log beside a cache, and a missing or unreadable
+/// one is no changes rather than an error. Nothing is trusted from it —
+/// it is Haven's own note to itself about indices it had already
+/// verified.
+pub fn changes(name: &str, paths: &Paths) -> Vec<Change> {
+    let Ok(text) = std::fs::read_to_string(paths.changes_file(name)) else { return Vec::new() };
+    let Ok(doc) = crate::yaml::parse(&text) else { return Vec::new() };
+    let Some(items) = doc.get("changes").and_then(|n| n.as_list()) else { return Vec::new() };
+    let mut out = Vec::new();
+    for item in items {
+        let get = |key: &str| item.get(key).and_then(|n| n.as_str()).unwrap_or("").to_string();
+        let when = get("when").parse().unwrap_or(0);
+        let version = get("version");
+        let kind = match get("kind").as_str() {
+            "added" => ChangeKind::Added { version },
+            "updated" => ChangeKind::Updated { from: get("from"), to: get("to") },
+            "republished" => ChangeKind::Republished { version },
+            "removed" => ChangeKind::Removed { version },
+            _ => continue,
+        };
+        let name = get("name");
+        if name.is_empty() {
+            continue;
+        }
+        out.push(Change { name, kind, when });
+    }
+    out.reverse();
+    out.truncate(KEEP_CHANGES);
+    out
+}
+
+/// Append to a repository's change log. Failing to write it does not fail
+/// a refresh: the index verified and is cached, which is the part that
+/// matters, and a log is a convenience.
+fn record_changes(name: &str, new: &[Change], paths: &Paths) {
+    if new.is_empty() {
+        return;
+    }
+    // Oldest first on disk, so appending is appending.
+    let mut all: Vec<Change> = changes(name, paths);
+    all.reverse();
+    all.extend_from_slice(new);
+    if all.len() > KEEP_CHANGES {
+        all.drain(..all.len() - KEEP_CHANGES);
+    }
+    let mut out = String::from(
+        "# What each `haven plugin repo update` found.
+changes:
+",
+    );
+    for change in &all {
+        out.push_str(&format!(
+            "  - name: {}
+    when: {}
+",
+            quoted(&change.name),
+            change.when
+        ));
+        match &change.kind {
+            ChangeKind::Added { version } => out.push_str(&format!(
+                "    kind: added
+    version: {}
+",
+                quoted(version)
+            )),
+            ChangeKind::Updated { from, to } => out.push_str(&format!(
+                "    kind: updated
+    from: {}
+    to: {}
+",
+                quoted(from),
+                quoted(to)
+            )),
+            ChangeKind::Republished { version } => out.push_str(&format!(
+                "    kind: republished
+    version: {}
+",
+                quoted(version)
+            )),
+            ChangeKind::Removed { version } => out.push_str(&format!(
+                "    kind: removed
+    version: {}
+",
+                quoted(version)
+            )),
+        }
+    }
+    let _ = write_atomically(&paths.changes_file(name), out.as_bytes());
 }
 
 /// Fetch a repository's index, verify it, and cache it.
@@ -439,11 +629,23 @@ pub fn refresh(source: &Source, fetcher: &dyn Fetch, paths: &Paths) -> Result<Re
     let dir = paths.repo_dir(&source.name);
     std::fs::create_dir_all(&dir)
         .map_err(|e| Error::Io { path: dir.clone(), what: e.to_string() })?;
+    // The index we are replacing, for the change log. Read through
+    // `cached` so a cache that does not verify counts as no cache rather
+    // than as a previous state worth diffing against.
+    let before = cached(source, paths).ok();
     let changed =
         std::fs::read(paths.index_file(&source.name)).map(|old| old != index_bytes).unwrap_or(true);
-    write_atomically(&paths.index_file(&source.name), &index_bytes)?;
+    let differences = differences(before.as_ref(), &index, unix_now());
+
+    // The signature first. Either order leaves a window, and this is the
+    // one whose failure mode is honest: a new signature over an old index
+    // fails to verify, so the repository is simply refreshed again —
+    // where a new index under an old signature fails the same way but
+    // looks like tampering.
     write_atomically(&paths.signature_file(&source.name), signature.as_bytes())?;
-    Ok(Refreshed { index, changed })
+    write_atomically(&paths.index_file(&source.name), &index_bytes)?;
+    record_changes(&source.name, &differences, paths);
+    Ok(Refreshed { index, changed, changes: differences })
 }
 
 /// The cached index for a repository, as the last refresh left it.
@@ -478,6 +680,14 @@ pub fn cached(source: &Source, paths: &Paths) -> Result<Index, Error> {
 /// name it, so it is held to the same rule as a plugin's name.
 pub fn check_name(name: &str) -> Result<String, String> {
     crate::index::check_name(name, "name").map_err(|e| e.message)
+}
+
+/// Seconds since the epoch, or zero if the clock is before it.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// A name for a repository taken from its URL, for when the user does not
@@ -614,9 +824,9 @@ mod tests {
 
     /// A temporary home that cleans itself up, so no test has to remember
     /// to — and so a panicking one does not leave a directory behind.
-    struct TempHome {
+    pub(super) struct TempHome {
         root: PathBuf,
-        paths: Paths,
+        pub(super) paths: Paths,
     }
 
     impl Drop for TempHome {
@@ -625,7 +835,7 @@ mod tests {
         }
     }
 
-    fn temp_paths(tag: &str) -> TempHome {
+    pub(super) fn temp_paths(tag: &str) -> TempHome {
         let root = std::env::temp_dir().join(format!(
             "haven-repo-{tag}-{}-{:?}",
             std::process::id(),
@@ -844,5 +1054,138 @@ mod tests {
         // shows the order: verification comes first, parsing second.
         let e = refresh(&source(), &repo, paths).expect_err("should fail");
         assert!(matches!(e, Error::Sign(_)), "verification must come before parsing: {e}");
+    }
+}
+
+#[cfg(test)]
+mod change_tests {
+    use super::tests::temp_paths;
+    use super::*;
+    use crate::index::Index;
+
+    fn index_of(entries: &[(&str, &str, &str)]) -> Index {
+        let mut text = String::from("repo: haven-test\nplugins:\n");
+        for (name, version, hash) in entries {
+            text.push_str(&format!(
+                "  - name: {name}\n    version: {version}\n    \
+                 file: pool/{name}.tar.gz\n    sha256: {}\n    entry: {name}.wasm\n",
+                hash.repeat(64 / hash.len())
+            ));
+        }
+        Index::parse(&text).unwrap_or_else(|e| panic!("fixture: {e}"))
+    }
+
+    #[test]
+    fn adding_a_repository_is_not_fifty_pieces_of_news() {
+        // Everything in a repository you have just added is "new", which
+        // is noise: there was nothing to have missed.
+        let after = index_of(&[("gitline", "0.2.1", "a"), ("urls", "1.0.0", "b")]);
+        assert!(differences(None, &after, 7).is_empty());
+    }
+
+    #[test]
+    fn a_refresh_reports_what_actually_moved() {
+        let before =
+            index_of(&[("gitline", "0.2.1", "a"), ("urls", "1.0.0", "b"), ("old", "1", "c")]);
+        let after = index_of(&[
+            // unchanged
+            ("urls", "1.0.0", "b"),
+            // a version moved
+            ("gitline", "0.3.0", "a"),
+            // same version, different bytes
+            ("new", "2.0.0", "d"),
+        ]);
+        let changes = differences(Some(&before), &after, 99);
+        let find = |name: &str| {
+            changes
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("no {name}: {changes:?}"))
+        };
+        assert_eq!(
+            find("gitline").kind,
+            ChangeKind::Updated { from: "0.2.1".into(), to: "0.3.0".into() }
+        );
+        assert_eq!(find("new").kind, ChangeKind::Added { version: "2.0.0".into() });
+        assert_eq!(find("old").kind, ChangeKind::Removed { version: "1".into() });
+        assert!(changes.iter().all(|c| c.name != "urls"), "unchanged is not a change");
+        assert!(changes.iter().all(|c| c.when == 99), "every change is stamped");
+    }
+
+    #[test]
+    fn a_version_republished_under_the_same_number_is_news_too() {
+        // The same version with different bytes is either a mistake or
+        // somebody changing what a released version is. Both are worth
+        // seeing, and a version comparison alone would miss it.
+        let before = index_of(&[("gitline", "0.2.1", "a")]);
+        let after = index_of(&[("gitline", "0.2.1", "f")]);
+        let changes = differences(Some(&before), &after, 1);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].kind, ChangeKind::Republished { version: "0.2.1".into() });
+    }
+
+    #[test]
+    fn the_change_log_survives_a_round_trip_and_stays_bounded() {
+        let home = temp_paths("changelog");
+        let paths = &home.paths;
+        std::fs::create_dir_all(paths.repo_dir("haven-test")).unwrap();
+
+        let one = vec![
+            Change {
+                name: "gitline".into(),
+                kind: ChangeKind::Added { version: "1".into() },
+                when: 10,
+            },
+            Change {
+                name: "urls".into(),
+                kind: ChangeKind::Updated { from: "1".into(), to: "2".into() },
+                when: 10,
+            },
+        ];
+        record_changes("haven-test", &one, paths);
+        let read = changes("haven-test", paths);
+        assert_eq!(read.len(), 2);
+        // Newest first, which is the order anything showing these wants.
+        assert_eq!(read[0].name, "urls");
+        assert_eq!(read[0].kind.summary(), "1 → 2");
+        assert_eq!(read[1].kind.summary(), "new, 1");
+
+        // Appending keeps the old ones...
+        record_changes(
+            "haven-test",
+            &[Change {
+                name: "third".into(),
+                kind: ChangeKind::Removed { version: "9".into() },
+                when: 20,
+            }],
+            paths,
+        );
+        let read = changes("haven-test", paths);
+        assert_eq!(read.len(), 3);
+        assert_eq!(read[0].name, "third");
+
+        // ...up to a point. A log nobody can read to the end answers
+        // nothing, so the oldest go.
+        let many: Vec<Change> = (0..KEEP_CHANGES + 20)
+            .map(|i| Change {
+                name: format!("p{i}"),
+                kind: ChangeKind::Added { version: "1".into() },
+                when: 30,
+            })
+            .collect();
+        record_changes("haven-test", &many, paths);
+        let read = changes("haven-test", paths);
+        assert_eq!(read.len(), KEEP_CHANGES);
+        assert_eq!(read[0].name, format!("p{}", KEEP_CHANGES + 19), "newest kept");
+    }
+
+    #[test]
+    fn a_missing_or_broken_change_log_is_no_changes_rather_than_an_error() {
+        let home = temp_paths("nolog");
+        let paths = &home.paths;
+        assert!(changes("never-refreshed", paths).is_empty());
+        std::fs::create_dir_all(paths.repo_dir("broken")).unwrap();
+        std::fs::write(paths.changes_file("broken"), b"this is not yaml: [[[\n").unwrap();
+        assert!(changes("broken", paths).is_empty(), "a broken log must not be fatal");
     }
 }

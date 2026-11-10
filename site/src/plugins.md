@@ -289,6 +289,7 @@ forget what it already had.
   installed.yaml                what is installed, and what you granted
   installed/<name>/             the unpacked artifact
   repos/<name>/plugins.yaml     the last index that verified
+  repos/<name>/changes.yaml     what each refresh found
 ```
 
 What you *decided* is configuration and worth backing up. What was
@@ -305,6 +306,67 @@ repository out without touching your real configuration.
 
 [rpgp]: https://docs.rs/pgp
 
+## The browser
+
+`Ctrl+A` `u` opens the repositories, what is in them, and what moved —
+without leaving the terminal:
+
+```
+┌─ plugins · type to search ──────────────────────────────────────────────────────┐
+│  community (2 plugins)                    │  gitline 0.3.0                      │
+│  ├─gitline  0.2.1 → 0.3.0                 │  the branch and its state, in the   │
+│  ├─urls 1.0.0                             │  status line                        │
+│  work (2 plugins, key never checked)      │                                     │
+│  ├─gitline 0.2.1  installed               │  from community                     │
+│  ├─urls 1.0.0                             │  installed: 0.2.1 — 0.3.0 available │
+│                                           │                                     │
+│                                           │  asks to                            │
+│                                           │  - run: git                         │
+│                                           │  - files: $CWD:ro                   │
+│ haven plugin install gitline · esc                                              │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+It opens on the first plugin with an update waiting, because that is the
+question people open it to answer. Select a repository instead and the
+panel shows its key, whether that key was ever checked, and what the last
+few refreshes found:
+
+```
+│  community (2 plugins)                    │  community                          │
+│  ├─gitline 0.3.0  installed               │  /srv/haven                         │
+│  ├─urls 1.0.0                             │                                     │
+│                                           │  key E1E1F35F2B2ED307               │
+│                                           │                                     │
+│                                           │  recent changes                     │
+│                                           │  gitline  0.2.1 → 0.3.0             │
+```
+
+| Key | Does |
+|---|---|
+| `j` / `k` or arrows | move (wraps) |
+| type anything | filter — a repository's name keeps its plugins |
+| `Backspace` | undo a filter character |
+| `Esc` or `Enter` | close |
+
+**It only shows.** Installing from here would put a permission prompt
+inside a modal drawn over a pane, which is the one place a question about
+permissions should not be: it has to be read, and a modal is somewhere
+people press keys to make go away. So the bottom line is the command for
+whatever is selected, and you run it yourself.
+
+The repositories come from the **daemon**, not from the machine you are
+typing on. Over SSH the plugins are on the far machine — that is where
+they would run — and a browser showing your local ones would be showing
+the wrong thing with no way to tell. Everything in it has already been
+verified by the daemon, so the client is handed conclusions: a repository
+whose index does not verify appears with `!` against it and the reason in
+the panel, rather than as an empty repository.
+
+The change log is Haven's note to itself about indices it had already
+verified: the last fifty entries per repository, written by `repo update`,
+and nothing is trusted from it.
+
 ## Commands
 
 | Command | Does |
@@ -319,6 +381,7 @@ repository out without touching your real configuration.
 | `haven plugin install <name>` | fetch, verify, unpack |
 | `haven plugin remove <name>` | uninstall |
 | `haven plugin list` | what is installed, and what has a newer version |
+| `Ctrl+A` `u` | all of the above in one box — see [the browser](#the-browser) |
 
 Removing a repository leaves what you installed from it alone, and says
 so — it still works, it just has nowhere to update from.

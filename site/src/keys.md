@@ -40,6 +40,7 @@ rather than a code change.
 | `d` | detach |
 | `:` | open the command line |
 | `s` | the session tree |
+| `u` | the plugin browser: repositories, updates, recent changes |
 | `Ctrl+A` | send a literal `Ctrl+A` |
 
 `Shift` plus an arrow resizes, the same as `H` `J` `K` `L`. `PageUp` moves
