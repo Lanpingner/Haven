@@ -6,9 +6,25 @@ env:
 jobs:
   test:
     strategy:
+      # Without this, a macOS failure cancels the Linux job mid-run and
+      # the result reads as "Linux failed too" when Linux was passing.
+      # That cost real time to misread.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # macOS is advisory, not a gate. It still runs and still reports; it
+    # just does not fail the workflow.
+    #
+    # Not because the failures there are uninteresting — the opposite.
+    # Chasing them found that bash 3.2 has no `PS0`, that zsh
+    # integration had never worked anywhere, and that every plugin
+    # install failed on bsdtar. But the window is untested on macOS and
+    # the runners are slow enough that jobs get cancelled outright, so
+    # a red macOS job has meant "look at this" rather than "do not
+    # merge" for as long as there has been one. Say so in the
+    # configuration instead of in people's heads.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
