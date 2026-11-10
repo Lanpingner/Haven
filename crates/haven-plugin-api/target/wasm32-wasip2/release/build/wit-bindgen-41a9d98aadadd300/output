@@ -1,0 +1,2 @@
+cargo:rustc-link-lib=static=wit_bindgen_cabi_wasip3_0_63_0
+cargo:rustc-link-search=native=/Projects/HavenTerminal/crates/haven-plugin-api/target/wasm32-wasip2/release/build/wit-bindgen-41a9d98aadadd300/out

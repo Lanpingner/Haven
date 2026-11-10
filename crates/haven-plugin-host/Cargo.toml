@@ -1,0 +1,25 @@
+[package]
+name = "haven-plugin-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runs Haven's plugins: wasmtime, the capability broker, lifecycle"
+
+[dependencies]
+haven-plugin.workspace = true
+# The component model, and nothing else from wasmtime: no WASI
+# filesystem, no sockets, no async. What a plugin may reach is Haven's
+# own imports and the handful of harmless WASI calls the Rust standard
+# library needs to start up.
+wasmtime = { version = "34", default-features = false, features = [
+    "component-model",
+    "cranelift",
+    "runtime",
+    "std",
+] }
+wasmtime-wasi = { version = "34", default-features = false }
+
+[lints]
+workspace = true

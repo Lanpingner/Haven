@@ -1,0 +1,11 @@
+[package]
+name = "sandbox_probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+haven-plugin-api.workspace = true

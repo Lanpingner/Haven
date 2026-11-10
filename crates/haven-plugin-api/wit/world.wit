@@ -1,0 +1,178 @@
+// The plugin world: what a plugin may ask of Haven, and what Haven asks
+// of a plugin.
+//
+// Two rules shape all of it, from `docs/PLAN.md` §15.2:
+//
+//   * `on-event` returns commands rather than mutating the host. Effects
+//     are data, applied by Haven, which is what makes a plugin
+//     replayable and testable with no terminal attached.
+//   * `render` is pure and may be called at any time. A plugin cannot
+//     drive frames, so no plugin can cause a redraw storm.
+//
+// Everything a plugin could use to reach outside itself is a function
+// that can be refused. A capability it was not granted is an error it
+// receives, not a trap: a plugin that wanted `git` and did not get it
+// should be able to say so on the status line rather than vanish.
+
+package haven:plugin@0.1.0;
+
+interface types {
+  /// A colour, as a plugin may ask for one. `default` means the theme's,
+  /// which is what a well-behaved plugin uses: a status segment that
+  /// hard-codes grey is unreadable on half the themes people have.
+  variant colour {
+    default,
+    indexed(u8),
+    rgb(rgb),
+  }
+
+  record rgb {
+    r: u8,
+    g: u8,
+    b: u8,
+  }
+
+  record style {
+    fg: colour,
+    bg: colour,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+  }
+
+  /// A piece of text in one style.
+  record run {
+    text: string,
+    style: style,
+  }
+
+  /// One pane, as a plugin sees it. No handle and no methods: a pane is
+  /// a fact about now, and a plugin that held one across events would be
+  /// holding something that may have closed.
+  record pane {
+    id: u32,
+    title: string,
+    /// What the shell says is running, when shell integration is loaded.
+    command: string,
+    /// Working directory, from `OSC 7`. Empty when unknown.
+    cwd: string,
+    running: bool,
+    /// Whether this is the pane the user is looking at.
+    focused: bool,
+  }
+
+  record cwd-change {
+    pane: u32,
+    cwd: string,
+  }
+
+  record command-start {
+    pane: u32,
+    command: string,
+  }
+
+  record command-end {
+    pane: u32,
+    command: string,
+    /// The exit status, or -1 when the shell did not report one.
+    status: s32,
+    /// How long it ran. The reason `command-end` exists as its own event
+    /// rather than as a `command-start` with an outcome.
+    millis: u64,
+  }
+
+  /// Something that happened. A plugin is told only about the events its
+  /// manifest subscribes to.
+  variant event {
+    /// Loaded. Always delivered first, exactly once.
+    started,
+    /// The focused pane changed, with the id of the new one.
+    pane-focus(u32),
+    /// A pane's working directory changed.
+    cwd-changed(cwd-change),
+    /// A command began, as `OSC 133` reported it.
+    command-began(command-start),
+    /// A command finished.
+    command-ended(command-end),
+    pane-opened(u32),
+    pane-closed(u32),
+    /// The timer this plugin asked for in its manifest.
+    tick,
+  }
+
+  /// Something a plugin asks Haven to do. Returned, never performed: see
+  /// the note at the top of this file.
+  variant command {
+    /// Say something on the status bar, for a moment.
+    notice(string),
+    /// Run one of Haven's own actions, exactly as a key binding would —
+    /// `split-v`, `next-window`, `copy-mode`. The vocabulary is the one
+    /// `haven run` uses, so a plugin can do anything a keystroke can.
+    act(string),
+    /// Remember a string until the next time, scoped to this plugin.
+    remember(remembered),
+    forget(string),
+  }
+
+  record remembered {
+    key: string,
+    value: string,
+  }
+}
+
+/// What a plugin may ask of Haven.
+interface host {
+  use types.{pane};
+
+  record output {
+    status: s32,
+    stdout: string,
+    stderr: string,
+  }
+
+  /// Write a line to Haven's log. Always allowed: a plugin with no way
+  /// to say what went wrong is a plugin nobody can fix.
+  log: func(text: string);
+
+  /// Every pane in the session, with the focused one marked.
+  panes: func() -> list<pane>;
+
+  /// The last `rows` rows of what a pane is showing, oldest first.
+  ///
+  /// Needs `read-pane-content`, and is refused without it. This is the
+  /// dangerous one — passwords and tokens scroll through a terminal —
+  /// so it is the capability named first in every prompt.
+  pane-text: func(pane: u32, rows: u32) -> result<string, string>;
+
+  /// Run a program and wait for it. `argv`, never a shell: there is no
+  /// string for a shell to re-split, so there is nothing to quote and
+  /// nothing to get wrong. `argv[0]` must be in the plugin's `exec`
+  /// allowlist or this is refused.
+  run: func(argv: list<string>) -> result<output, string>;
+
+  /// What this plugin remembered under a key, if anything.
+  recall: func(key: string) -> option<string>;
+}
+
+/// What Haven asks of a plugin. A named interface rather than bare
+/// functions on the world, so it can be versioned on its own and so a
+/// plugin's three entry points have one name between them.
+interface guest {
+  use types.{event, command, run};
+
+  /// Called once, before any event. An error here means the plugin is
+  /// unloaded and said to be broken, rather than left half-alive.
+  init: func() -> result<_, string>;
+
+  /// What happened, and what Haven should do about it.
+  on-event: func(ev: event) -> list<command>;
+
+  /// What to draw on the status bar, if anything. Pure, and called when
+  /// Haven is drawing rather than when the plugin feels like it.
+  render: func() -> list<run>;
+}
+
+world plugin {
+  import host;
+  export guest;
+}

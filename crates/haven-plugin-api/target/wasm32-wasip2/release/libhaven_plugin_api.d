@@ -1,0 +1,1 @@
+/Projects/HavenTerminal/crates/haven-plugin-api/target/wasm32-wasip2/release/libhaven_plugin_api.rlib: /Projects/HavenTerminal/crates/haven-plugin-api/src/lib.rs /Projects/HavenTerminal/crates/haven-plugin-api/wit/world.wit

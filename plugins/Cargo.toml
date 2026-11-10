@@ -1,0 +1,35 @@
+# The plugins, in their own workspace.
+#
+# Separate from Haven's because every crate here is built for
+# `wasm32-wasip2` and none of them is built for the host: a member of the
+# main workspace would be compiled by every `cargo test` at the root, for
+# a target where it means nothing.
+[workspace]
+resolver = "2"
+# Globs, so adding a plugin is adding a directory. Several people —
+# or several agents — writing plugins at once must not all be editing
+# this one file.
+members = [
+    # The plugins people would install.
+    "useful/*",
+    # Fixtures, not plugins anybody would install: each exists so a
+    # boundary in `haven-plugin-host` has something to test against.
+    "probes/*",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+haven-plugin-api = { path = "../crates/haven-plugin-api" }
+
+# Small, because every byte is downloaded by whoever installs it, and a
+# plugin is a page of logic.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

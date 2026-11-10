@@ -1,0 +1,18 @@
+[package]
+name = "haven-plugin-api"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Write a Haven plugin: the WIT world, and the Rust side of it"
+
+# Deliberately not a member of Haven's workspace. This crate is compiled
+# for `wasm32-wasip2` by the plugins that depend on it, and the rest of
+# the workspace is not; making it a member would mean every `cargo test`
+# at the root building a crate that is only meaningful on another target.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.63"
