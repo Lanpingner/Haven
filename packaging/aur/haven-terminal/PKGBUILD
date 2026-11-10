@@ -7,7 +7,7 @@
 # published release; do not edit either by hand.
 
 pkgname=haven-terminal
-pkgver=0.0.4
+pkgver=0.0.5
 pkgrel=1
 pkgdesc='A GPU terminal with the multiplexer already inside it'
 arch=('x86_64' 'aarch64')
@@ -30,7 +30,7 @@ provides=("haven=$pkgver")
 conflicts=('haven' 'haven-terminal-bin' 'haven-terminal-git')
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('8aaa518b20fd25bd1849fa5cd7e294efc0b4f54d797397d1f7e835cdbf0478c3')
+sha256sums=('40181ae11548b6c14fe171307d15e8939e060dd068c3a8a1f9a56adab0ec6d83')
 
 _srcdir="Haven-$pkgver"
 
