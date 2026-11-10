@@ -1,5 +1,12 @@
 # Writing plugins, and publishing a repository of them
 
+The plugins Haven ships, and the repository they are published from,
+live in
+[haven-terminal/plugins](https://github.com/haven-terminal/plugins).
+That is the place to copy from, and the place to send one. What follows
+is how to write your own, and how to publish a repository of your own if
+you would rather not.
+
 Two halves, and only one of them exists.
 
 **Publishing** is finished and usable today. You can build an artifact,

@@ -23,19 +23,19 @@ fn session() -> Session {
 
 #[test]
 fn a_plugin_with_no_capabilities_loads_and_draws() {
-    let Some(mut clock) = plain_load("clock", session()) else { return };
-    assert_eq!(clock.name(), "clock");
-    let drawn = text_of(&clock.render().expect("render"));
-    // `HH:MM`, whatever the hour happens to be.
-    assert_eq!(drawn.len(), 5, "expected HH:MM, got {drawn:?}");
-    assert_eq!(drawn.chars().nth(2), Some(':'), "{drawn:?}");
-    assert!(drawn.chars().filter(|c| c.is_ascii_digit()).count() == 4, "{drawn:?}");
+    // `event_probe` asks for nothing at all: it reads the panes, which
+    // needs no grant, keeps a count and formats it. The plugins people
+    // install live in their own repository and are tested there; what has
+    // to hold here is that the runtime loads and runs one.
+    let Some(mut probe) = plain_load("event_probe", session()) else { return };
+    assert_eq!(probe.name(), "event_probe");
+    assert_eq!(text_of(&probe.render().expect("render")), "ticks: 0");
 
     // `render` is pure, so calling it again is allowed and is not an
     // error — the host calls it whenever it draws.
-    assert!(clock.render().is_ok());
-    // And it wants nothing from the host.
-    assert_eq!(clock.on_event(&Event::Started).expect("started"), Vec::new());
+    assert_eq!(text_of(&probe.render().expect("render")), "ticks: 0");
+    // And being started asks the host for nothing.
+    assert_eq!(probe.on_event(&Event::Started).expect("started"), Vec::new());
 }
 
 #[test]

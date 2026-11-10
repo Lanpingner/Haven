@@ -24,10 +24,14 @@ fn loading_every_plugin_is_not_something_you_would_wait_for() {
             let name = e.file_name().to_string_lossy().to_string();
             name.strip_suffix(".wasm").map(str::to_string)
         })
-        // The probes are fixtures; one of them never returns.
-        .filter(|name| !name.ends_with("_probe"))
+        // `fail_probe` refuses to start on purpose, which is its whole
+        // job elsewhere and is not a timing measurement here.
+        .filter(|name| name != "fail_probe")
         .collect();
-    assert!(names.len() >= 10, "expected the shipped plugins, found {names:?}");
+    // The probes, which is what this repository builds. The plugin
+    // repository runs the same measurement over the real set by
+    // pointing `$HAVEN_PLUGINS` at itself.
+    assert!(names.len() >= 5, "expected the probes, found {names:?}");
 
     let cache = std::env::temp_dir().join(format!("haven-timing-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&cache);

@@ -6,16 +6,14 @@
 # a target where it means nothing.
 [workspace]
 resolver = "2"
-# Globs, so adding a plugin is adding a directory. Several people —
-# or several agents — writing plugins at once must not all be editing
-# this one file.
-members = [
-    # The plugins people would install.
-    "useful/*",
-    # Fixtures, not plugins anybody would install: each exists so a
-    # boundary in `haven-plugin-host` has something to test against.
-    "probes/*",
-]
+# Fixtures, not plugins anybody would install: each exists so a boundary
+# in `haven-plugin-host` has something to test against — a plugin that
+# loops forever, one that refuses to start, one that tries to leave the
+# sandbox, one that asks for what it was not granted.
+#
+# The plugins people install live in their own repository,
+# `haven-terminal/plugins`, and are tested there against this crate.
+members = ["probes/*"]
 
 [workspace.package]
 version = "0.1.0"

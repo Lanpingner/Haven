@@ -106,11 +106,21 @@ impl From<Session> for Snapshot {
 /// Build every plugin once per test run. `None` when the toolchain for
 /// it is not installed, so a contributor without `wasm32-wasip2` can
 /// still run the suite — CI has it, which is where it has to hold.
+///
+/// Which plugins depends on who is asking. `$HAVEN_PLUGINS` names a
+/// cargo workspace of them, which is how the plugin repository runs its
+/// own tests against this crate as a git dependency; without it the
+/// probes in this repository are used, which is what the runtime's own
+/// tests want. A hard-coded relative path would have tied this crate to
+/// one directory in one repository.
 pub fn built_plugins() -> Option<&'static PathBuf> {
     static BUILT: OnceLock<Option<PathBuf>> = OnceLock::new();
     BUILT
         .get_or_init(|| {
-            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+            let root = match std::env::var_os("HAVEN_PLUGINS") {
+                Some(dir) => PathBuf::from(dir),
+                None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
+            };
             let installed = Command::new("rustup")
                 .args(["target", "list", "--installed"])
                 .output()
@@ -153,9 +163,10 @@ pub fn component(name: &str) -> Option<Vec<u8>> {
         }
     }
     panic!(
-        "neither {} nor {} was built — is the plugin a directory under plugins/useful?",
+        "neither {} nor {} was built — is it a member of the workspace at {}?",
         direct.display(),
-        underscored.display()
+        underscored.display(),
+        dir.display()
     )
 }
 

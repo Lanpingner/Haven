@@ -37,9 +37,11 @@ way the repository did.
 
 ## What there is to install
 
-Sixteen plugins ship in the repository, under `plugins/useful`. They are
-the reference set and they are also what the runtime is tested against,
-so each one really runs:
+Sixteen plugins live in
+[haven-terminal/plugins](https://github.com/haven-terminal/plugins),
+which is also the signed repository they are published from. Each one
+really runs — the tests there load the real component into this runtime
+with the real capability checks:
 
 | Plugin | Shows | Needs |
 |---|---|---|
