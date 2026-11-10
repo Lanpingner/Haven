@@ -1852,7 +1852,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "haven"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "haven-backend",
  "haven-client",
@@ -1873,7 +1873,7 @@ dependencies = [
 
 [[package]]
 name = "haven-backend"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "haven-pty",
  "haven-shell",
@@ -1881,7 +1881,7 @@ dependencies = [
 
 [[package]]
 name = "haven-client"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "bitflags 2.13.2",
  "haven-core",
@@ -1891,7 +1891,7 @@ dependencies = [
 
 [[package]]
 name = "haven-core"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "bitflags 2.13.2",
  "serde",
@@ -1901,7 +1901,7 @@ dependencies = [
 
 [[package]]
 name = "haven-daemon"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "haven-backend",
  "haven-client",
@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "haven-mux"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "haven-core",
  "haven-proto",
@@ -1931,7 +1931,7 @@ dependencies = [
 
 [[package]]
 name = "haven-plugin"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "pgp",
  "sha2",
@@ -1939,7 +1939,7 @@ dependencies = [
 
 [[package]]
 name = "haven-plugin-host"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "haven-plugin",
  "wasmtime",
@@ -1948,7 +1948,7 @@ dependencies = [
 
 [[package]]
 name = "haven-proto"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "haven-core",
  "postcard",
@@ -1957,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "haven-pty"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "libc",
  "rustix 1.1.6",
@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "haven-render"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "arboard",
  "bytemuck",
@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "haven-shell"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "haven-pty",
  "libc",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "haven-tui"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "haven-client",
  "haven-core",
@@ -2006,7 +2006,7 @@ dependencies = [
 
 [[package]]
 name = "haven-vtwrite"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "haven-core",
 ]
@@ -5439,7 +5439,7 @@ dependencies = [
 
 [[package]]
 name = "winit-probe"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "pollster",
  "wgpu",
