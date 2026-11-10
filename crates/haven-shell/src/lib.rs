@@ -88,6 +88,23 @@ fn materialize(dir: &Path, rel: &str, script: &str) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+/// A path as a shell can safely read it.
+///
+/// The shims are generated shell code with paths substituted into them,
+/// and the paths were substituted bare. A home directory or runtime
+/// directory containing a space, a parenthesis or a `$` therefore
+/// produced a shim that did not parse, and a shell with no integration
+/// and no complaint — found when a test used a directory with
+/// parentheses in the name and the shell silently reported nothing.
+///
+/// Single quotes, because inside them a shell interprets nothing at all.
+/// The one character that cannot appear is `'`, so each is closed,
+/// escaped and reopened, which is the standard trick and handles every
+/// path a filesystem can hold.
+fn shell_quoted(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
 fn prepend_path_env(cfg: &mut PtyConfig, key: &str, value: &Path) {
     let existing = std::env::var_os(key);
     let mut combined = OsString::from(value);
@@ -207,13 +224,13 @@ impl Shell for ZshShell {
                     "ZDOTDIR={user}\n\
                      [[ -f {user}/.{rc} ]] && source {user}/.{rc}\n\
                      source {script}\n",
-                    user = user_dir.display(),
-                    script = script.display(),
+                    user = shell_quoted(&user_dir),
+                    script = shell_quoted(&script),
                 )
             } else {
                 format!(
                     "ZDOTDIR={user}\n[[ -f {user}/.{rc} ]] && source {user}/.{rc}\n",
-                    user = user_dir.display(),
+                    user = shell_quoted(&user_dir),
                 )
             };
             materialize(&zdotdir, &format!(".{rc}"), &body)?;
@@ -256,8 +273,8 @@ impl Shell for BashShell {
             "bash-rcfile",
             &format!(
                 "[ -f {home}/.bashrc ] && . {home}/.bashrc\n. {script}\n",
-                home = home.display(),
-                script = script.display(),
+                home = shell_quoted(&home),
+                script = shell_quoted(&script),
             ),
         )?;
         cfg.args.insert(0, "--rcfile".into());
@@ -591,8 +608,10 @@ mod tests {
         let mut cfg = PtyConfig::default();
         assert_eq!(ZshShell.install(&mut cfg, &ctx(tmp.path(), false)).unwrap(), Injection::Auto);
         let zshrc = fs::read_to_string(tmp.path().join("zdotdir/.zshrc")).unwrap();
-        assert!(zshrc.contains("ZDOTDIR=/home/test"), "{zshrc}");
-        assert!(zshrc.contains("source /home/test/.zshrc"), "{zshrc}");
+        // Quoted, because the path is substituted into shell code and a
+        // path may contain anything.
+        assert!(zshrc.contains("ZDOTDIR='/home/test'"), "{zshrc}");
+        assert!(zshrc.contains("source '/home/test'/.zshrc"), "{zshrc}");
         assert!(zshrc.contains("haven-integration.zsh"), "{zshrc}");
         assert_eq!(cfg.env[0].0, "ZDOTDIR");
     }
@@ -604,7 +623,7 @@ mod tests {
         assert_eq!(BashShell.install(&mut cfg, &ctx(tmp.path(), false)).unwrap(), Injection::Auto);
         assert_eq!(cfg.args[0], "--rcfile");
         let rcfile = fs::read_to_string(&cfg.args[1]).unwrap();
-        assert!(rcfile.contains("/home/test/.bashrc"), "{rcfile}");
+        assert!(rcfile.contains("'/home/test'/.bashrc"), "{rcfile}");
         assert!(rcfile.contains("haven-integration.bash"), "{rcfile}");
     }
 
@@ -654,5 +673,68 @@ mod tests {
         );
         assert_eq!(injection, Injection::Unsupported);
         assert!(!cfg.env.iter().any(|(k, _)| k == "XDG_DATA_DIRS"));
+    }
+}
+
+#[cfg(test)]
+mod quoting_tests {
+    use super::*;
+
+    /// The shims are generated shell code with paths substituted in, and
+    /// a path is whatever the filesystem allows. Checked by handing the
+    /// result to `bash -n`, which is the only authority on whether a
+    /// bash file parses.
+    #[test]
+    fn a_directory_a_shell_would_choke_on_still_produces_a_shim_that_parses() {
+        let awkward = std::env::temp_dir()
+            .join(format!("haven shell (test) 'quoted' {}", std::process::id()));
+        let home = awkward.join("home dir");
+        std::fs::create_dir_all(&home).expect("home");
+
+        let ctx = IntegrationCtx {
+            program: PathBuf::from("/bin/bash"),
+            dir: awkward.clone(),
+            login: false,
+            home: Some(home.clone()),
+        };
+        let mut cfg = PtyConfig { size: Default::default(), ..Default::default() };
+        let injection = BashShell.install(&mut cfg, &ctx).expect("install");
+        assert_eq!(injection, Injection::Auto);
+
+        let rcfile = awkward.join("bash-rcfile");
+        let body = std::fs::read_to_string(&rcfile).expect("rcfile");
+        assert!(body.contains('\''), "the paths should be quoted:\n{body}");
+
+        // The real test: bash's own parser.
+        if let Some(bash) =
+            ["/bin/bash", "/usr/bin/bash"].into_iter().find(|p| Path::new(p).exists())
+        {
+            let out =
+                std::process::Command::new(bash).arg("-n").arg(&rcfile).output().expect("bash -n");
+            assert!(
+                out.status.success(),
+                "bash cannot parse the shim it would be given:\n{body}\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&awkward);
+    }
+
+    #[test]
+    fn quoting_survives_a_quote_in_the_path() {
+        // The one character single quotes cannot contain. Closed,
+        // escaped and reopened, which is the standard trick.
+        let quoted = shell_quoted(Path::new("/tmp/it's here"));
+        assert_eq!(quoted, "'/tmp/it'\\''s here'");
+        if let Some(bash) =
+            ["/bin/bash", "/usr/bin/bash"].into_iter().find(|p| Path::new(p).exists())
+        {
+            let out = std::process::Command::new(bash)
+                .args(["-c", &format!("printf '%s' {quoted}")])
+                .output()
+                .expect("bash");
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "/tmp/it's here");
+        }
     }
 }

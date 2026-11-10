@@ -227,9 +227,36 @@ fn less_paginates_and_shows_its_prompt() {
 // --- shell integration ------------------------------------------------------
 
 fn integration_run(shell: &Path, send: &str, integrate: bool) -> (Run, Injection) {
+    // A counter rather than the thread id: `ThreadId(3)` formats with
+    // parentheses, and the path ends up inside a generated `.bashrc`
+    // that sources it — where an unquoted `(` is a syntax error, so the
+    // shell starts with no integration and the test fails saying the
+    // shell never reported anything. Worth knowing beyond the test: a
+    // runtime directory containing shell metacharacters would do the
+    // same thing to a real user.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("haven-tests-{}-{n}", std::process::id()));
+    // Created here, because nothing downstream does: the shared
+    // directory this replaced existed only because an earlier run had
+    // left it there, and a fresh one silently got no shim written into
+    // it — which looks exactly like a shell that does not support
+    // integration.
+    std::fs::create_dir_all(&dir).expect("integration directory");
     let ctx = IntegrationCtx {
         program: shell.to_path_buf(),
-        dir: std::env::temp_dir().join("haven-tests"),
+        // One directory per test thread, not one for the suite.
+        //
+        // Shell integration works by writing a shim — a `.bashrc`, a
+        // `ZDOTDIR`, a fish config — and pointing the shell at it. Every
+        // test here shared one directory, and cargo runs them in
+        // parallel: one test rewriting the shim while another's bash was
+        // sourcing it left that shell with no integration, so it emitted
+        // no `OSC 133` and the test failed claiming the shell did not
+        // report the command it ran. It reported nothing because it had
+        // been given nothing. It only ever failed under the contention of
+        // a CI runner, which is the worst place to learn it.
+        dir: dir.clone(),
         login: false,
         home: std::env::var_os("HOME").map(PathBuf::from),
     };
