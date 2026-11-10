@@ -65,7 +65,38 @@ pacman-key --lsign-key "$fpr" >/dev/null 2>&1
 say "trusted in the pacman keyring"
 
 if grep -q "^\[$NAME\]" "$CONF"; then
-    say "[$NAME] is already in $CONF, leaving it alone"
+    # Already there — but pointing where? The repository moved from a
+    # personal account into an organisation, and a machine that added it
+    # before the move has the old URL. GitHub redirects, so it keeps
+    # working and nothing complains, which is exactly why it would sit
+    # there for years. Running this again should fix it.
+    #
+    # The Server line inside this section only: another repository's
+    # Server is none of our business.
+    current=$(awk -v name="$NAME" '
+        $0 == "[" name "]" { inside = 1; next }
+        inside && /^\[/ { inside = 0 }
+        inside && /^[[:space:]]*Server[[:space:]]*=/ {
+            sub(/^[^=]*=[[:space:]]*/, "")
+            print
+            exit
+        }
+    ' "$CONF")
+
+    if [ "$current" = "$SERVER" ]; then
+        say "[$NAME] is already in $CONF, pointing at the right place"
+    else
+        cp "$CONF" "$CONF.haven-backup"
+        awk -v name="$NAME" -v server="$SERVER" '
+            $0 == "[" name "]" { inside = 1; print; next }
+            inside && /^\[/ { inside = 0 }
+            inside && /^[[:space:]]*Server[[:space:]]*=/ { print "Server = " server; next }
+            { print }
+        ' "$CONF.haven-backup" > "$CONF"
+        say "[$NAME] pointed at $SERVER"
+        say "  (it was $current)"
+        say "  kept $CONF.haven-backup"
+    fi
 else
     cp "$CONF" "$CONF.haven-backup"
     cat >> "$CONF" <<EOF

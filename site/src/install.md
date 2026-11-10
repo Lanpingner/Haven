@@ -26,6 +26,18 @@ a machine whose next upgrade fails on a signature it has no way to check.
 `add-repo.sh --remove` takes the repository back out, keeping a backup of
 the file it edited.
 
+**If you added the repository before Haven moved** into the
+`haven-terminal` organisation, your `/etc/pacman.conf` still names the old
+URL. GitHub redirects, so nothing has broken and nothing has told you —
+which is why it would sit there indefinitely. Run the script again and it
+repoints that one `Server` line, says what it changed, and keeps a backup:
+
+```sh
+curl -fsSL https://github.com/haven-terminal/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
+```
+
+The signing key did not change, so there is nothing to re-trust.
+
 Or, from the AUR:
 
 ```sh
