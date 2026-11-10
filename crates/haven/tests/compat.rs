@@ -232,6 +232,15 @@ fn less_paginates_and_shows_its_prompt() {
 // --- shell integration ------------------------------------------------------
 
 fn integration_run(shell: &Path, send: &str, integrate: bool) -> (Run, Injection) {
+    integration_run_env(shell, send, integrate, &[])
+}
+
+fn integration_run_env(
+    shell: &Path,
+    send: &str,
+    integrate: bool,
+    extra: &[(&str, &str)],
+) -> (Run, Injection) {
     // A counter rather than the thread id: `ThreadId(3)` formats with
     // parentheses, and the path ends up inside a generated `.bashrc`
     // that sources it — where an unquoted `(` is a syntax error, so the
@@ -266,6 +275,9 @@ fn integration_run(shell: &Path, send: &str, integrate: bool) -> (Run, Injection
         home: std::env::var_os("HOME").map(PathBuf::from),
     };
     let (mut cfg, _, injection) = launch_config(Some(shell), false, integrate, &ctx);
+    for (key, value) in extra {
+        cfg.env.push(((*key).into(), (*value).into()));
+    }
     cfg.args.push("-i".into());
     cfg.size = PtySize { cols: 60, rows: 8, ..Default::default() };
     let limits = PumpLimits { idle: Duration::from_millis(1500), total: Duration::from_secs(20) };
@@ -301,6 +313,36 @@ fn a_real_shell_reports_which_command_it_ran() {
         // spinner forever.
         assert!(!run.emu.term.command_running, "{name} never reported the command ending");
     }
+}
+
+/// The same marks, from the path bash 3.2 has to take.
+///
+/// macOS ships bash 3.2 — the last GPLv2 release, from 2007 — which has
+/// no `PS0`, so the `C` mark never fired there: prompt marks worked, the
+/// exit status worked, and every pane reported no command at all. Which
+/// is most of what shell integration is for, and it had been that way
+/// for as long as there was a macOS CI job to notice.
+///
+/// There is no bash 3.2 on the machines this runs on, so the script
+/// honours `HAVEN_NO_PS0` to take the old path deliberately. An
+/// untested fallback is not a fallback. (It was also checked against a
+/// real bash 3.2 in a container while it was written, which is the part
+/// this test cannot do.)
+#[test]
+fn bash_without_ps0_still_reports_the_command() {
+    let Some(bash) = find("bash") else { return };
+    let (run, _) = integration_run_env(&bash, "echo a; echo b\n", true, &[("HAVEN_NO_PS0", "1")]);
+    assert!(run.raw.contains("133;C"), "no command-start mark; raw:\n{}", run.raw);
+    assert_eq!(
+        run.emu.term.command.as_deref(),
+        Some("echo a; echo b"),
+        "the old path lost the command line; raw:\n{}",
+        run.raw
+    );
+    assert!(!run.emu.term.command_running, "never reported the command ending");
+    // And the prompt marks still work, which they always did.
+    assert!(run.raw.contains("133;A"), "no prompt-start mark");
+    assert!(run.raw.contains("133;D"), "no command-end mark");
 }
 
 #[test]
