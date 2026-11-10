@@ -262,11 +262,20 @@ fn unpack(artifact: &[u8], into: &Path, plugin: &Plugin) -> Result<(), Error> {
         .arg("-C")
         .arg(into)
         .args([
-            // None of the archive's opinions about ownership, permissions
-            // or times are ours to honour.
+            // None of the archive's opinions about ownership or
+            // permissions are ours to honour.
+            //
+            // These two and no more, because `tar` is not one program:
+            // this ran with `--no-overwrite-dir` as well, which is GNU's
+            // alone, so every install on macOS or a BSD failed with
+            // `Option --no-overwrite-dir is not supported` — a message
+            // about a flag, from a plugin installer, which tells the user
+            // nothing they can act on. It was guarding against an
+            // existing directory's permissions being replaced, and there
+            // are none: the staging directory is created empty a few
+            // lines above.
             "--no-same-owner",
             "--no-same-permissions",
-            "--no-overwrite-dir",
         ])
         .output()
         .map_err(|e| {
