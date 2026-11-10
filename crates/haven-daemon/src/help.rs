@@ -246,10 +246,16 @@ OPTIONS
     fn a_finished_lookup_is_drained_once_and_stops_being_pending() {
         let mut helper = Helper::default();
         helper.ask("true".into());
-        // Wait for the thread, briefly: this is the one test that touches
-        // the machine's own man pages, and it asserts nothing about what
-        // they say — only that an answer arrives and the slot clears.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // Wait for the thread. This is the one test that touches the
+        // machine's own man pages, and it asserts nothing about what they
+        // say — only that an answer arrives, even an empty one, and that
+        // the slot clears.
+        //
+        // Thirty seconds, because `man` is entitled to be slow the first
+        // time it is asked anything: on a fresh macOS runner it may build
+        // its index before answering, and ten seconds was not enough. The
+        // test is about the plumbing, not about how fast `man` is.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut got = Vec::new();
         while got.is_empty() && std::time::Instant::now() < deadline {
             got = helper.drain();
