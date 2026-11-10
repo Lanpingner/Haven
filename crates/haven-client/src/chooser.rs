@@ -16,15 +16,40 @@ use haven_proto::{CellSize, SessionId, SessionInfo, SessionStatus};
 use crate::frame::Widget;
 
 /// What picking a row does.
+///
+/// Every row that is somewhere says which session that somewhere is in. A
+/// window index and a pane id are both only meaningful inside one session —
+/// the ids restart per session, so two sessions commonly have a pane 1 each
+/// — and the tree lists every session's tabs. Without the session, picking
+/// a row under another session sent a window index or a pane id that the
+/// daemon resolved against the session the client was already in: either
+/// the wrong tab, or nothing at all.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Choice {
     Session(SessionId),
-    Window(u16),
-    Pane(u32),
+    Window {
+        session: SessionId,
+        index: u16,
+    },
+    Pane {
+        session: SessionId,
+        id: u32,
+    },
     /// Make one, and go there. The chooser is where you are already
     /// deciding which session you want, so it is where "none of these"
     /// belongs.
     NewSession,
+}
+
+impl Choice {
+    /// Which session picking this lands you in, if it is a session at all.
+    pub fn session(&self) -> Option<SessionId> {
+        match *self {
+            Choice::Session(id) => Some(id),
+            Choice::Window { session, .. } | Choice::Pane { session, .. } => Some(session),
+            Choice::NewSession => None,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -65,9 +90,8 @@ impl Chooser {
         match row.choice {
             // Nothing exists to preview yet.
             Choice::NewSession => None,
-            Choice::Pane(id) => Some(id),
-            Choice::Window(index) => {
-                let session = self.session_of(self.selected)?;
+            Choice::Pane { id, .. } => Some(id),
+            Choice::Window { session, index } => {
                 let info = sessions.iter().find(|s| s.id == session)?;
                 info.tabs.get(index as usize).map(|w| w.active_pane)
             }
@@ -76,14 +100,6 @@ impl Chooser {
                 info.tabs.first().map(|w| w.active_pane)
             }
         }
-    }
-
-    /// Which session a row belongs to: the nearest session row above it.
-    fn session_of(&self, at: usize) -> Option<SessionId> {
-        self.rows[..=at].iter().rev().find_map(|r| match r.choice {
-            Choice::Session(id) => Some(id),
-            _ => None,
-        })
     }
 }
 
@@ -135,7 +151,7 @@ impl Chooser {
                         window.name,
                         if window.zoomed { " (zoomed)" } else { "" }
                     ),
-                    choice: Choice::Window(index as u16),
+                    choice: Choice::Window { session: info.id, index: index as u16 },
                     current: active_window && window.panes.len() <= 1,
                     last: index + 1 == info.tabs.len(),
                     parent_last: false,
@@ -163,7 +179,7 @@ impl Chooser {
                                 if pane.running { " …" } else { "" }
                             ),
                         },
-                        choice: Choice::Pane(pane.id),
+                        choice: Choice::Pane { session: info.id, id: pane.id },
                         current: active,
                         last: pane_index + 1 == pane_count,
                         parent_last: tab_is_last,
@@ -405,15 +421,18 @@ mod tests {
             kinds,
             vec![
                 Choice::Session(SessionId(1)),
-                Choice::Window(0),
-                Choice::Pane(10),
-                Choice::Pane(11),
+                Choice::Window { session: SessionId(1), index: 0 },
+                Choice::Pane { session: SessionId(1), id: 10 },
+                Choice::Pane { session: SessionId(1), id: 11 },
                 // And the session nobody is attached to, expanded too: the
                 // listing carries its tabs, which is what the tree is for.
+                // Its rows name their own session — note that both sessions
+                // have a pane 10 and a pane 11, because the ids restart, so
+                // the id alone cannot say which pane a row means.
                 Choice::Session(SessionId(2)),
-                Choice::Window(0),
-                Choice::Pane(10),
-                Choice::Pane(11),
+                Choice::Window { session: SessionId(2), index: 0 },
+                Choice::Pane { session: SessionId(2), id: 10 },
+                Choice::Pane { session: SessionId(2), id: 11 },
                 // Last, and always offered: the tree is where you decide
                 // which session you want, so "none of these" lives here.
                 Choice::NewSession,
@@ -424,7 +443,11 @@ mod tests {
     #[test]
     fn it_opens_on_the_pane_you_are_in() {
         let c = Chooser::new(&[info(1, "work", 1)], Some(&status()));
-        assert_eq!(c.choice(), Some(Choice::Pane(11)), "did not start on the active pane");
+        assert_eq!(
+            c.choice(),
+            Some(Choice::Pane { session: SessionId(1), id: 11 }),
+            "did not start on the active pane"
+        );
     }
 
     #[test]
@@ -435,7 +458,7 @@ mod tests {
         st.windows[0].panes.truncate(1);
         st.windows[0].active_pane = 10;
         let c = Chooser::new(&[info_of(1, "work", 1, &st)], Some(&st));
-        assert_eq!(c.choice(), Some(Choice::Pane(10)));
+        assert_eq!(c.choice(), Some(Choice::Pane { session: SessionId(1), id: 10 }));
     }
 
     #[test]
@@ -444,7 +467,7 @@ mod tests {
         st.windows[0].panes.truncate(1);
         st.windows[0].active_pane = 10;
         let c = Chooser::new(&[info_of(1, "work", 1, &st)], Some(&st));
-        assert_eq!(c.choice(), Some(Choice::Pane(10)));
+        assert_eq!(c.choice(), Some(Choice::Pane { session: SessionId(1), id: 10 }));
     }
 
     #[test]
@@ -484,7 +507,7 @@ mod tests {
         c.resettle();
         // One per session, now that every session's panes are listed.
         assert_eq!(c.visible().len(), 2);
-        assert_eq!(c.choice(), Some(Choice::Pane(11)));
+        assert_eq!(c.choice(), Some(Choice::Pane { session: SessionId(1), id: 11 }));
 
         // A filter matching nothing must not leave a selection pointing off
         // the end of the list.

@@ -1259,3 +1259,38 @@ fn a_tab_is_named_after_the_command_the_shell_reports() {
     let status = client.frame.status.clone().expect("status");
     assert_eq!(status.windows[0].panes[0].command, "make -j8");
 }
+
+/// What the session tree sends when you pick a pane: a bare id, with no
+/// mention of which tab it is in. A client has its own current tab, and
+/// focusing a pane wrote the session's active window directly rather than
+/// going through that view — so the session moved, the client did not, and
+/// the tree looked like a key that does nothing.
+#[test]
+fn picking_a_pane_in_another_tab_takes_the_client_there() {
+    let mut daemon = daemon();
+    let mut client = attach(&mut daemon, 40, 8);
+    settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some());
+    let home = client.focus.unwrap();
+
+    send_action(&mut client, Action::NewWindow { program: None }).unwrap();
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| c[0].focus.is_some_and(|p| p != home)),
+        "no second tab"
+    );
+    let away = client.focus.unwrap();
+
+    // Back to the first tab, then pick the pane in the second by id —
+    // which is what the session tree sends.
+    send_action(&mut client, Action::SelectWindow(0)).unwrap();
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| c[0].focus == Some(home)),
+        "could not get back to the first tab"
+    );
+
+    send_action(&mut client, Action::SelectPane(away.0)).unwrap();
+    assert!(
+        settle(&mut daemon, &mut [&mut client], |c| c[0].focus == Some(away)),
+        "picking a pane in another tab left the client on {:?}, wanted {away:?}",
+        client.focus
+    );
+}

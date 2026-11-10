@@ -1050,25 +1050,39 @@ impl<F: Frontend, T: Transport> Client<F, T> {
         })
     }
 
+    /// Attach to a session, unless we are already on it.
+    ///
+    /// Shared by the three things the tree can pick, because a tab and a
+    /// pane are each in a session and picking one has to go there first.
+    /// Nothing is sent when it is the session we are on: a needless
+    /// re-attach throws away every pane we hold and asks for all of them
+    /// again, which looks like the screen blinking for no reason.
+    fn go_to_session(&mut self, id: haven_proto::SessionId) -> Result<(), TransportError> {
+        if self.frame.status.as_ref().is_some_and(|s| s.session == id) {
+            return Ok(());
+        }
+        // Attaching elsewhere invalidates every pane we hold, so the frame
+        // is cleared rather than left showing the old session.
+        let mut caps = self.frontend.caps();
+        caps.size = status_bar::reserve(caps.size);
+        self.frame.panes.clear();
+        self.frame.status = None;
+        self.transport.send(ClientMsg::Attach {
+            session: Some(id),
+            caps,
+            env: haven_proto::client_environment(),
+        })
+    }
+
     fn pick(&mut self, choice: chooser::Choice) -> Result<(), TransportError> {
         match choice {
-            chooser::Choice::Session(id) => {
-                // Attaching elsewhere invalidates every pane we hold, so the
-                // frame is cleared rather than left showing the old session.
-                let mut caps = self.frontend.caps();
-                caps.size = status_bar::reserve(caps.size);
-                self.frame.panes.clear();
-                self.frame.status = None;
-                self.transport.send(ClientMsg::Attach {
-                    session: Some(id),
-                    caps,
-                    env: haven_proto::client_environment(),
-                })
-            }
-            chooser::Choice::Window(index) => {
+            chooser::Choice::Session(id) => self.go_to_session(id),
+            chooser::Choice::Window { session, index } => {
+                self.go_to_session(session)?;
                 self.transport.send(ClientMsg::Action(Action::SelectWindow(index)))
             }
-            chooser::Choice::Pane(id) => {
+            chooser::Choice::Pane { session, id } => {
+                self.go_to_session(session)?;
                 self.transport.send(ClientMsg::Action(Action::SelectPane(id)))
             }
             chooser::Choice::NewSession => {

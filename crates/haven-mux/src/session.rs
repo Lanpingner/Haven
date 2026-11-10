@@ -434,8 +434,15 @@ impl Session {
     pub fn focus_pane(&mut self, pane: PaneId) -> bool {
         // Focusing a pane in another window switches to that window, which is
         // what `haven select-pane -t` has to do.
+        //
+        // Through `go_to`, not by assigning `active`: a client looking
+        // through a view of its own has to be moved by its own view, and
+        // writing `active` behind the view's back moved the session while
+        // leaving the client that asked on the tab it started from. That is
+        // the session tree picking a pane in another tab and nothing
+        // happening.
         if let Some(index) = self.windows.iter().position(|w| w.panes().contains(&pane)) {
-            self.active = index;
+            self.go_to(index);
             return self.windows[index].focus_pane(pane);
         }
         false
@@ -541,6 +548,26 @@ mod tests {
         assert!(s.focus_pane(other));
         assert_eq!(s.active, 1);
         assert_eq!(s.active_pane(), other);
+    }
+
+    #[test]
+    fn focusing_a_pane_moves_the_view_a_client_is_looking_through() {
+        // A client with a view of its own must be moved by its own view, not
+        // by the session's `active` behind its back: the daemon reads the
+        // view back afterwards to work out which tab the client is on, so a
+        // write to `active` was read back as "still on the tab you started
+        // from" and the client never moved.
+        let mut s = session();
+        let (_, other, _) = s.new_window();
+        let home = s.windows[0].id;
+        let away = s.windows[1].id;
+        s.view = Some(home);
+
+        assert!(s.focus_pane(other));
+        assert_eq!(s.view, Some(away), "the view stayed on the tab we came from");
+        assert_eq!(s.current_window(), away);
+        assert_eq!(s.active_pane(), other);
+        assert_eq!(s.window_before(), Some(home), "`last` has to know where we were");
     }
 
     #[test]

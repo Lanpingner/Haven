@@ -278,6 +278,38 @@ Neither was findable without synthetic input, so `xsend` (XTEST) exists — and
 with no window manager nothing holds the input focus, so it sets the focus itself
 before typing.
 
+## The session tree moved the session and not the client
+
+`Ctrl+A` `s`, pick a pane in another tab, press Enter, and nothing happened.
+Two independent reasons, which is why it looked so total.
+
+The tree sends a bare pane id, and the daemon answers it with
+`Session::focus_pane`. That found the window holding the pane and wrote
+`self.active`. But a client has a tab of its own — [two clients on one
+session browse independently](./sessions.md), so "the current window" is a
+property of whoever is asking, and the daemon sets `session.view` to the
+asking client's tab for the duration of an action. Every other way of
+changing tabs goes through `go_to`, which writes `view` when there is one
+and `active` when there is not. `focus_pane` wrote `active` behind the
+view's back — so the session moved, and the daemon then read the tab back
+out through the view, which still said the tab the client started on. The
+client was told it had not moved, which was true.
+
+The second reason only shows with more than one session. The tree lists
+every session's tabs and panes, and sent a window *index* or a pane id with
+no mention of which session it belonged to. The daemon resolves both
+against the session the client is attached to. Pane ids restart per
+session, so picking `pane 1` under another session selected *this*
+session's pane 1 — a real pane, the wrong one, and no error anywhere. A
+`Choice` now carries its session, and picking a row in another one attaches
+there first; picking a row in the session you are on does not re-attach,
+because that throws away every pane the client holds and asks for them
+again, which on screen is the whole terminal blinking for no reason.
+
+The lesson is the same one twice: an id is only an id inside the scope that
+minted it, and a field that two paths can write is a field one of them will
+write wrongly.
+
 ## Smaller ones, kept because they cost time
 
 - `haven server run -- prog -x` dropped `-x`. Every other subcommand does

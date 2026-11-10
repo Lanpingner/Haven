@@ -276,7 +276,7 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
     // Once it does, the selection must land on the active pane rather than
     // staying at row zero.
     let settled = Chooser::new(&sessions, Some(&status));
-    assert_eq!(settled.choice(), Some(Choice::Pane(8)));
+    assert_eq!(settled.choice(), Some(Choice::Pane { session: SessionId(1), id: 8 }));
 }
 
 #[test]
@@ -1086,5 +1086,136 @@ fn naming_a_session_is_already_an_answer() {
     assert!(
         !client.transport.sent.iter().any(|m| matches!(m, ClientMsg::ListSessions)),
         "nothing to list: the session was named"
+    );
+}
+
+/// A session with one tab holding one pane, both named by `pane`.
+fn session_with_pane(id: u32, name: &str, pane: u32) -> haven_proto::SessionInfo {
+    let window = haven_proto::WindowInfo {
+        id: 1,
+        name: "shell".into(),
+        panes: vec![haven_proto::PaneInfo {
+            id: pane,
+            rect: Default::default(),
+            title: String::new(),
+            command: String::new(),
+            running: false,
+            user: None,
+        }],
+        active_pane: pane,
+        zoomed: false,
+        synchronized: false,
+        bell: false,
+        activity: false,
+    };
+    haven_proto::SessionInfo {
+        id: SessionId(id),
+        name: name.into(),
+        windows: 1,
+        panes: 1,
+        clients: 0,
+        size: size(80, 24),
+        tabs: vec![window],
+    }
+}
+
+/// The tree lists every session's panes, and a pane id means nothing outside
+/// its own session: both of these sessions have a pane 1. Picking the one in
+/// the session we are not on has to attach there first, or the daemon
+/// resolves the id against the session we are already in — which is either
+/// the wrong pane or no pane at all, and looks like the key doing nothing.
+#[test]
+fn picking_a_pane_in_another_session_goes_to_that_session_first() {
+    use haven_client::chooser::Choice;
+    use haven_proto::{Action, SessionStatus};
+
+    let status = SessionStatus {
+        session: SessionId(1),
+        name: "work".into(),
+        windows: session_with_pane(1, "work", 1).tabs,
+        active_window: 1,
+        started_unix: 0,
+        clients: 1,
+    };
+    let server = ScriptedTransport::new([
+        ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1), build: 0 },
+        ServerMsg::Status(status),
+        ServerMsg::Sessions {
+            sessions: vec![session_with_pane(1, "work", 1), session_with_pane(2, "other", 1)],
+            daemon_build: 0,
+        },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 10), []), server);
+    client.attach_choosing(None, ChooseOnAttach::Always).unwrap();
+    client.tick().unwrap();
+
+    let chooser = client.chooser.as_mut().expect("the tree should be open");
+    let wanted = Choice::Pane { session: SessionId(2), id: 1 };
+    chooser.selected = chooser
+        .rows
+        .iter()
+        .position(|r| r.choice == wanted)
+        .expect("the other session's pane should be listed");
+
+    let before = client.transport.sent.len();
+    client.frontend =
+        ScriptedFrontend::new(size(40, 10), [InputEvent::Key(KeyEvent::named(NamedKey::Enter))]);
+    client.tick().unwrap();
+
+    let after: Vec<_> = client.transport.sent[before..].to_vec();
+    let attached = after
+        .iter()
+        .position(|m| matches!(m, ClientMsg::Attach { session: Some(SessionId(2)), .. }))
+        .unwrap_or_else(|| panic!("never attached to the pane's session: {after:?}"));
+    let selected = after
+        .iter()
+        .position(|m| matches!(m, ClientMsg::Action(Action::SelectPane(1))))
+        .unwrap_or_else(|| panic!("never selected the pane: {after:?}"));
+    assert!(attached < selected, "the pane was selected before we got there: {after:?}");
+}
+
+/// And the session you are already on is not re-attached: that throws away
+/// every pane the client holds and asks for all of them again, which on
+/// screen is the whole terminal blinking for no reason.
+#[test]
+fn picking_a_pane_in_this_session_does_not_reattach() {
+    use haven_client::chooser::Choice;
+    use haven_proto::{Action, SessionStatus};
+
+    let status = SessionStatus {
+        session: SessionId(1),
+        name: "work".into(),
+        windows: session_with_pane(1, "work", 1).tabs,
+        active_window: 1,
+        started_unix: 0,
+        clients: 1,
+    };
+    let server = ScriptedTransport::new([
+        ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1), build: 0 },
+        ServerMsg::Status(status),
+        ServerMsg::Sessions { sessions: vec![session_with_pane(1, "work", 1)], daemon_build: 0 },
+    ]);
+    let mut client = Client::new(ScriptedFrontend::new(size(40, 10), []), server);
+    client.attach_choosing(None, ChooseOnAttach::Always).unwrap();
+    client.tick().unwrap();
+
+    let chooser = client.chooser.as_mut().expect("the tree should be open");
+    let wanted = Choice::Pane { session: SessionId(1), id: 1 };
+    chooser.selected =
+        chooser.rows.iter().position(|r| r.choice == wanted).expect("our own pane is listed");
+
+    let before = client.transport.sent.len();
+    client.frontend =
+        ScriptedFrontend::new(size(40, 10), [InputEvent::Key(KeyEvent::named(NamedKey::Enter))]);
+    client.tick().unwrap();
+
+    let after: Vec<_> = client.transport.sent[before..].to_vec();
+    assert!(
+        !after.iter().any(|m| matches!(m, ClientMsg::Attach { .. })),
+        "re-attached to the session we were already on: {after:?}"
+    );
+    assert!(
+        after.iter().any(|m| matches!(m, ClientMsg::Action(Action::SelectPane(1)))),
+        "the pane was never selected: {after:?}"
     );
 }

@@ -200,12 +200,15 @@ on, in its own colours, beside the list. It opens on the pane you are in.
 | `j` / `k` or arrows | move (wraps) |
 | type anything | filter the list |
 | `Backspace` | undo a filter character |
-| `Enter` | go there — attaching to another session if that is what is selected |
+| `Enter` | go there — attaching to another session if the row is in one |
 | `Esc` | close |
 
 The tabs come from the listing rather than from your own attachment, so a
 session nobody is attached to opens as a tree like any other — which is the
-case you are in when you are looking for where you left something.
+case you are in when you are looking for where you left something. Picking
+any row inside one goes there, not only its session row: a tab and a pane
+both say which session they are in, because the ids restart per session and
+two sessions commonly have a pane 1 each.
 
 The preview is asked for per selection and only for a pane that is not
 already on the screen beside the list. Holding an arrow down does not send
