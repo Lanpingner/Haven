@@ -1,6 +1,6 @@
 pkgbase = haven-terminal-bin
 	pkgdesc = A GPU terminal with the multiplexer already inside it (binary release)
-	pkgver = 0.0.5
+	pkgver = 0.0.6
 	pkgrel = 1
 	url = https://github.com/haven-terminal/Haven
 	arch = x86_64
@@ -16,14 +16,14 @@ pkgbase = haven-terminal-bin
 	optdepends = libxi: input on X11
 	optdepends = wayland: windows on Wayland
 	optdepends = noto-fonts-emoji: colour emoji
-	provides = haven=0.0.5
-	provides = haven-terminal=0.0.5
+	provides = haven=0.0.6
+	provides = haven-terminal=0.0.6
 	conflicts = haven
 	conflicts = haven-terminal
 	conflicts = haven-terminal-git
 	options = !strip
 	options = !debug
-	source_x86_64 = https://github.com/haven-terminal/Haven/releases/download/v0.0.5/haven-0.0.5-x86_64-unknown-linux-gnu.tar.gz
-	sha256sums_x86_64 = 29a36e16c6b8790e60c5f6d0c17235b1c5c1565774b76d1845f5ba8f2c49fc55
+	source_x86_64 = https://github.com/haven-terminal/Haven/releases/download/v0.0.6/haven-0.0.6-x86_64-unknown-linux-gnu.tar.gz
+	sha256sums_x86_64 = 70e16d526065595cde9908488c86e19af809ea3629804b9b69542948815a76e2
 
 pkgname = haven-terminal-bin

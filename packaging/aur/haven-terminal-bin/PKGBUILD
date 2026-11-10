@@ -7,7 +7,7 @@
 # published release; do not edit either by hand.
 
 pkgname=haven-terminal-bin
-pkgver=0.0.5
+pkgver=0.0.6
 pkgrel=1
 pkgdesc='A GPU terminal with the multiplexer already inside it (binary release)'
 # Only what the release workflow builds. The source package covers the rest.
@@ -27,7 +27,7 @@ conflicts=('haven' 'haven-terminal' 'haven-terminal-git')
 # symbols out of a binary that has none produces an empty package.
 options=('!strip' '!debug')
 source_x86_64=("$url/releases/download/v$pkgver/haven-$pkgver-x86_64-unknown-linux-gnu.tar.gz")
-sha256sums_x86_64=('29a36e16c6b8790e60c5f6d0c17235b1c5c1565774b76d1845f5ba8f2c49fc55')
+sha256sums_x86_64=('70e16d526065595cde9908488c86e19af809ea3629804b9b69542948815a76e2')
 
 _dir="haven-$pkgver-x86_64-unknown-linux-gnu"
 
