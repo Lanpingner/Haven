@@ -203,7 +203,12 @@ fn vim_renders_a_buffer_and_the_tilde_filler() {
         &[("TERM", "xterm-256color")],
         "",
         (40, 8),
-        900,
+        // Generous, because this is "does vim's output reach the grid"
+        // and not "how fast is vim". 900ms was enough on a developer's
+        // machine and not on a CI runner with sixteen tests competing
+        // for two cores, where it produced an empty screen and an
+        // assertion that read as a rendering bug.
+        3_000,
     );
     assert!(run.contains("hello from vim"), "{}", run.screen());
     assert!(run.contains("~"), "vim's empty-line filler is missing:\n{}", run.screen());
