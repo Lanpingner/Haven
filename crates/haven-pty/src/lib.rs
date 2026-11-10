@@ -74,7 +74,6 @@ impl Pty {
         grantpt(&master)?;
         unlockpt(&master)?;
         let slave_name = ptsname(&master, Vec::new())?;
-        tcsetwinsize(&master, cfg.size.into())?;
 
         let program = cfg.program.clone().unwrap_or_else(|| PathBuf::from("/bin/sh"));
         let mut cmd = Command::new(&program);
@@ -104,6 +103,20 @@ impl Pty {
             rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOCTTY,
             rustix::fs::Mode::empty(),
         )?;
+        // The size, now that there is a slave to set it on.
+        //
+        // Not on the master before this point, which is where it used to
+        // be: macOS refuses `TIOCSWINSZ` on a pty master that has no
+        // slave open yet, so every pty in the process failed to spawn and
+        // every test that needed one failed with it. Linux is happy
+        // either way, which is why it survived so long — the Linux CI was
+        // green and the macOS one was read as "macOS is untested".
+        //
+        // Both ends refer to the same terminal, so setting it here is the
+        // same setting; `resize` keeps using the master, which is correct
+        // once a slave exists.
+        tcsetwinsize(&slave, cfg.size.into())?;
+
         let slave_raw = slave.as_raw_fd();
         let master_raw = master.as_raw_fd();
 
