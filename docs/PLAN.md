@@ -790,6 +790,46 @@ and the command palette are written against the plugin API.** If the API can't
 express them, it's not finished. No private back door for built-ins.
 
 ### 15.1 Runtime
+
+**Built** (`crates/haven-plugin-host`, `crates/haven-plugin-api`,
+`plugins/`). What landed, and where it differs from the sketch below:
+
+- wasmtime with the component model, one `Store` per plugin, fuel-metered
+  at 50M instructions per call and topped up before each one, so the
+  limit is per call rather than per lifetime. Epoch interruption is not
+  used: fuel alone stops a runaway deterministically, and a second
+  mechanism would be a second thing to get wrong.
+- Plugins run in the daemon, **per session** rather than per daemon: a
+  plugin's world is a session, and two sessions get their own instance
+  with their own memory. That is also the only reading of `remember`
+  that makes sense.
+- The sandbox is WASI granted nothing. `wasm32-wasip2` links the WASI
+  standard library whether a plugin uses it or not, so the imports have
+  to be satisfied — by a context with no filesystem, no network, no
+  environment and no stdio.
+- Guests are built with plain `cargo build --target wasm32-wasip2`. No
+  `cargo-component` and no `wasm-tools`: since Rust 1.82 the target emits
+  a component directly.
+- `render` is called on every plugin every tick, whatever it subscribed
+  to. That is a contract, not an implementation detail — the first
+  plugins written against the API depended on it.
+- Still missing: hot reload, and anything beyond a status segment. The
+  widget tree of §15.2 is not built, so a plugin cannot put up an
+  overlay. `Command::Act` is collected and not applied, because the
+  name-to-`Action` parser lives in the `haven` crate and the daemon
+  cannot depend on it.
+- Known API gaps, all found by writing fifteen plugins against it:
+  `host::run` has no working directory (so a plugin must pass `git -C`
+  and the daemon's own cwd is usually a repository too, which makes the
+  bug produce plausible output); `run`'s error does not distinguish "not
+  granted" from "the program failed", so plugins match on the prose;
+  `pane-text` can only ask for the last N rows, not "what the command
+  that just ended printed", though the host knows that boundary from
+  `OSC 133`; `remember` carries one key, so composite state cannot be
+  written atomically; and there is no way for a user to configure a
+  plugin at all.
+
+
 - **wasmtime** with the Component Model; one `Store` per plugin instance, its own
   linear memory, fuel-metered and epoch-interrupted so a runaway plugin is
   killed, not tolerated. Host stays responsive by construction.

@@ -15,6 +15,82 @@ That order is deliberate. Distribution is the part you cannot retrofit:
 once people are installing plugins by pasting a `curl | sh`, a signature
 is a migration rather than a feature.
 
+## What there is to install
+
+Sixteen plugins ship in the repository, under `plugins/useful`. They are
+the reference set and they are also what the runtime is tested against,
+so each one really runs:
+
+| Plugin | Shows | Needs |
+|---|---|---|
+| `clock` | `17:20` | nothing |
+| `cwd-crumbs` | `~/P/H/c/haven-client` | nothing |
+| `python-venv` | `venv:haven` | nothing |
+| `ssh-marker` | `⇥ box`, when the pane is elsewhere | nothing |
+| `command-timer` | `cargo build took 2m14s`, past ten seconds | nothing |
+| `fail-watch` | `mke2fs: not found` | nothing |
+| `pomodoro` | `work 23:41` | nothing |
+| `gitline` | `master* ↑5` | `git` |
+| `git-wip` | `+736-46` | `git` |
+| `git-stash` | `⚑2` | `git` |
+| `load-average` | `7.22`, bold past the core count | `uptime`, `nproc` |
+| `disk-free` | `205G 54%` | `df` |
+| `docker-status` | `docker 7` | `docker` |
+| `url-hints` | `3 links` | your screen |
+| `build-errors` | `12 errors, 3 warnings` | your screen |
+| `secret-guard` | warns when a credential was just printed | your screen |
+
+Four of them, installed, look like this — between the tabs and the
+clock:
+
+```
+ haven-1   1:1      17:20 /P/HavenTerminal +795-55 master* ↑5   1 panes · 00:10
+```
+
+The last three are the ones that ask to read what your panes are
+showing, and `secret-guard` is the one that justifies the capability: it
+warns you when something shaped like an AWS key or a GitHub token has
+just been printed into your scrollback. It never repeats the secret, and
+it stores nothing — a `remember` would write your screen into a file.
+
+## How a plugin runs
+
+In the daemon, sandboxed, with nothing but what it was granted.
+
+A plugin is a WebAssembly component. It gets its own memory, its own
+fuel, and a WASI context with **nothing in it** — no filesystem, no
+network, no environment. `std::fs::read("/etc/passwd")` inside a plugin
+fails like an empty disk. That is not a list of things Haven forbids; it
+is the absence of anything to reach.
+
+Fuel rather than a timeout: 50 million instructions per call, so a
+plugin that loops forever stops deterministically rather than when the
+machine happens to notice. One that traps is unloaded and said to be
+broken, never retried in a loop.
+
+They run in the daemon rather than the client because they need the
+panes and have to survive you closing the window: a segment that
+vanished on detach and came back different would not be a status
+segment. A client is sent what a plugin *drew*, never the code — over
+SSH it could not run it, and if it could it would be running with
+permissions granted for a different machine.
+
+What a plugin asks for is refused rather than fatal. A plugin granted no
+`exec` still has `run` in its vocabulary; calling it returns a sentence
+it can put on the status bar. So a plugin that wanted `git` and did not
+get it tells you so instead of disappearing.
+
+## Writing one
+
+See [writing and publishing them](./writing-plugins.md). The short
+version is that a plugin is a `cdylib` implementing one trait, and
+
+```console
+$ cargo build --release --target wasm32-wasip2
+```
+
+produces the component — no `cargo-component`, no `wasm-tools`.
+
 ## The shape of it
 
 ```

@@ -70,14 +70,27 @@ warnings, `cargo test --workspace` green.
 
 ## Not written yet
 
-- **Plugins that run.** The half that *distributes* them is built and
+- **A plugin API that can do more than draw.** Plugins run — sixteen of
+  them, in the daemon, sandboxed, with their output on the status bar —
+  but `render` returns styled text for the bar and nothing else. Overlays,
+  pickers and panel widgets are in §15 and are not built, so a plugin
+  cannot put up a window of its own. Nor can a user *configure* one: a
+  plugin can remember things, but nothing lets you set a value, so every
+  threshold in the shipped set is a hard-coded default. And a plugin
+  cannot be spoken to — there is no "the user asked for this" event, so
+  `pomodoro` starts when it loads and cannot be paused.
+- **`Command::Act` is not wired.** A plugin can ask Haven to run one of
+  its own actions and the daemon logs the request instead of doing it:
+  the name-to-action parser lives in the `haven` crate, which the daemon
+  cannot depend on. Moving that vocabulary into the protocol is the fix.
+- **Plugins that distribute.** The half that *distributes* them is built and
   documented — [signed repositories](./plugins.md): a repository pinned to one
   GPG key, a signed `plugins.yaml`, SHA-256 per artifact, capability grants
   recorded so an update that wants more has to ask again. The WASM host and the
   WIT world of §15 are still only specified, so nothing loads a plugin yet.
   Distribution went first because it is the part that cannot be retrofitted:
   once people install plugins by pasting a `curl | sh`, a signature is a
-  migration rather than a feature.
+  migration rather than a feature. The runtime followed.
 - **Live daemon upgrade.** A new binary currently needs the daemon restarted.
 - **Ligatures** in the GPU window, which need a shaping engine. Bold, italic
   and colour faces are in.

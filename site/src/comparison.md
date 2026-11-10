@@ -17,7 +17,7 @@ welcome as pull requests against this page.
 | Detachable sessions | no | no | yes (mux server) | no | yes | **yes** — survives GPU crash, logout, SSH drop |
 | Runs inside another terminal | no | no | CLI only; the mux client is the GUI | no | yes, that is all it does | **yes** — a full TUI frontend of the same client |
 | Multiplexing without a second VT layer | n/a | in-process, GUI-only | yes | in-process, GUI-only | no — it re-parses and re-emits | **yes** — one parser, one grid model |
-| Extensions | none | kittens: Python, in-process, unsandboxed | Lua config & event hooks | none yet | shell scripts | designed: WASM, capability-sandboxed — **the host is not built yet** |
+| Extensions | none | kittens: Python, in-process, unsandboxed | Lua config & event hooks | none yet | shell scripts | **WASM components, capability-sandboxed**, 16 shipped — status segments only so far |
 | Where extensions come from | n/a | `kitten` from a URL, or copy a file | `wezterm.plugin.require` on a git URL | n/a | copy a script, or a plugin manager | **signed repositories**, apt-style: one pinned GPG key per repository, hashed artifacts, a grant prompt per capability |
 | Config | TOML, reload | custom `conf`, reload | Lua | custom, reload | `.tmux.conf` | **TOML, live reload, server-side** so SSH sees it too |
 | Configurable keys | yes | yes | yes | yes | yes | **yes** — server-side, live, same vocabulary as the command line |
@@ -83,10 +83,10 @@ packaging. Haven's bet is the smaller core and the terminal-side client.
 - **It is v0.0.1.** No binaries, no packages — you build it with cargo.
 - **Linux/X11 is the tested platform.** macOS runs the test suite in CI; the
   window has not been exercised there. Windows/ConPTY is unwritten.
-- **No plugins that run yet.** Keybindings, key tables and the command palette
-  have landed, and so has the half that distributes plugins — [signed
-  repositories](./plugins.md), apt-style, with a pinned GPG key and hashed
-  artifacts. The WASM host that would load one has not.
+- **Plugins can only draw on the status bar.** The sandbox, the capability
+  model and [signed repositories](./plugins.md) are built and sixteen plugins
+  run in them — but `render` returns text for the bar, so no plugin can put up
+  an overlay or a picker of its own yet, and nothing lets a user configure one.
 - **No ligatures** in the GPU frontend yet; they need a shaping engine. Bold,
   italic and colour faces are in.
 - **No sixel, no kitty graphics protocol.** Post-1.0 by design, though the cell
