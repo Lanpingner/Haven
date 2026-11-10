@@ -213,28 +213,57 @@ impl Shell for ZshShell {
         let zdotdir = ctx.dir.join("zdotdir");
         let script = materialize(&zdotdir, "haven-integration.zsh", self.script())?;
 
-        // The shim must restore the real ZDOTDIR before sourcing the user's
-        // files, or plugin managers resolve paths against ours.
-        let user_zdotdir =
-            std::env::var("ZDOTDIR").ok().map(PathBuf::from).or_else(|| ctx.home.clone());
-        let user_dir = user_zdotdir.unwrap_or_else(|| PathBuf::from("~"));
-        for rc in ["zshrc", "zshenv", "zprofile", "zlogin", "zlogout"] {
-            let body = if rc == "zshrc" {
-                format!(
-                    "ZDOTDIR={user}\n\
-                     [[ -f {user}/.{rc} ]] && source {user}/.{rc}\n\
-                     source {script}\n",
-                    user = shell_quoted(&user_dir),
-                    script = shell_quoted(&script),
-                )
-            } else {
-                format!(
-                    "ZDOTDIR={user}\n[[ -f {user}/.{rc} ]] && source {user}/.{rc}\n",
-                    user = shell_quoted(&user_dir),
-                )
-            };
+        // The shim has to do two things that pull against each other: the
+        // user's files must see the *real* `ZDOTDIR`, or plugin managers
+        // resolve their paths against ours — and zsh must keep reading
+        // *our* files, which it finds through `ZDOTDIR` as it stands when
+        // it goes looking for each one.
+        //
+        // The first version restored the real value in `.zshenv`, which
+        // is the first file read. So by the time zsh looked for a
+        // `.zshrc` it was pointing at the user's directory: it read
+        // theirs, never ours, and the integration was never sourced.
+        // zsh integration had never worked. Nothing noticed because the
+        // Linux CI has no zsh installed, so only the macOS job ran that
+        // test, and the macOS job had been failing for other reasons for
+        // longer.
+        //
+        // So the real value is set *around* each `source` and put back
+        // afterwards, leaving `ZDOTDIR` ours for the next file zsh wants.
+        // `.zshrc` is the exception: it is the last of ours that matters,
+        // so it leaves the real value in place for the session — which
+        // also means a login shell reads the user's `.zlogin`, as it
+        // should.
+        // The real `ZDOTDIR` if the user set one, else their home. `~`
+        // only as a last resort: zsh expands it, and a shim that points
+        // nowhere is better than one that points at ours.
+        let user_dir = std::env::var("ZDOTDIR")
+            .ok()
+            // Set but empty is not a directory. `.ok()` alone accepted
+            // one and produced a shim that sourced `''/.zshrc`.
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| ctx.home.clone())
+            .unwrap_or_else(|| PathBuf::from("~"));
+        let user = shell_quoted(&user_dir);
+        for rc in ["zshenv", "zprofile", "zlogin", "zlogout"] {
+            let body = format!(
+                "__haven_zdotdir=${{ZDOTDIR}}\n\
+                 ZDOTDIR={user}\n\
+                 [[ -f {user}/.{rc} ]] && source {user}/.{rc}\n\
+                 ZDOTDIR=${{__haven_zdotdir}}\n\
+                 unset __haven_zdotdir\n"
+            );
             materialize(&zdotdir, &format!(".{rc}"), &body)?;
         }
+        let body = format!(
+            "ZDOTDIR={user}\n\
+             [[ -f {user}/.zshrc ]] && source {user}/.zshrc\n\
+             source {script}\n",
+            script = shell_quoted(&script),
+        );
+        materialize(&zdotdir, ".zshrc", &body)?;
+
         cfg.env.push(("ZDOTDIR".into(), zdotdir.into_os_string()));
         Ok(Injection::Auto)
     }
@@ -614,6 +643,47 @@ mod tests {
         assert!(zshrc.contains("source '/home/test'/.zshrc"), "{zshrc}");
         assert!(zshrc.contains("haven-integration.zsh"), "{zshrc}");
         assert_eq!(cfg.env[0].0, "ZDOTDIR");
+
+        // And the invariant the first version got wrong: every file
+        // *before* `.zshrc` must leave `ZDOTDIR` pointing back at ours,
+        // or zsh goes looking for the next one in the user's directory
+        // and never reads ours at all. That is not a style point — it is
+        // the difference between the integration loading and not, and it
+        // cannot be caught by a test that only looks at `.zshrc`.
+        for rc in ["zshenv", "zprofile"] {
+            let body = fs::read_to_string(tmp.path().join(format!("zdotdir/.{rc}"))).unwrap();
+            assert!(
+                body.contains("ZDOTDIR=${__haven_zdotdir}"),
+                ".{rc} must hand ZDOTDIR back, or zsh stops reading our files:\n{body}"
+            );
+            let restore = body.find("ZDOTDIR=${__haven_zdotdir}").unwrap();
+            let chain = body.find("source '/home/test'/").unwrap();
+            assert!(chain < restore, ".{rc} restores before chaining:\n{body}");
+        }
+    }
+
+    #[test]
+    fn an_empty_zdotdir_is_not_a_directory() {
+        // Set but empty. `std::env::var(..).ok()` accepts it, and the
+        // shim then sourced `''/.zshrc`.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = PtyConfig::default();
+        let before = std::env::var_os("ZDOTDIR");
+        // SAFETY: setting an environment variable is unsound only in the
+        // presence of another thread reading one. This test does its own
+        // work inline and restores the value before returning, and no
+        // other test here touches `ZDOTDIR`.
+        unsafe { std::env::set_var("ZDOTDIR", "") };
+        ZshShell.install(&mut cfg, &ctx(tmp.path(), false)).unwrap();
+        match before {
+            // SAFETY: as above, putting back what was there.
+            Some(value) => unsafe { std::env::set_var("ZDOTDIR", value) },
+            // SAFETY: as above.
+            None => unsafe { std::env::remove_var("ZDOTDIR") },
+        }
+        let zshrc = fs::read_to_string(tmp.path().join("zdotdir/.zshrc")).unwrap();
+        assert!(!zshrc.contains("ZDOTDIR=''"), "an empty ZDOTDIR became a path:\n{zshrc}");
+        assert!(zshrc.contains("/home/test"), "it should fall back to the home:\n{zshrc}");
     }
 
     #[test]
