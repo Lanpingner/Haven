@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 
 use haven_plugin::index::Capabilities;
 
-use crate::{Engine, Load, Loaded, Pane, World};
+use crate::{Engine, Load, Loaded, Pane, Snapshot};
 
 /// A session a plugin can be shown, built by hand.
 #[derive(Clone, Debug, Default)]
@@ -47,14 +47,36 @@ impl Session {
     }
 
     /// A pane that is running something, as shell integration reports.
-    pub fn running(mut self, id: u32, title: &str, cwd: &str, command: &str) -> Self {
+    pub fn running(self, id: u32, title: &str, cwd: &str, command: &str) -> Self {
+        self.with_command(id, title, cwd, command, true)
+    }
+
+    /// A pane whose last command has *finished*.
+    ///
+    /// Separate from [`Session::running`] because `command` and `running`
+    /// are different facts and a plugin may key off either: shell
+    /// integration keeps reporting the last command after it ends, so
+    /// "ran `cargo build`, not running now" is an ordinary state that
+    /// could not be built before this existed.
+    pub fn ran(self, id: u32, title: &str, cwd: &str, command: &str) -> Self {
+        self.with_command(id, title, cwd, command, false)
+    }
+
+    fn with_command(
+        mut self,
+        id: u32,
+        title: &str,
+        cwd: &str,
+        command: &str,
+        running: bool,
+    ) -> Self {
         let focused = self.panes.is_empty();
         self.panes.push(Pane {
             id,
             title: title.into(),
             command: command.into(),
             cwd: cwd.into(),
-            running: true,
+            running,
             focused,
         });
         self
@@ -75,17 +97,9 @@ impl Session {
     }
 }
 
-impl World for Session {
-    fn panes(&self) -> Vec<Pane> {
-        self.panes.clone()
-    }
-
-    fn pane_text(&self, pane: u32, rows: u32) -> Option<String> {
-        let text = self.text.get(&pane)?;
-        // The last `rows` rows, as the host contract says.
-        let lines: Vec<&str> = text.lines().collect();
-        let from = lines.len().saturating_sub(rows as usize);
-        Some(lines[from..].join("\n"))
+impl From<Session> for Snapshot {
+    fn from(session: Session) -> Self {
+        Snapshot { panes: session.panes, text: session.text }
     }
 }
 
@@ -125,12 +139,24 @@ pub fn built_plugins() -> Option<&'static PathBuf> {
 }
 
 /// One built component by name, or `None` when the toolchain is absent.
+///
+/// A plugin called `git-wip` builds as `git_wip.wasm`, because a cargo
+/// library target cannot have a hyphen in its name. So both spellings
+/// are tried and a test can use the name a person would.
 pub fn component(name: &str) -> Option<Vec<u8>> {
     let dir = built_plugins()?;
-    let path = dir.join(format!("{name}.wasm"));
-    Some(std::fs::read(&path).unwrap_or_else(|e| {
-        panic!("{}: {e} — is it a member of plugins/Cargo.toml?", path.display())
-    }))
+    let direct = dir.join(format!("{name}.wasm"));
+    let underscored = dir.join(format!("{}.wasm", name.replace('-', "_")));
+    for path in [&direct, &underscored] {
+        if let Ok(wasm) = std::fs::read(path) {
+            return Some(wasm);
+        }
+    }
+    panic!(
+        "neither {} nor {} was built — is the plugin a directory under plugins/useful?",
+        direct.display(),
+        underscored.display()
+    )
 }
 
 /// Load a plugin with the capabilities named, against a made-up session.
@@ -145,13 +171,7 @@ pub fn load(name: &str, granted: Capabilities, session: Session) -> Option<Loade
     Some(
         Loaded::new(
             engine,
-            Load {
-                name,
-                wasm: &wasm,
-                granted: &granted,
-                store_path: None,
-                world: Box::new(session),
-            },
+            Load { name, wasm: &wasm, granted: &granted, store_path: None, world: session.into() },
         )
         .unwrap_or_else(|e| panic!("{name} should load: {e}")),
     )

@@ -79,6 +79,46 @@ struct SessionHost {
     /// nothing. The process group is the key rather than a clock: it is
     /// exactly what changes when the answer might have.
     users: RefCell<HashMap<u32, (i32, Option<String>)>>,
+    /// This session's plugins, loaded once when the session is made.
+    ///
+    /// Per session rather than per daemon because a plugin's world *is*
+    /// a session — `panes()` returns this session's panes, and an event
+    /// about a pane is an event in one session. Two sessions each get
+    /// their own instance of a plugin, with their own memory, which is
+    /// also the only answer that makes `remember` mean anything sensible.
+    plugins: Vec<haven_plugin_host::Loaded>,
+    /// What those plugins last drew, so rebuilding the status bar does
+    /// not mean calling every plugin again.
+    drawn: Vec<haven_proto::PluginSegment>,
+    /// What the session looked like the last time plugins were told, so
+    /// an event is sent when something actually changed rather than on
+    /// every tick.
+    was: PluginView,
+    /// When each pane's current command was first seen running, so a
+    /// plugin can be told how long it took. The shell reports that a
+    /// command started and that it ended, never for how long.
+    started: HashMap<u32, (String, std::time::Instant)>,
+    /// Commands plugins have asked for and the daemon has not applied
+    /// yet. Collected rather than applied inside the loop because
+    /// applying one needs `&mut self` on the daemon, and the loop is
+    /// already holding the session.
+    pending: Vec<(String, haven_plugin_host::Command)>,
+}
+
+/// The facts plugins are told about, as they were last time.
+///
+/// Diffed rather than hooked: the daemon already recomputes all of this
+/// to build the status bar, and comparing it is cheaper and far less
+/// invasive than threading a callback through the mux for every event a
+/// plugin might want.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+struct PluginView {
+    focus: Option<u32>,
+    /// Working directory per pane.
+    cwd: HashMap<u32, String>,
+    /// How many commands each pane has finished, so a new one is news.
+    finished: HashMap<u32, usize>,
+    panes: Vec<u32>,
 }
 
 struct Client {
@@ -109,6 +149,11 @@ struct Client {
 
 /// The server.
 pub struct Daemon {
+    /// The wasm engine, built on first use.
+    ///
+    /// Lazily, because a daemon with no plugins installed should not pay
+    /// for a JIT it will never call — which is most daemons today.
+    plugin_engine: Option<haven_plugin_host::Engine>,
     /// Where sessions are saved to and restored from.
     pub save_path: PathBuf,
     /// When the last autosave ran.
@@ -167,6 +212,7 @@ impl Daemon {
             policy: ResizePolicy::default(),
             shutting_down: false,
             config,
+            plugin_engine: None,
             save_path: snapshot::default_path(),
             last_save: unix_now(),
         }
@@ -306,6 +352,8 @@ impl Daemon {
                     .queue(&ServerMsg::Help { command: word.clone(), text: text.clone() });
             }
         }
+        self.drive_plugins();
+        self.apply_plugin_commands();
         self.autosave();
         self.sync_clients()?;
         self.flush_clients();
@@ -637,6 +685,9 @@ impl Daemon {
         let cell: SessionEnv = std::rc::Rc::new(std::cell::RefCell::new(env.to_vec()));
         let spawner = (self.make_spawner)(cell.clone(), self.containers.clone());
         let runtime = MuxRuntime::new(SessionId(id), &name, caps.size, spawner)?;
+        // Before the insert: loading needs `&mut self` for the engine,
+        // and the insert is already holding `self.sessions`.
+        let plugins = self.load_plugins();
         self.sessions.insert(
             id,
             SessionHost {
@@ -646,6 +697,11 @@ impl Daemon {
                 runtime,
                 policy: self.policy,
                 applied: Some(caps.size),
+                plugins,
+                drawn: Vec::new(),
+                was: PluginView::default(),
+                started: HashMap::new(),
+                pending: Vec::new(),
             },
         );
         Ok(id)
@@ -862,6 +918,7 @@ impl Daemon {
         runtime.session.renumber_windows();
         runtime.select_window(saved.active_window)?;
 
+        let plugins = self.load_plugins();
         self.sessions.insert(
             id,
             SessionHost {
@@ -871,6 +928,11 @@ impl Daemon {
                 runtime,
                 policy: self.policy,
                 applied: Some(size),
+                plugins,
+                drawn: Vec::new(),
+                was: PluginView::default(),
+                started: HashMap::new(),
+                pending: Vec::new(),
             },
         );
         Ok(())
@@ -1336,6 +1398,12 @@ impl SessionHost {
             active_window: active.map(|id| id.0).unwrap_or(0),
             started_unix: self.started_unix,
             clients,
+            // Whatever this session's plugins last drew. Taken from a
+            // cache rather than by calling them here: `status` is `&self`
+            // and running a plugin needs `&mut`, and more to the point a
+            // plugin should be called when something happened, not every
+            // time a bar is rebuilt.
+            plugins: self.drawn.clone(),
         }
     }
 
@@ -1838,4 +1906,380 @@ fn plugin_repos() -> Vec<haven_proto::RepoInfo> {
             info
         })
         .collect()
+}
+
+/// Everything about running this session's plugins.
+///
+/// Plugins run here, in the daemon, because that is where the panes are
+/// and because they have to survive a client detaching — a status
+/// segment that vanishes when you close the window and comes back
+/// different when you reattach is not a status segment. A client is sent
+/// what they drew, never the code: over SSH it could not run it, and if
+/// it could, it would be running with capabilities granted for another
+/// machine.
+impl Daemon {
+    /// Load every installed plugin, with the capabilities its record
+    /// says were granted.
+    ///
+    /// A plugin that will not load is logged and skipped rather than
+    /// taking the session with it. That is the whole lifecycle rule: one
+    /// broken plugin is a missing segment, not a terminal that will not
+    /// start.
+    fn load_plugins(&mut self) -> Vec<haven_plugin_host::Loaded> {
+        use haven_plugin::repo::Paths;
+        use haven_plugin::store::{self, Installed};
+        use haven_plugin_host::{Load, Loaded};
+
+        let paths = Paths::standard();
+        let Ok(installed) = Installed::load(&paths) else { return Vec::new() };
+        if installed.list.is_empty() {
+            return Vec::new();
+        }
+        // The engine is built on first use rather than at startup: a
+        // daemon with no plugins should not pay for a JIT it will never
+        // call.
+        let engine = match &self.plugin_engine {
+            Some(engine) => engine,
+            None => match haven_plugin_host::Engine::new() {
+                Ok(engine) => self.plugin_engine.insert(engine),
+                Err(e) => {
+                    eprintln!("haven: plugins are unavailable: {e}");
+                    return Vec::new();
+                }
+            },
+        };
+
+        let mut out = Vec::new();
+        for record in &installed.list {
+            let dir = store::plugin_dir(&paths, &record.name);
+            let component = dir.join(&record.entry);
+            let wasm = match std::fs::read(&component) {
+                Ok(wasm) => wasm,
+                Err(e) => {
+                    eprintln!("haven: plugin `{}`: {}: {e}", record.name, component.display());
+                    continue;
+                }
+            };
+            let load = Load {
+                name: &record.name,
+                wasm: &wasm,
+                granted: &record.granted,
+                // Beside the plugin's own files, so uninstalling it takes
+                // what it remembered with it.
+                store_path: Some(dir.join("remembered")),
+                world: haven_plugin_host::Snapshot::default(),
+            };
+            match Loaded::new(engine, load) {
+                Ok(loaded) => out.push(loaded),
+                Err(e) => eprintln!("haven: {e}"),
+            }
+        }
+        out
+    }
+
+    /// Do what the plugins asked for.
+    ///
+    /// Separate from [`Daemon::drive_plugins`] because applying a command
+    /// needs the daemon — the client list, the session table — and the
+    /// loop that collects them is already holding one session. So the
+    /// commands are queued there and applied here, which is also exactly
+    /// what the design intends: a plugin's effects are data, and this is
+    /// the one place that turns them into effects.
+    fn apply_plugin_commands(&mut self) {
+        use haven_plugin_host::Command;
+
+        let mut taken: Vec<(u32, String, Command)> = Vec::new();
+        for (id, host) in self.sessions.iter_mut() {
+            for (name, command) in host.pending.drain(..) {
+                taken.push((*id, name, command));
+            }
+        }
+        for (session, name, command) in taken {
+            match command {
+                Command::Notice(text) => {
+                    // To the clients on that session only: a plugin in one
+                    // session has nothing to say to another.
+                    for client in &mut self.clients {
+                        if client.session == Some(session) {
+                            let _ = client
+                                .framed
+                                .queue(&ServerMsg::Notice { text: format!("{name}: {text}") });
+                        }
+                    }
+                }
+                Command::Remember(what) => {
+                    if let Some(host) = self.sessions.get_mut(&session) {
+                        if let Some(plugin) = host.plugins.iter_mut().find(|p| p.name() == name) {
+                            plugin.remember(&what.key, Some(&what.value));
+                        }
+                    }
+                }
+                Command::Forget(key) => {
+                    if let Some(host) = self.sessions.get_mut(&session) {
+                        if let Some(plugin) = host.plugins.iter_mut().find(|p| p.name() == name) {
+                            plugin.remember(&key, None);
+                        }
+                    }
+                }
+                Command::Act(action) => {
+                    // Deliberately not wired yet, and said out loud rather
+                    // than dropped. Turning a name like `split-v` into an
+                    // `Action` lives in the `haven` crate's key parser,
+                    // which the daemon cannot reach without a dependency
+                    // the wrong way round; moving that vocabulary into
+                    // `haven-proto` is the fix and is its own change.
+                    eprintln!(
+                        "haven: plugin `{name}` asked to run `{action}`, \
+                         which plugins cannot do yet"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Tell every session's plugins what has happened, and collect what
+    /// they drew.
+    ///
+    /// Called once per tick. Events are found by diffing what the daemon
+    /// already knows against what it knew last time, rather than by
+    /// threading a callback through the mux for every event a plugin
+    /// might one day want: the status bar is rebuilt from this same
+    /// information anyway, so comparing it is nearly free and touches
+    /// nothing.
+    fn drive_plugins(&mut self) {
+        for host in self.sessions.values_mut() {
+            if host.plugins.is_empty() {
+                continue;
+            }
+            host.drive();
+        }
+    }
+}
+
+impl SessionHost {
+    /// What this session looks like, for a plugin to be told about.
+    fn plugin_snapshot(&self, with_text: bool) -> haven_plugin_host::Snapshot {
+        let focus = self.runtime.session.active_pane();
+        let mut panes = Vec::new();
+        let mut text = std::collections::BTreeMap::new();
+        for window in &self.runtime.session.windows {
+            for id in window.panes() {
+                let Some(pane) = self.runtime.pane(id) else { continue };
+                let (command, running) =
+                    pane.command().map(|(c, r)| (c.to_string(), r)).unwrap_or_default();
+                panes.push(haven_plugin_host::Pane {
+                    id: id.0,
+                    title: pane.title().unwrap_or_default().to_string(),
+                    command,
+                    cwd: pane.cwd().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+                    running,
+                    focused: id == focus,
+                });
+                // Only for a plugin that may look. Copying every pane's
+                // screen for every plugin on every tick would be the most
+                // expensive thing the daemon does, and for most plugins it
+                // would be copying something they are not allowed to read.
+                if with_text {
+                    text.insert(id.0, pane_as_text(pane.grid()));
+                }
+            }
+        }
+        haven_plugin_host::Snapshot { panes, text }
+    }
+
+    /// The facts plugins are told about, as they are now.
+    fn plugin_view(&self) -> PluginView {
+        let mut cwd = HashMap::new();
+        let mut finished = HashMap::new();
+        let mut panes = Vec::new();
+        for window in &self.runtime.session.windows {
+            for id in window.panes() {
+                panes.push(id.0);
+                if let Some(pane) = self.runtime.pane(id) {
+                    if let Some(dir) = pane.cwd() {
+                        cwd.insert(id.0, dir.to_string_lossy().to_string());
+                    }
+                    finished.insert(id.0, pane.history().len());
+                }
+            }
+        }
+        PluginView { focus: Some(self.runtime.session.active_pane().0), cwd, finished, panes }
+    }
+
+    /// Deliver what changed, then redraw.
+    fn drive(&mut self) {
+        use haven_plugin_host::Event;
+
+        // Note what is running, so a finish can be timed.
+        for window in &self.runtime.session.windows {
+            for id in window.panes() {
+                let Some(pane) = self.runtime.pane(id) else { continue };
+                if let Some((command, true)) = pane.command() {
+                    let fresh =
+                        self.started.get(&id.0).map(|(seen, _)| seen != command).unwrap_or(true);
+                    if fresh {
+                        self.started.insert(id.0, (command.to_string(), std::time::Instant::now()));
+                    }
+                }
+            }
+        }
+
+        let now = self.plugin_view();
+        let mut events: Vec<Event> = Vec::new();
+
+        // First time through: nothing to compare against, so the only
+        // honest event is that the plugin has started.
+        if self.was == PluginView::default() {
+            events.push(Event::Started);
+        } else {
+            if now.focus != self.was.focus {
+                if let Some(focus) = now.focus {
+                    events.push(Event::PaneFocus(focus));
+                }
+            }
+            for id in &now.panes {
+                if !self.was.panes.contains(id) {
+                    events.push(Event::PaneOpened(*id));
+                }
+            }
+            for id in &self.was.panes {
+                if !now.panes.contains(id) {
+                    events.push(Event::PaneClosed(*id));
+                }
+            }
+            for (id, dir) in &now.cwd {
+                if self.was.cwd.get(id) != Some(dir) {
+                    events.push(Event::CwdChanged(haven_plugin_host::CwdChange {
+                        pane: *id,
+                        cwd: dir.clone(),
+                    }));
+                }
+            }
+            for (id, count) in &now.finished {
+                let before = self.was.finished.get(id).copied().unwrap_or(0);
+                if *count > before {
+                    if let Some(end) = self.last_command(*id) {
+                        events.push(Event::CommandEnded(end));
+                    }
+                }
+            }
+        }
+        // Always, so a plugin that only wants a clock gets one.
+        events.push(Event::Tick);
+        self.was = now;
+
+        let plain = self.plugin_snapshot(false);
+        let reading = self.plugins.iter().any(|p| p.reads_panes());
+        let with_text = reading.then(|| self.plugin_snapshot(true));
+
+        let mut drawn = Vec::new();
+        let mut asked: Vec<(String, haven_plugin_host::Command)> = Vec::new();
+        let mut broken = Vec::new();
+        for (at, plugin) in self.plugins.iter_mut().enumerate() {
+            let world = if plugin.reads_panes() {
+                with_text.clone().unwrap_or_else(|| plain.clone())
+            } else {
+                plain.clone()
+            };
+            plugin.refresh(world);
+
+            let name = plugin.name().to_string();
+            let mut failed = false;
+            for event in &events {
+                match plugin.on_event(event) {
+                    Ok(commands) => asked.extend(commands.into_iter().map(|c| (name.clone(), c))),
+                    Err(e) => {
+                        eprintln!("haven: {e}");
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            if failed {
+                broken.push(at);
+                continue;
+            }
+            match plugin.render() {
+                Ok(runs) if !runs.is_empty() => drawn.push(haven_proto::PluginSegment {
+                    name,
+                    runs: runs.iter().map(styled).collect(),
+                }),
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("haven: {e}");
+                    broken.push(at);
+                }
+            }
+        }
+
+        // A plugin that trapped is unloaded, not retried in a loop. The
+        // alternative is a daemon that spends every tick running the same
+        // failing plugin and logging the same line.
+        for at in broken.into_iter().rev() {
+            let gone = self.plugins.remove(at);
+            eprintln!("haven: plugin `{}` was unloaded after it failed", gone.name());
+        }
+
+        self.drawn = drawn;
+        self.pending.extend(asked);
+    }
+
+    /// The command a pane last finished, as an event.
+    fn last_command(&self, pane: u32) -> Option<haven_plugin_host::CommandEnd> {
+        let runs = self.runtime.pane(haven_proto::PaneId(pane))?.history();
+        let run = runs.iter().next_back()?;
+        Some(haven_plugin_host::CommandEnd {
+            pane,
+            command: run.command.clone(),
+            status: run.exit.unwrap_or(-1),
+            // Timed here, not by the shell: `OSC 133;D` carries an exit
+            // status and nothing about duration, so the alternative to
+            // the daemon noticing when a command appeared was an API
+            // that promises a number it cannot produce. Zero means "we
+            // did not see it start" — a plugin loaded while something
+            // was already running — and the plugins are told so.
+            millis: self
+                .started
+                .get(&pane)
+                .filter(|(command, _)| *command == run.command)
+                .map(|(_, at)| at.elapsed().as_millis() as u64)
+                .unwrap_or(0),
+        })
+    }
+}
+
+/// A plugin's styled run, as the wire carries it.
+fn styled(run: &haven_plugin_host::Run) -> haven_proto::StyledRun {
+    use haven_plugin_host::Colour;
+    haven_proto::StyledRun {
+        text: run.text.clone(),
+        // RGB is dropped to the nearest thing the bar can express rather
+        // than honoured: a plugin that picks its own true colour is a
+        // plugin that is unreadable on somebody's theme, and the indexed
+        // palette is the theme's to define.
+        colour: match run.style.fg {
+            Colour::Default => None,
+            Colour::Indexed(n) => Some(n),
+            Colour::Rgb(_) => None,
+        },
+        bold: run.style.bold,
+        dim: run.style.dim,
+        italic: run.style.italic,
+    }
+}
+
+/// A pane's screen as text, for a plugin granted `read-pane-content`.
+fn pane_as_text(grid: &haven_core::Grid) -> String {
+    grid.rows()
+        .iter()
+        .map(|row| {
+            row.cells
+                .iter()
+                .map(|cell| grid.cell_text(cell))
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

@@ -75,30 +75,35 @@ const EXEC_TIMEOUT: Duration = Duration::from_secs(5);
 /// everything should not be able to make the daemon hold a gigabyte.
 const MAX_OUTPUT: usize = 64 * 1024;
 
-/// What the host has to be able to answer while a plugin is running.
+/// What the host can answer while a plugin is running: the session, as
+/// it was when the plugin was last called.
 ///
-/// A trait because the answers come from the session — which the daemon
-/// owns and this crate must not — and because a test needs to answer
-/// them without a terminal.
-pub trait World: Send {
-    /// Every pane, with the focused one marked.
-    fn panes(&self) -> Vec<Pane>;
-
-    /// The last `rows` rows of a pane, oldest first. `None` when there
-    /// is no such pane; the capability is checked before this is called.
-    fn pane_text(&self, pane: u32, rows: u32) -> Option<String>;
+/// A snapshot rather than a borrow of the session, and that is the whole
+/// reason it exists. The daemon owns the sessions and a session owns its
+/// plugins, so a plugin holding a reference back to the session would be
+/// a cycle the borrow checker rightly refuses. Instead the daemon builds
+/// one of these — cheap, a handful of panes — and hands it over with
+/// [`Loaded::refresh`] before it asks the plugin anything.
+///
+/// Pane *text* is only filled in for a plugin that was granted
+/// `read-pane-content`. Copying every pane's screen for every plugin on
+/// every event would be the most expensive thing the daemon does, and
+/// for most plugins it would be copying something they are not allowed
+/// to look at.
+#[derive(Clone, Debug, Default)]
+pub struct Snapshot {
+    pub panes: Vec<Pane>,
+    pub text: BTreeMap<u32, String>,
 }
 
-/// A world with nothing in it, for a plugin that needs none.
-#[derive(Debug, Default)]
-pub struct Empty;
-
-impl World for Empty {
-    fn panes(&self) -> Vec<Pane> {
-        Vec::new()
-    }
-    fn pane_text(&self, _pane: u32, _rows: u32) -> Option<String> {
-        None
+impl Snapshot {
+    /// The last `rows` rows of a pane, oldest first, as the host
+    /// contract promises.
+    fn pane_text(&self, pane: u32, rows: u32) -> Option<String> {
+        let text = self.text.get(&pane)?;
+        let lines: Vec<&str> = text.lines().collect();
+        let from = lines.len().saturating_sub(rows as usize);
+        Some(lines[from..].join("\n"))
     }
 }
 
@@ -128,7 +133,7 @@ impl Engine {
 struct State {
     name: String,
     granted: Capabilities,
-    world: Box<dyn World>,
+    world: Snapshot,
     /// What the plugin remembered, and whether it has changed.
     store: BTreeMap<String, String>,
     dirty: bool,
@@ -168,7 +173,7 @@ impl haven::plugin::host::Host for State {
     }
 
     fn panes(&mut self) -> Vec<Pane> {
-        self.world.panes()
+        self.world.panes.clone()
     }
 
     fn pane_text(&mut self, pane: u32, rows: u32) -> Result<String, String> {
@@ -269,7 +274,9 @@ pub struct Load<'a> {
     /// Where to keep what the plugin remembers. `None` means it
     /// remembers nothing past this instance, which is what a test wants.
     pub store_path: Option<PathBuf>,
-    pub world: Box<dyn World>,
+    /// The session as it is now. Replaced before each call with
+    /// [`Loaded::refresh`].
+    pub world: Snapshot,
 }
 
 impl std::fmt::Debug for Load<'_> {
@@ -331,6 +338,23 @@ impl Loaded {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Tell the plugin what the session looks like now.
+    ///
+    /// Called before delivering an event or drawing. Nothing stops a
+    /// caller from skipping it; the plugin then sees the session as it
+    /// was, which is wrong but not unsafe — so the daemon refreshes on
+    /// every call and a test refreshes when it wants to change the
+    /// answer.
+    pub fn refresh(&mut self, world: Snapshot) {
+        self.store.data_mut().world = world;
+    }
+
+    /// Whether this plugin may read what panes are showing, so a caller
+    /// knows whether filling [`Snapshot::text`] is worth the copy.
+    pub fn reads_panes(&self) -> bool {
+        self.store.data().granted.read_pane_content
     }
 
     /// What the plugin has logged, newest last.

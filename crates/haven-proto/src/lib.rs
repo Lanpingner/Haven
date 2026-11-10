@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -641,6 +641,13 @@ pub enum ServerMsg {
     Plugins {
         repos: Vec<RepoInfo>,
     },
+    /// Something to say on the status bar, for a moment.
+    ///
+    /// The daemon rarely has anything to say for itself; this exists
+    /// because a plugin does, and a plugin runs in the daemon.
+    Notice {
+        text: String,
+    },
     /// Version skew, in words rather than as a decode failure.
     Refused {
         reason: String,
@@ -661,6 +668,42 @@ pub struct SessionStatus {
     /// When the session was created, in seconds since the epoch.
     pub started_unix: u64,
     pub clients: u16,
+    /// What this session's plugins drew, in load order.
+    ///
+    /// Carried with the status rather than as its own message because it
+    /// changes at the same rate and for the same reasons: the bar is
+    /// redrawn when the status moves, and a separate message would mean
+    /// two things arriving to describe one frame.
+    pub plugins: Vec<PluginSegment>,
+}
+
+/// One plugin's contribution to the status bar.
+///
+/// Already rendered: the plugin was called in the daemon, where it runs,
+/// and what reaches a client is styled text. A client never executes
+/// plugin code — over SSH it could not, and if it could, a plugin would
+/// be running on a machine its capabilities were not granted for.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct PluginSegment {
+    /// Which plugin, for the message when one misbehaves.
+    pub name: String,
+    pub runs: Vec<StyledRun>,
+}
+
+/// Styled text from a plugin.
+///
+/// A plugin's own small style vocabulary rather than [`theme::Pair`]: a
+/// plugin asks for "bold" or "dim" or an indexed colour and the client
+/// resolves that against whatever theme is loaded, so a plugin cannot
+/// render itself unreadable on someone else's colours.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub struct StyledRun {
+    pub text: String,
+    /// `None` is the bar's own colour, which is what most should use.
+    pub colour: Option<u8>,
+    pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]

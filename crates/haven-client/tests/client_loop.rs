@@ -256,6 +256,7 @@ fn the_chooser_opens_on_the_active_pane_once_the_listing_arrives() {
         active_window: 1,
         started_unix: 0,
         clients: 1,
+        plugins: Vec::new(),
     };
     let sessions = vec![SessionInfo {
         id: SessionId(1),
@@ -475,6 +476,7 @@ fn find_window_goes_to_the_tab_whose_name_matches() {
             active_window: 1,
             started_unix: 0,
             clients: 1,
+            plugins: Vec::new(),
         }),
     ]);
     let frontend = ScriptedFrontend::new(size(10, 2), []);
@@ -900,6 +902,7 @@ fn the_clock_on_the_bar_moves_without_anything_happening() {
             active_window: 0,
             started_unix: 1_000,
             clients: 1,
+            plugins: Vec::new(),
         }),
     ]);
     let mut client = Client::new(ScriptedFrontend::new(size(40, 6), []), server);
@@ -1136,6 +1139,7 @@ fn picking_a_pane_in_another_session_goes_to_that_session_first() {
         active_window: 1,
         started_unix: 0,
         clients: 1,
+        plugins: Vec::new(),
     };
     let server = ScriptedTransport::new([
         ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1), build: 0 },
@@ -1189,6 +1193,7 @@ fn picking_a_pane_in_this_session_does_not_reattach() {
         active_window: 1,
         started_unix: 0,
         clients: 1,
+        plugins: Vec::new(),
     };
     let server = ScriptedTransport::new([
         ServerMsg::Hello { protocol: PROTOCOL_VERSION, session: SessionId(1), build: 0 },

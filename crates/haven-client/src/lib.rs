@@ -1406,6 +1406,13 @@ impl<F: Frontend, T: Transport> Client<F, T> {
                 }
                 self.fatal.is_some()
             }
+            ServerMsg::Notice { text } => {
+                // The daemon rarely has anything to say for itself. This
+                // is here because a plugin does, and a plugin runs in the
+                // daemon.
+                self.frame.notice = Some(text);
+                true
+            }
             ServerMsg::Plugins { repos } => {
                 // Only if the browser is still open: the answer is a round
                 // trip late, and by now the box may have been dismissed.

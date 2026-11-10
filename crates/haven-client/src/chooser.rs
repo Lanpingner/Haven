@@ -410,6 +410,7 @@ mod tests {
             active_window: 1,
             started_unix: 0,
             clients: 1,
+            plugins: Vec::new(),
         }
     }
 

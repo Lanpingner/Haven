@@ -397,10 +397,19 @@ pub fn build(
     // with it: a root pane is root whether or not you are also in copy mode,
     // and that is the one you would least like to be wrong about.
     let user = elevated(status).map(|user| format!(" {user} "));
+    // What the plugins drew, between the tabs and the clock. Already
+    // rendered by the daemon — a client never runs plugin code — so this
+    // is placing styled text, not calling anything.
+    let segments = plugin_runs(status, theme);
+    let plugin_width: usize = segments.iter().map(|(text, _)| text.chars().count()).sum();
     let tail = alert.as_ref().map(|a| a.chars().count()).unwrap_or(0)
         + user.as_ref().map(|u| u.chars().count()).unwrap_or(0)
+        + plugin_width
         + right.chars().count();
     spans.fill_to(cols.saturating_sub(tail), theme.bar.style());
+    for (text, style) in &segments {
+        spans.push(text, *style);
+    }
     if let Some(user) = user {
         spans.push(&user, theme.bar_alert.style());
     }
@@ -452,6 +461,43 @@ impl Spans {
     fn finish(self) -> Vec<Span> {
         self.spans
     }
+}
+
+/// What this session's plugins drew, as runs ready to place.
+///
+/// A plugin asks for `bold`, `dim` or one of the 256 indexed colours and
+/// the client resolves that against whatever theme is loaded, starting
+/// from the bar's own colours. That is why the wire carries a small
+/// style vocabulary rather than a `Pair`: a plugin cannot render itself
+/// unreadable on somebody else's theme, because it never gets to say
+/// what the background is.
+fn plugin_runs(status: Option<&SessionStatus>, theme: &Theme) -> Vec<(String, Style)> {
+    let Some(status) = status else { return Vec::new() };
+    let mut out = Vec::new();
+    for segment in &status.plugins {
+        if segment.runs.is_empty() {
+            continue;
+        }
+        // One space before each segment, so two plugins do not run into
+        // each other and a single one is not flush against the tabs.
+        out.push((" ".to_string(), theme.bar.style()));
+        for run in &segment.runs {
+            // Dim is the theme's dim colour rather than the dim
+            // attribute: half the terminals render SGR 2 as nothing at
+            // all, and the bar already has a colour for "quieter".
+            let base = if run.dim { theme.bar_dim.style() } else { theme.bar.style() };
+            let mut attrs = base.attrs;
+            attrs.set(haven_core::style::Attrs::BOLD, run.bold);
+            attrs.set(haven_core::style::Attrs::ITALIC, run.italic);
+            let style = Style {
+                fg: run.colour.map(haven_core::Color::Indexed).unwrap_or(base.fg),
+                attrs,
+                ..base
+            };
+            out.push((run.text.clone(), style));
+        }
+    }
+    out
 }
 
 /// The user the focused pane is running as, when it is not Haven's own.
@@ -563,6 +609,7 @@ mod tests {
             active_window: 1,
             started_unix: 1000,
             clients: 1,
+            plugins: Vec::new(),
         }
     }
 
@@ -807,6 +854,7 @@ mod suggestion_tests {
             active_window: 1,
             started_unix: 0,
             clients: 1,
+            plugins: Vec::new(),
         };
         let widgets = pane_numbers(Some(&status), Some(haven_proto::PaneId(2)), &Theme::haven());
         assert_eq!(widgets.len(), 2);
@@ -850,6 +898,7 @@ mod suggestion_tests {
             active_window: 1,
             started_unix: 0,
             clients: 1,
+            plugins: Vec::new(),
         };
         assert!(pane_numbers(Some(&status), None, &Theme::haven()).is_empty());
     }
