@@ -1,30 +1,17 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  # macOS only when asked, or once a week. See the `macos` job.
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 jobs:
   test:
-    strategy:
-      # Without this, a macOS failure cancels the Linux job mid-run and
-      # the result reads as "Linux failed too" when Linux was passing.
-      # That cost real time to misread.
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    # macOS is advisory, not a gate. It still runs and still reports; it
-    # just does not fail the workflow.
-    #
-    # Not because the failures there are uninteresting — the opposite.
-    # Chasing them found that bash 3.2 has no `PS0`, that zsh
-    # integration had never worked anywhere, and that every plugin
-    # install failed on bsdtar. But the window is untested on macOS and
-    # the runners are slow enough that jobs get cancelled outright, so
-    # a red macOS job has meant "look at this" rather than "do not
-    # merge" for as long as there has been one. Say so in the
-    # configuration instead of in people's heads.
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -33,6 +20,33 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+
+  # macOS, on request and once a week — not on every push.
+  #
+  # It was in the matrix beside Linux and marked `continue-on-error`, which
+  # was not enough: the runners are slow enough that these jobs get
+  # *cancelled* rather than failing, and `continue-on-error` excuses a
+  # failure, not a cancellation. So every run reported `cancelled` even
+  # though Linux had passed in three minutes.
+  #
+  # What it finds is worth having — chasing it found that bash 3.2 has no
+  # `PS0`, that zsh integration had never worked anywhere, that every
+  # plugin install failed on bsdtar, and that a session restore could block
+  # on a container runtime. It is just not worth blocking a push on a job
+  # that takes twenty minutes and may not finish. `gh workflow run ci`
+  # asks for it.
+  macos:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace
+
   # Architectural invariant from docs/PLAN.md section 4.2: the mux core must not
   # be able to link a frontend. Cheap to check, expensive to discover late.
   layering:
