@@ -15,8 +15,8 @@ default-theme = "navy"
 preferred-dark-theme = "navy"
 additional-css = ["theme/haven.css"]
 additional-js = ["theme/haven.js", "theme/palette.js"]
-git-repository-url = "https://github.com/Lanpingner/Haven"
-edit-url-template = "https://github.com/Lanpingner/Haven/edit/master/site/{path}"
+git-repository-url = "https://github.com/haven-terminal/Haven"
+edit-url-template = "https://github.com/haven-terminal/Haven/edit/master/site/{path}"
 site-url = "/Haven/"
 
 [output.html.playground]

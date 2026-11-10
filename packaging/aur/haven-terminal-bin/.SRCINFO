@@ -2,7 +2,7 @@ pkgbase = haven-terminal-bin
 	pkgdesc = A GPU terminal with the multiplexer already inside it (binary release)
 	pkgver = 0.0.4
 	pkgrel = 1
-	url = https://github.com/Lanpingner/Haven
+	url = https://github.com/haven-terminal/Haven
 	arch = x86_64
 	license = MIT
 	license = Apache-2.0
@@ -23,7 +23,7 @@ pkgbase = haven-terminal-bin
 	conflicts = haven-terminal-git
 	options = !strip
 	options = !debug
-	source_x86_64 = https://github.com/Lanpingner/Haven/releases/download/v0.0.4/haven-0.0.4-x86_64-unknown-linux-gnu.tar.gz
+	source_x86_64 = https://github.com/haven-terminal/Haven/releases/download/v0.0.4/haven-0.0.4-x86_64-unknown-linux-gnu.tar.gz
 	sha256sums_x86_64 = 2efc2e74d266807743f9bcaac38f54f00257247f6ed7cb56ec01f34c2513bd05
 
 pkgname = haven-terminal-bin

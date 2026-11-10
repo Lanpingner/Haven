@@ -2,7 +2,7 @@ pkgbase = haven-terminal
 	pkgdesc = A GPU terminal with the multiplexer already inside it
 	pkgver = 0.0.4
 	pkgrel = 1
-	url = https://github.com/Lanpingner/Haven
+	url = https://github.com/haven-terminal/Haven
 	arch = x86_64
 	arch = aarch64
 	license = MIT
@@ -24,7 +24,7 @@ pkgbase = haven-terminal
 	conflicts = haven-terminal-bin
 	conflicts = haven-terminal-git
 	options = !lto
-	source = haven-terminal-0.0.4.tar.gz::https://github.com/Lanpingner/Haven/archive/refs/tags/v0.0.4.tar.gz
+	source = haven-terminal-0.0.4.tar.gz::https://github.com/haven-terminal/Haven/archive/refs/tags/v0.0.4.tar.gz
 	sha256sums = 8aaa518b20fd25bd1849fa5cd7e294efc0b4f54d797397d1f7e835cdbf0478c3
 
 pkgname = haven-terminal

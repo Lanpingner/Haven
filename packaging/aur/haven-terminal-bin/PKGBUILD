@@ -12,7 +12,7 @@ pkgrel=1
 pkgdesc='A GPU terminal with the multiplexer already inside it (binary release)'
 # Only what the release workflow builds. The source package covers the rest.
 arch=('x86_64')
-url='https://github.com/Lanpingner/Haven'
+url='https://github.com/haven-terminal/Haven'
 license=('MIT' 'Apache-2.0')
 depends=('glibc' 'gcc-libs' 'libxkbcommon' 'vulkan-icd-loader')
 optdepends=('libx11: windows on X11'

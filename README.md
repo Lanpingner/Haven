@@ -26,7 +26,7 @@ with `mdbook serve site --open`; the last chapter includes this repository's
 
 ```sh
 # Arch, from a signed pacman repository — no AUR account needed
-curl -fsSL https://github.com/Lanpingner/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
+curl -fsSL https://github.com/haven-terminal/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
 sudo pacman -Syu && sudo pacman -S haven-terminal-bin
 
 # the key that repository is signed with:
@@ -37,7 +37,7 @@ yay -S haven-terminal-bin        # the binary from the release
 yay -S haven-terminal            # or build it yourself
 
 # Anywhere else
-curl -fsSL https://github.com/Lanpingner/Haven/releases/latest/download/haven-install.sh | sh
+curl -fsSL https://github.com/haven-terminal/Haven/releases/latest/download/haven-install.sh | sh
 ```
 
 The installer checks the download's checksum before it believes it, installs

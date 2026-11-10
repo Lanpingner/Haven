@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install Haven Terminal.
 #
-#     curl -fsSL https://github.com/Lanpingner/Haven/releases/latest/download/haven-install.sh | sh
+#     curl -fsSL https://github.com/haven-terminal/Haven/releases/latest/download/haven-install.sh | sh
 #
 # What it does, in order: work out which release asset fits this machine,
 # download it with its checksum, refuse to install anything whose checksum
@@ -22,7 +22,7 @@
 # whose shell nobody has asked about.
 set -eu
 
-REPO=${HAVEN_REPO:-Lanpingner/Haven}
+REPO=${HAVEN_REPO:-haven-terminal/Haven}
 BASE_URL=${HAVEN_BASE_URL:-}
 VERSION=${HAVEN_VERSION:-}
 PREFIX=${HAVEN_PREFIX:-}

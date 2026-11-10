@@ -16,7 +16,7 @@ when the window goes away.
 <div class="cta">
 <a class="primary" href="./install.md">Install it</a>
 <a href="./comparison.md">How it compares</a>
-<a href="https://github.com/Lanpingner/Haven">GitHub</a>
+<a href="https://github.com/haven-terminal/Haven">GitHub</a>
 </div>
 
 <div class="pills">

@@ -7,7 +7,7 @@ project's.
 
 ```sh
 # A signed pacman repository, served from the GitHub release.
-curl -fsSL https://github.com/Lanpingner/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
+curl -fsSL https://github.com/haven-terminal/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
 sudo pacman -Syu
 sudo pacman -S haven-terminal-bin
 ```
@@ -40,7 +40,7 @@ you got it.
 ## Anywhere else, with one line
 
 ```sh
-curl -fsSL https://github.com/Lanpingner/Haven/releases/latest/download/haven-install.sh | sh
+curl -fsSL https://github.com/haven-terminal/Haven/releases/latest/download/haven-install.sh | sh
 ```
 
 It downloads the release for your machine, **checks the checksum before it
@@ -59,14 +59,14 @@ your config and your save file alone. Uninstalling a program is not a reason
 to throw away the sessions it would have restored.
 
 Piping a script from the internet into a shell is a thing worth being uneasy
-about. [Read it first](https://github.com/Lanpingner/Haven/blob/master/install.sh)
+about. [Read it first](https://github.com/haven-terminal/Haven/blob/master/install.sh)
 — it is short, it is POSIX `sh`, and the only URL it touches is the one you
 gave it.
 
 ## From source
 
 ```sh
-git clone https://github.com/Lanpingner/Haven
+git clone https://github.com/haven-terminal/Haven
 cd Haven
 cargo build --release --locked -p haven
 ./target/release/haven gpu
@@ -112,4 +112,4 @@ A tag builds the tarball, the checksums and a copy of the installer, and
 publishes them; the AUR packages are then pointed at that release by one
 script and pushed by another. The whole chain, and why each link is shaped
 the way it is, is in
-[`packaging/README.md`](https://github.com/Lanpingner/Haven/blob/master/packaging/README.md).
+[`packaging/README.md`](https://github.com/haven-terminal/Haven/blob/master/packaging/README.md).

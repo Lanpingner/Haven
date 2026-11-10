@@ -2,7 +2,7 @@
 # Add Haven's pacman repository to this machine.
 #
 #     sudo packaging/repo/add-repo.sh
-#     curl -fsSL https://github.com/Lanpingner/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
+#     curl -fsSL https://github.com/haven-terminal/Haven/raw/master/packaging/repo/add-repo.sh | sudo sh
 #
 # After this, `pacman -Syu` (or `yay -Syu`) keeps Haven up to date like any
 # other package: no AUR account, no compiling, no reinstalling by hand.
@@ -12,7 +12,7 @@
 # last section of this file is the undo.
 set -eu
 
-REPO=${HAVEN_REPO:-Lanpingner/Haven}
+REPO=${HAVEN_REPO:-haven-terminal/Haven}
 NAME=haven
 SERVER="https://github.com/$REPO/releases/latest/download"
 CONF=${PACMAN_CONF:-/etc/pacman.conf}

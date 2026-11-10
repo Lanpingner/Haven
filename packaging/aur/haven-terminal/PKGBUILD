@@ -11,7 +11,7 @@ pkgver=0.0.4
 pkgrel=1
 pkgdesc='A GPU terminal with the multiplexer already inside it'
 arch=('x86_64' 'aarch64')
-url='https://github.com/Lanpingner/Haven'
+url='https://github.com/haven-terminal/Haven'
 license=('MIT' 'Apache-2.0')
 # Only glibc and gcc-libs are linked. Everything the window needs — Vulkan,
 # libxkbcommon, the display server's client library — is opened at runtime,

@@ -1907,6 +1907,7 @@ dependencies = [
  "haven-core",
  "haven-mux",
  "haven-plugin",
+ "haven-plugin-host",
  "haven-proto",
  "haven-pty",
  "haven-shell",

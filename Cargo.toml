@@ -23,7 +23,7 @@ version = "0.0.4"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/Lanpingner/Haven"
+repository = "https://github.com/haven-terminal/Haven"
 
 [workspace.dependencies]
 haven-core = { path = "crates/haven-core" }

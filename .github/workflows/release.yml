@@ -83,12 +83,12 @@ jobs:
           ## Install
 
           ```sh
-          curl -fsSL https://github.com/Lanpingner/Haven/releases/latest/download/haven-install.sh | sh
+          curl -fsSL https://github.com/haven-terminal/Haven/releases/latest/download/haven-install.sh | sh
           ```
 
           On Arch there is a signed pacman repository, so `pacman -Syu` keeps
           Haven up to date like anything else — see
-          [packaging/README.md](https://github.com/Lanpingner/Haven/blob/master/packaging/README.md#the-pacman-repository).
+          [packaging/README.md](https://github.com/haven-terminal/Haven/blob/master/packaging/README.md#the-pacman-repository).
           The AUR packages are `haven-terminal-bin` and `haven-terminal`.
 
           The binary needs glibc 2.35 or newer. `haven attach` and `haven tui`
