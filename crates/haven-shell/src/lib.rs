@@ -88,6 +88,58 @@ fn materialize(dir: &Path, rel: &str, script: &str) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Run a program, wait for it, and give up after `limit`.
+///
+/// Every external command Haven runs synchronously needs one of these.
+/// `Command::output()` waits forever, and the programs being asked are
+/// exactly the ones that hang: a container CLI whose daemon is not
+/// running can block for a minute or never answer at all, and on the
+/// daemon's thread that is the terminal freezing. It was `docker
+/// inspect` during a session restore that showed this up — a saved
+/// container pane made the restore wait on Docker Desktop.
+///
+/// `None` means it could not be run, failed, or took too long; the
+/// callers here treat all three the same, because a menu of containers
+/// that cannot be built is an empty menu either way.
+pub fn output_within(
+    program: &str,
+    args: &[&str],
+    limit: std::time::Duration,
+) -> Option<std::process::Output> {
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(program)
+        .args(args)
+        // No terminal and no input: a program that asks a question gets
+        // end-of-file rather than waiting for an answer nobody will give.
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+            Err(_) => return None,
+        }
+    }
+    child.wait_with_output().ok()
+}
+
+/// How long any of these probes may take.
+///
+/// Generous for a question like "is this container running", and short
+/// enough that a terminal does not appear to hang while one is asked.
+pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// A path as a shell can safely read it.
 ///
 /// The shims are generated shell code with paths substituted into them,
@@ -136,7 +188,10 @@ fn fish_version(program: &Path) -> Option<(u32, u32)> {
     }
 
     let parsed = (|| {
-        let out = std::process::Command::new(program).arg("--version").output().ok()?;
+        // Bounded, like every other program Haven asks a question of: a
+        // shell that does not answer `--version` must not hold up the
+        // pane that wanted one.
+        let out = output_within(&program.to_string_lossy(), &["--version"], PROBE_TIMEOUT)?;
         let text = String::from_utf8_lossy(&out.stdout);
         // "fish, version 4.9.3"
         let version = text.split_whitespace().last()?;
@@ -806,5 +861,47 @@ mod quoting_tests {
                 .expect("bash");
             assert_eq!(String::from_utf8_lossy(&out.stdout), "/tmp/it's here");
         }
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// The property the daemon depends on: a program that does not finish
+    /// is given up on, rather than waited for. `docker` with no daemon
+    /// behind it is this, and it used to be asked during a session
+    /// restore on the thread that answers clients.
+    #[test]
+    fn a_program_that_will_not_finish_is_given_up_on() {
+        let started = Instant::now();
+        let out = output_within("/bin/sh", &["-c", "sleep 60"], Duration::from_millis(300));
+        let waited = started.elapsed();
+        assert!(out.is_none(), "a program that outlived its deadline should give nothing");
+        assert!(waited < Duration::from_secs(5), "waited {waited:?} for a 300ms deadline");
+    }
+
+    #[test]
+    fn a_program_that_finishes_is_not_interfered_with() {
+        let out = output_within("/bin/sh", &["-c", "printf hello"], Duration::from_secs(5))
+            .expect("it finishes well inside the deadline");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "hello");
+    }
+
+    #[test]
+    fn a_program_that_is_not_there_is_nothing_rather_than_a_panic() {
+        assert!(output_within("haven-no-such-program", &[], Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn a_program_that_waits_for_input_is_not_waited_for() {
+        // stdin is closed, so `cat` reads end-of-file and exits rather
+        // than sitting there until the deadline.
+        let started = Instant::now();
+        let out = output_within("/bin/cat", &[], Duration::from_secs(5));
+        assert!(out.is_some(), "it should exit on end-of-file, not time out");
+        assert!(started.elapsed() < Duration::from_secs(4), "it waited for input");
     }
 }

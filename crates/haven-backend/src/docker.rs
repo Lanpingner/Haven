@@ -142,11 +142,12 @@ impl Docker {
 /// Run the CLI and take its stdout, or `None` if it could not be run or said
 /// it failed. A missing `docker` is not an error here: it is an empty menu.
 fn capture(cli: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(cli)
-        .args(args)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    // With a deadline. `docker` with no daemon behind it does not fail,
+    // it waits — and this is called while restoring a session and while
+    // building a menu, both on the thread that answers clients. One
+    // unresponsive container runtime used to be an unresponsive
+    // terminal.
+    let out = haven_shell::output_within(cli, args, haven_shell::PROBE_TIMEOUT)?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
