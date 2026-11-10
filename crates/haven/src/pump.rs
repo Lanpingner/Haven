@@ -39,6 +39,56 @@ pub struct PumpStats {
 /// `raw` accumulates everything the child wrote, which the compatibility tests
 /// use to assert on sequences the grid deliberately does not retain (OSC 133
 /// marks, for instance, until the semantic-prompt model lands in M3.7).
+/// Read until the child has spoken and then gone quiet for `quiet`, or
+/// until `cap` has passed.
+///
+/// Used before writing input, so that what is written is read by a child
+/// that exists. Everything read is fed to the emulator and kept, exactly
+/// as [`pump`] would: this is part of the session, not a warm-up to be
+/// discarded.
+fn settle(
+    pty: &mut Pty,
+    emu: &mut Emulator,
+    raw: &mut Vec<u8>,
+    quiet: Duration,
+    cap: Duration,
+) -> io::Result<()> {
+    let start = Instant::now();
+    let mut heard = false;
+    let mut last = Instant::now();
+    let mut buf = [0u8; 65536];
+
+    while start.elapsed() < cap {
+        // Before the child has said anything there is nothing to be quiet
+        // about, so the whole cap is available to it.
+        if heard && last.elapsed() >= quiet {
+            return Ok(());
+        }
+        let remaining = cap.saturating_sub(start.elapsed());
+        if !wait_readable(pty, remaining.min(quiet))? {
+            continue;
+        }
+        match pty.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(n) => {
+                heard = true;
+                last = Instant::now();
+                raw.extend_from_slice(&buf[..n]);
+                emu.feed(&buf[..n]);
+                let reply = emu.term.take_reply();
+                if !reply.is_empty() {
+                    pty.write_all(&reply)?;
+                    pty.flush()?;
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 pub fn pump(
     pty: &mut Pty,
     emu: &mut Emulator,
@@ -118,16 +168,30 @@ pub fn run_to_screen(
     let mut pty = Pty::spawn(cfg)?;
     let mut emu = Emulator::new(cfg.size.cols as usize, cfg.size.rows as usize);
 
+    let mut raw = Vec::new();
+
     if !input.is_empty() {
-        // Writing immediately is safe: the pty buffers until the child reads.
-        // Interactive shells still need a beat to install their line editor,
-        // or the first keystrokes land before the reader exists.
-        std::thread::sleep(Duration::from_millis(150));
+        // The pty buffers, so writing early loses nothing — but an
+        // interactive child has to install its line editor first, and
+        // keystrokes that arrive before it does are read by nobody.
+        //
+        // This was a flat 150ms sleep, which is plenty for a shell and
+        // nowhere near enough for a whole terminal: `haven tui` starts a
+        // mux, a pty and a shell inside the one being tested. On a slow
+        // machine the input vanished and the test reported an inner
+        // terminal that had in fact rendered perfectly and simply never
+        // been typed at.
+        //
+        // So it waits for the child to *say* something, which is the only
+        // honest signal that it is running, and then for it to stop — a
+        // prompt drawn and nothing following it. Capped, so a child that
+        // says nothing at all still gets written to and the test fails on
+        // its own assertion rather than on a timeout here.
+        settle(&mut pty, &mut emu, &mut raw, Duration::from_millis(250), limits.total / 2)?;
         pty.write_all(input)?;
         pty.flush()?;
     }
 
-    let mut raw = Vec::new();
     let stats = pump(&mut pty, &mut emu, limits, &mut raw)?;
     Ok((emu, raw, stats))
 }
