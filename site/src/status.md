@@ -70,8 +70,14 @@ warnings, `cargo test --workspace` green.
 
 ## Not written yet
 
-- **Plugins.** The WASM host and the WIT world are specified in §15 of the plan
-  and nothing is built.
+- **Plugins that run.** The half that *distributes* them is built and
+  documented — [signed repositories](./plugins.md): a repository pinned to one
+  GPG key, a signed `plugins.yaml`, SHA-256 per artifact, capability grants
+  recorded so an update that wants more has to ask again. The WASM host and the
+  WIT world of §15 are still only specified, so nothing loads a plugin yet.
+  Distribution went first because it is the part that cannot be retrofitted:
+  once people install plugins by pasting a `curl | sh`, a signature is a
+  migration rather than a feature.
 - **Live daemon upgrade.** A new binary currently needs the daemon restarted.
 - **Ligatures** in the GPU window, which need a shaping engine. Bold, italic
   and colour faces are in.

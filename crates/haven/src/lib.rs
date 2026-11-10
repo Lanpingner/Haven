@@ -6,6 +6,7 @@
 
 pub mod attach;
 pub mod keys;
+pub mod plugin;
 pub mod pump;
 pub mod shot;
 pub mod solo;

@@ -850,8 +850,40 @@ fs = ["$CWD:ro"]
 - No `exec` through a shell, ever. argv arrays only.
 
 ### 15.4 Distribution & authoring
-- A plugin is a directory with a manifest + `.wasm`, installed from a path, a git
-  URL or an archive. Lockfile with content hashes; no auto-update.
+
+**Built** (`haven-plugin`, `haven plugin …`). Distribution landed before the
+runtime, deliberately: it is the part that cannot be retrofitted, because once
+people install plugins by pasting a `curl | sh` a signature is a migration
+rather than a feature. See `site/src/plugins.md` for the user-facing half.
+
+- **Signed repositories, apt's shape.** `haven plugin repo add <url> --key
+  <fingerprint>` pins a repository to exactly one key. Only that key may sign
+  that repository's index — not "a key in the keyring", which is the mistake
+  apt spent years undoing.
+- A repository is a git repository, an HTTPS directory or a local directory,
+  chosen by the URL. Plain `http://` is refused: the signature would still hold,
+  but there is no `Valid-Until` here, so anyone in the path could pin you to an
+  old index.
+- One index, `plugins.yaml`, with a detached `plugins.yaml.sig` — apt's
+  `Release` and `Packages` folded together, because a plugin repository is small
+  enough that splitting them buys only a second signature to check. The index
+  carries a SHA-256 per artifact, so one signature over one small file covers
+  every download.
+- Verification is **rpgp**, not a `gpg` child process: a terminal should not need
+  GnuPG installed to update a plugin, and the keyring is Haven's own file rather
+  than the one the user signs mail with.
+- The index is read by a **deliberately small YAML** of Haven's own: it runs on
+  unverified bytes from the network, so it is a subset with a depth cap and
+  unknown keys are errors. (The first version of it overflowed the stack on
+  2000 nested lines; indentation does not bound recursion.)
+- Capability grants are recorded on install, so an **update that asks for more
+  has to ask again**, and only about the difference.
+- Artifacts are audited twice — member names before unpacking, the extracted
+  tree after — because a hash proves who wrote an archive, never that what they
+  wrote is safe to extract, and `tar -tzf` cannot tell you that `gitline.wasm`
+  is a symlink to `/etc/passwd`.
+- Still to do here: `haven plugin update` for upgrading in place, and a
+  lockfile. No auto-update, by design.
 - `haven-plugin-api` is the Rust guest SDK: `#[haven::plugin]` macro, typed event
   enums, a widget builder. `cargo component build` and you're done.
 - `xtask plugin-test` runs a plugin headless against a recorded event stream and

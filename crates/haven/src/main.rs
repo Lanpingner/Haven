@@ -26,6 +26,7 @@ usage:
   haven dump [options]              headless: print a program's final screen
   haven screenshot [options]        headless: render a program on the GPU to a file
   haven shell-info [--login]        what a pane would launch
+  haven plugin ...                  signed plugin repositories (`haven plugin help`)
 
 options:
   --cols <n>       columns (default 80)
@@ -69,6 +70,14 @@ struct Args {
     /// one, because "new session" is on that list too.
     choose: bool,
     subcommand: Option<String>,
+    /// Every bare word, in order. `server run` needs one; `plugin repo add
+    /// <url>` needs three, which is why this exists beside `subcommand`.
+    words: Vec<String>,
+    name: Option<String>,
+    key: Option<String>,
+    key_file: Option<String>,
+    yes: bool,
+    root: Option<String>,
     program: Option<PathBuf>,
     rest: Vec<OsString>,
 }
@@ -91,6 +100,12 @@ impl Default for Args {
             target: None,
             choose: false,
             subcommand: None,
+            words: Vec::new(),
+            name: None,
+            key: None,
+            key_file: None,
+            yes: false,
+            root: None,
             program: None,
             rest: Vec::new(),
         }
@@ -114,6 +129,11 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<(String, Args), String>
             "--no-integrate" => args.integrate = false,
             "--raw" => args.raw = true,
             "--choose" => args.choose = true,
+            "--yes" | "-y" => args.yes = true,
+            "--name" => args.name = Some(value("--name")?),
+            "--key" => args.key = Some(value("--key")?),
+            "--key-file" => args.key_file = Some(value("--key-file")?),
+            "--root" => args.root = Some(value("--root")?),
             "--send" => args.send = decode_escapes(&value("--send")?),
             "--socket" => args.socket = Some(PathBuf::from(value("--socket")?)),
             "--out" => args.out = Some(PathBuf::from(value("--out")?)),
@@ -135,9 +155,14 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<(String, Args), String>
                 }
                 break;
             }
-            // A bare word is a subcommand, as in `haven server run`.
-            other if !other.starts_with('-') && args.subcommand.is_none() => {
-                args.subcommand = Some(other.to_string())
+            // Bare words are the subcommand path: `server run`, or
+            // `plugin repo add <url>`. The first is kept on its own as
+            // well, because that is what the older commands read.
+            other if !other.starts_with('-') => {
+                if args.subcommand.is_none() {
+                    args.subcommand = Some(other.to_string());
+                }
+                args.words.push(other.to_string());
             }
             other => return Err(format!("unknown option: {other}")),
         }
@@ -226,6 +251,16 @@ fn main() -> ExitCode {
         "dump" => dump(args),
         "screenshot" => screenshot(args),
         "shell-info" => shell_info(args),
+        "plugin" | "plugins" => haven::plugin::run(haven::plugin::Options {
+            // The first word is `plugin` itself, which the dispatcher has
+            // already used.
+            words: args.words.clone(),
+            name: args.name.clone(),
+            key: args.key.clone(),
+            key_file: args.key_file.clone(),
+            yes: args.yes,
+            root: args.root.clone(),
+        }),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             ExitCode::SUCCESS

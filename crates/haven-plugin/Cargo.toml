@@ -1,0 +1,18 @@
+[package]
+name = "haven-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Signed plugin repositories for Haven: sources, indices, verification and installation"
+
+[dependencies]
+# OpenPGP in Rust, so verifying a repository does not depend on a `gpg`
+# binary being installed and on parsing its output. Haven keeps its own
+# keyring: a repository key is never added to the user's personal one.
+pgp = "0.21"
+sha2 = "0.10"
+
+[lints]
+workspace = true
