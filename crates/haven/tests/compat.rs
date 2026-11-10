@@ -280,7 +280,12 @@ fn integration_run_env(
     }
     cfg.args.push("-i".into());
     cfg.size = PtySize { cols: 60, rows: 8, ..Default::default() };
-    let limits = PumpLimits { idle: Duration::from_millis(1500), total: Duration::from_secs(20) };
+    // Generous, because a shell's startup is not what is being measured
+    // and these are the slowest tests here: zsh with `compinit`, fish
+    // building its completions. 1500ms was enough on a developer's
+    // machine and not on a macOS runner, where zsh reached its `%`
+    // partial-line marker and no further before the pump gave up.
+    let limits = PumpLimits { idle: Duration::from_millis(4_000), total: Duration::from_secs(40) };
     let (emu, raw, stats) = run_to_screen(&cfg, limits, send.as_bytes()).expect("shell");
     (Run { emu, raw: String::from_utf8_lossy(&raw).into_owned(), stats }, injection)
 }
@@ -388,7 +393,11 @@ fn haven_tui_runs_a_shell_inside_haven_itself() {
         &[("TERM", "xterm-256color"), ("COLORTERM", "truecolor")],
         "printf 'nested works\\r\\n'\n",
         (44, 6),
-        2000,
+        // A whole terminal starts up inside this one — a daemonless mux,
+        // a pty, a shell — and then has to draw. Two seconds covered it
+        // locally and did not on a macOS runner, which reported the
+        // outer shell's prompt and an inner terminal that never rendered.
+        5_000,
     );
     let screen = run.screen();
     assert!(screen.contains("nested works"), "inner terminal did not render:\n{screen}");
