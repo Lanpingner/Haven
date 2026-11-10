@@ -296,6 +296,7 @@ fn a_pomodoro_survives_the_plugin_being_reloaded() {
                 granted: &Capabilities::default(),
                 store_path: Some(store_path.clone()),
                 world: session().into(),
+                cache_dir: None,
             },
         )
         .expect("load")

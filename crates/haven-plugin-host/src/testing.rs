@@ -171,7 +171,16 @@ pub fn load(name: &str, granted: Capabilities, session: Session) -> Option<Loade
     Some(
         Loaded::new(
             engine,
-            Load { name, wasm: &wasm, granted: &granted, store_path: None, world: session.into() },
+            Load {
+                name,
+                wasm: &wasm,
+                granted: &granted,
+                store_path: None,
+                world: session.into(),
+                // In memory: a test should not leave compiled artifacts
+                // in the source tree, and it loads each plugin once.
+                cache_dir: None,
+            },
         )
         .unwrap_or_else(|e| panic!("{name} should load: {e}")),
     )

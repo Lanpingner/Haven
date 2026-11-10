@@ -68,12 +68,42 @@ plugin that loops forever stops deterministically rather than when the
 machine happens to notice. One that traps is unloaded and said to be
 broken, never retried in a loop.
 
-They run in the daemon rather than the client because they need the
-panes and have to survive you closing the window: a segment that
-vanished on detach and came back different would not be a status
-segment. A client is sent what a plugin *drew*, never the code — over
-SSH it could not run it, and if it could it would be running with
-permissions granted for a different machine.
+They run in the **daemon**, not the client, because they need the panes
+and have to survive you closing the window: a segment that vanished on
+detach and came back different would not be a status segment. A client
+is sent what a plugin *drew*, never the code — over SSH it could not run
+it, and if it could it would be running with permissions granted for a
+different machine.
+
+Loaded **once for the whole daemon**, not once per session. A plugin is
+one program; instantiating it for every window anyone opens is waste,
+and because `remember` is scoped to the plugin, two sessions holding two
+instances of `pomodoro` would write the same file and clobber each
+other. A session still gets its own answers — each plugin is handed that
+session's panes immediately before it is asked anything, so `cwd-crumbs`
+draws a different directory in each bar from the one instance.
+
+### Nothing is compiled when you open a terminal
+
+A component is compiled when you **install** it, and the result is kept
+beside it. Opening a terminal loads that precompiled artifact, which is
+the same bargain a shared library makes:
+
+| | 16 plugins |
+|---|---|
+| compiling them | 792 ms |
+| loading the precompiled artifacts | **7 ms** |
+
+So installing all sixteen takes about a second, once, and every terminal
+after that pays seven milliseconds. The artifact is named after the
+hash of the component and the version of wasmtime that produced it, so
+an upgrade recompiles instead of loading something it cannot use, and
+uninstalling takes it with the plugin.
+
+(If you ever see those figures ten times larger, you are measuring a
+debug build of Haven — the compiler doing the work is wasmtime's, and an
+unoptimised build of it is five to ten times slower. That mistake cost
+an afternoon's worth of wrong conclusions here.)
 
 What a plugin asks for is refused rather than fatal. A plugin granted no
 `exec` still has `run` in its vocabulary; calling it returns a sentence

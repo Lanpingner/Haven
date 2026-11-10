@@ -381,6 +381,12 @@ fn install(name: &str, options: &Options, paths: &Paths) -> Result<(), String> {
     if let Some(record) = installed.get(name) {
         if record.version == plugin.version && record.sha256 == plugin.sha256 {
             println!("{} {} is already installed", plugin.name, plugin.version);
+            // Still worth compiling, and this is where it was missed:
+            // `install` returned here before warming, so installing all
+            // sixteen in a loop — the obvious way to try them — left
+            // every cache empty and the first terminal paying for all of
+            // it. `warm` does nothing when the artifact is already there.
+            warm(record, paths);
             return Ok(());
         }
     }
@@ -490,6 +496,40 @@ fn agreed(plugin: &Plugin, asking: &Capabilities, yes: bool) -> Result<bool, Str
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
     Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
+}
+
+/// Compile the plugin now, so that opening a terminal does not.
+///
+/// A component takes most of a second to compile and a session loads
+/// every plugin it has, so sixteen of them meant ten seconds before the
+/// first prompt appeared — found by installing all sixteen and waiting.
+/// The compiled form is cached beside the plugin either way; this only
+/// decides who waits for it, and the end of an install is a far better
+/// place than the start of a terminal.
+///
+/// Best effort, and quiet about failing: the plugin is installed and
+/// will work, it will simply be compiled when it is first loaded.
+fn warm(record: &haven_plugin::store::Record, paths: &Paths) {
+    let dir = store::plugin_dir(paths, &record.name);
+    let Ok(wasm) = std::fs::read(dir.join(&record.entry)) else { return };
+    let Ok(engine) = haven_plugin_host::Engine::new() else { return };
+    // Silent when it was already compiled: `install` is run in loops and
+    // a line per plugin saying nothing happened is noise.
+    let already = std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries.flatten().any(|e| e.file_name().to_string_lossy().starts_with("compiled-"))
+        })
+        .unwrap_or(false);
+    if already {
+        return;
+    }
+    match engine.precompile(&record.name, &wasm, &dir) {
+        Ok(()) => println!("  compiled, so the first terminal does not have to"),
+        // Worth one line: it means something is wrong with the component
+        // that only shows up when it is loaded, and the user would
+        // rather hear it now than have a plugin that never appears.
+        Err(e) => eprintln!("haven: {e}"),
+    }
 }
 
 fn remove(name: &str, paths: &Paths) -> Result<(), String> {

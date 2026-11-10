@@ -107,11 +107,36 @@ impl Snapshot {
     }
 }
 
-/// The engine, shared by every plugin. Compiling a component is the
-/// expensive part and the engine is what caches it.
-#[derive(Debug)]
+/// The engine, shared by every plugin, and the compiled components it
+/// has already produced.
+///
+/// Compiling is the expensive part by a wide margin — about a second per
+/// component — and it was being paid once per plugin *per session*.
+/// Sixteen plugins meant seventeen seconds before the first frame
+/// appeared, and a second session meant seventeen more. Measured by
+/// running them, not by reasoning about them.
+///
+/// So a component is compiled once and kept: `Component` is per-engine
+/// and can be instantiated any number of times, which is exactly the
+/// shape of "one plugin, many sessions". And the compiled form is
+/// written beside the plugin, so a daemon restart does not pay for it
+/// again either.
 pub struct Engine {
     inner: WasmEngine,
+    /// Keyed by the hash of the component, not its name: a plugin that
+    /// has been updated is a different component under the same name,
+    /// and serving the old one from a cache would be worse than slow.
+    compiled: std::cell::RefCell<BTreeMap<String, Component>>,
+}
+
+impl std::fmt::Debug for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // By hand: a compiled `Component` has no `Debug`, and the only
+        // interesting fact about this is how many are cached.
+        f.debug_struct("Engine")
+            .field("compiled", &self.compiled.borrow().len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Engine {
@@ -120,12 +145,92 @@ impl Engine {
         config.wasm_component_model(true);
         // Fuel, so a runaway plugin is stopped rather than tolerated.
         config.consume_fuel(true);
-        // A plugin is a page of logic called on an event; compiling it
-        // quickly matters more than running it quickly, and the daemon
-        // pays the compile on every load.
-        config.cranelift_opt_level(wasmtime::OptLevel::Speed);
+        // The cheapest compile, not the fastest code. A plugin formats a
+        // few dozen characters when something happens; what matters is
+        // that it is ready before the terminal is, and `Speed` cost
+        // about a second per component to optimise work that takes
+        // microseconds to run.
+        config.cranelift_opt_level(wasmtime::OptLevel::None);
         let inner = WasmEngine::new(&config).map_err(|e| Error::Engine(e.to_string()))?;
-        Ok(Self { inner })
+        Ok(Self { inner, compiled: std::cell::RefCell::new(BTreeMap::new()) })
+    }
+
+    /// Compile a plugin now and leave the result in its directory, so
+    /// that nothing else ever has to.
+    ///
+    /// Called by `haven plugin install`. Compiling sixteen plugins takes
+    /// about ten seconds, and the choice is only about *when* somebody
+    /// waits for it: at the end of an install they asked for, or in
+    /// front of a terminal that will not open. An install already takes
+    /// a moment and nobody is staring at a blank prompt.
+    pub fn precompile(&self, name: &str, wasm: &[u8], cache: &Path) -> Result<(), Error> {
+        self.component(name, wasm, Some(cache)).map(|_| ())
+    }
+
+    /// Compile a component, or hand back one already compiled.
+    ///
+    /// `cache` is a directory to keep the compiled form in — the
+    /// plugin's own, normally. `None` compiles in memory only, which is
+    /// what a test wants.
+    fn component(&self, name: &str, wasm: &[u8], cache: Option<&Path>) -> Result<Component, Error> {
+        let key = haven_plugin::sign::sha256(wasm);
+        if let Some(ready) = self.compiled.borrow().get(&key) {
+            return Ok(ready.clone());
+        }
+
+        // The wasmtime version is part of the filename because a
+        // compiled artifact is only valid for the version that made it,
+        // and `deserialize` on a mismatch is an error rather than a
+        // crash — but a stale file that errors every startup is still a
+        // stale file.
+        let cached = cache.map(|dir| {
+            dir.join(format!("compiled-{}-{}.cwasm", env!("WASMTIME_VERSION_TAG"), &key[..16]))
+        });
+
+        if let Some(path) = &cached {
+            if let Ok(bytes) = std::fs::read(path) {
+                // SAFETY: wasmtime cannot check a precompiled artifact,
+                // so this trusts the bytes. They are ours: written by
+                // the block below into a directory inside the user's own
+                // data directory, named after the hash of the component
+                // they were compiled from and the version that compiled
+                // it. Anyone able to rewrite this file could equally
+                // replace the `.wasm` beside it, which is checked
+                // against a signed index at install time and not after
+                // — so this widens nothing. A corrupt or stale file
+                // comes back as an error and is recompiled.
+                let loaded = unsafe { Component::deserialize(&self.inner, &bytes) };
+                match loaded {
+                    Ok(component) => {
+                        self.compiled.borrow_mut().insert(key, component.clone());
+                        return Ok(component);
+                    }
+                    // Not fatal, and not worth a word to the user: the
+                    // only cost is compiling it again.
+                    Err(_) => {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
+
+        let component = Component::new(&self.inner, wasm)
+            .map_err(|e| Error::Compile { name: name.into(), why: e.to_string() })?;
+        if let Some(path) = &cached {
+            if let Ok(bytes) = component.serialize() {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                // Written by rename, so a daemon starting while another
+                // is writing cannot read half a file.
+                let tmp = path.with_extension("tmp");
+                if std::fs::write(&tmp, &bytes).is_ok() {
+                    let _ = std::fs::rename(&tmp, path);
+                }
+            }
+        }
+        self.compiled.borrow_mut().insert(key, component.clone());
+        Ok(component)
     }
 }
 
@@ -277,6 +382,10 @@ pub struct Load<'a> {
     /// The session as it is now. Replaced before each call with
     /// [`Loaded::refresh`].
     pub world: Snapshot,
+    /// Where to keep the compiled form of this component, so the next
+    /// session and the next daemon do not compile it again. `None`
+    /// compiles in memory only.
+    pub cache_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Load<'_> {
@@ -299,8 +408,7 @@ impl Loaded {
     /// cannot start is a load failure with a reason, rather than
     /// something that fails later on an event nobody connected to it.
     pub fn new(engine: &Engine, load: Load<'_>) -> Result<Self, Error> {
-        let component = Component::new(&engine.inner, load.wasm)
-            .map_err(|e| Error::Compile { name: load.name.into(), why: e.to_string() })?;
+        let component = engine.component(load.name, load.wasm, load.cache_dir.as_deref())?;
 
         let mut linker = Linker::new(&engine.inner);
         // WASI first, and granted nothing: see the note at the top.
