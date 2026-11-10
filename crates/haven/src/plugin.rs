@@ -24,7 +24,7 @@ use std::process::ExitCode;
 
 use haven_plugin::fetch::Tools;
 use haven_plugin::index::{Capabilities, Plugin};
-use haven_plugin::repo::{self, Paths, Source, Sources};
+use haven_plugin::repo::{self, Paths, Source, Sources, Trust};
 use haven_plugin::sign::{self, Key};
 use haven_plugin::store::{self, Installed};
 
@@ -40,6 +40,9 @@ pub struct Options {
     /// Answer every grant prompt with yes. Required when nobody is there
     /// to answer one.
     pub yes: bool,
+    /// Accept the key the repository itself serves, without being shown
+    /// it first. For scripts, which have nobody to show it to.
+    pub trust_repo_key: bool,
     /// Put the whole lot under one directory, for trying this out without
     /// touching a real configuration.
     pub root: Option<String>,
@@ -84,16 +87,16 @@ fn repo_add(url: &str, options: &Options, paths: &Paths) -> Result<(), String> {
     // sentence rather than a failed clone.
     haven_plugin::fetch::kind_of(url).map_err(|e| e.to_string())?;
 
-    let Some(wanted) = &options.key else {
-        return Err("`repo add` needs `--key <fingerprint>`: the fingerprint is what makes the \
-             repository's signature mean anything, and it has to reach you from somewhere \
-             other than the repository itself"
-            .to_string());
+    let wanted = match &options.key {
+        Some(text) => Some(sign::normalise_fingerprint(text).map_err(|e| e.to_string())?),
+        None => None,
     };
-    let fingerprint = sign::normalise_fingerprint(wanted).map_err(|e| e.to_string())?;
 
     let name = match &options.name {
-        Some(name) => name.clone(),
+        // A repository's name is a directory under `repos/` and the word
+        // you type to mean it, so it is held to the same rule a plugin's
+        // name is. `--name ../../x` used to put the cache elsewhere.
+        Some(name) => repo::check_name(name)?,
         None => repo::name_from_url(url)
             .ok_or_else(|| format!("cannot make a name out of `{url}` — pass `--name <n>`"))?,
     };
@@ -107,28 +110,54 @@ fn repo_add(url: &str, options: &Options, paths: &Paths) -> Result<(), String> {
         ));
     }
 
-    // The key: from a file if one was given, otherwise from the repository
-    // itself. Either way it is checked against the fingerprint, which is
-    // what makes fetching it safe.
-    let key = match &options.key_file {
-        Some(path) => {
+    // Where the key comes from, and what checked it.
+    //
+    // A key file, or a fingerprint on the command line, are both
+    // *verified*: what identifies the key arrived from somewhere other
+    // than the repository, so a substituted key is caught. Taking the
+    // repository's own key on its own is not verification — it is `ssh`'s
+    // bargain with host keys. Pinned from then on, so only the first
+    // contact was ever exposed, and worth a great deal more than nothing;
+    // but whoever answered at that moment is who Haven now trusts.
+    let (key, trust) = match (&options.key_file, &wanted) {
+        (Some(path), _) => {
             let armored = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
             let key = Key::parse(&armored).map_err(|e| e.to_string())?;
-            if key.fingerprint != fingerprint {
-                return Err(format!(
-                    "{path} holds key {}, not {}",
-                    sign::short(&key.fingerprint),
-                    sign::short(&fingerprint)
-                ));
+            if let Some(fingerprint) = &wanted {
+                if key.fingerprint != *fingerprint {
+                    return Err(format!(
+                        "{path} holds key {}, not {}",
+                        sign::short(&key.fingerprint),
+                        sign::short(fingerprint)
+                    ));
+                }
             }
-            key
+            // A key file is a key you already had and chose, which is
+            // what a fingerprint is for. Nothing to add.
+            (key, Trust::Fingerprint)
         }
-        None => repo::fetch_key(url, &fingerprint, &Tools, paths, &name)
-            .map_err(|e| format!("fetching the repository's key: {e}"))?,
+        (None, Some(fingerprint)) => (
+            repo::fetch_key(url, Some(fingerprint), &Tools, paths, &name)
+                .map_err(|e| format!("fetching the repository's key: {e}"))?,
+            Trust::Fingerprint,
+        ),
+        (None, None) => {
+            let key = repo::fetch_key(url, None, &Tools, paths, &name)
+                .map_err(|e| format!("fetching the repository's key: {e}"))?;
+            if !accepted(url, &key, options.trust_repo_key)? {
+                return Err("not added".to_string());
+            }
+            (key, Trust::FirstContact)
+        }
     };
 
     repo::Keyring::new(paths.clone()).add(&key).map_err(|e| e.to_string())?;
-    let source = Source { name: name.clone(), url: url.to_string(), fingerprint };
+    let source = Source {
+        name: name.clone(),
+        url: url.to_string(),
+        fingerprint: key.fingerprint.clone(),
+        trust,
+    };
     sources.add(source.clone()).map_err(|e| e.to_string())?;
     sources.save(paths).map_err(|e| e.to_string())?;
 
@@ -137,8 +166,16 @@ fn repo_add(url: &str, options: &Options, paths: &Paths) -> Result<(), String> {
     for id in &key.identities {
         println!("      {id}");
     }
-    // The identities are the key's own claims about itself, so say so.
-    println!("  (the name on a key is whatever its owner typed; the fingerprint is the part that matters)");
+    match trust {
+        // The identities are the key's own claims about itself, so say so.
+        Trust::Fingerprint => println!(
+            "  (the name on a key is whatever its owner typed; \
+             the fingerprint is the part that matters)"
+        ),
+        Trust::FirstContact => {
+            println!("  (taken from the repository itself: pinned from now on, but never checked)")
+        }
+    }
 
     match repo::refresh(&source, &Tools, paths) {
         Ok(got) => {
@@ -164,10 +201,19 @@ fn repo_list(paths: &Paths) -> Result<(), String> {
     for source in &sources.list {
         let state = match repo::cached(source, paths) {
             Ok(index) => format!("{} plugin{}", index.plugins.len(), plural(index.plugins.len())),
-            Err(e) => format!("no usable index: {e}"),
+            Err(e) => e.to_string(),
         };
         println!("{}  {}", source.name, source.url);
-        println!("  key {}  {state}", sign::short(&source.fingerprint));
+        let checked = if source.trust.is_verified() {
+            String::new()
+        } else {
+            // Said every time it is listed, not only when it was added:
+            // "I meant to compare that and did not" is a thing that
+            // happens, and a month later this listing is the only place
+            // it can still be noticed.
+            "  (never checked)".to_string()
+        };
+        println!("  key {}{checked}  {state}", sign::short(&source.fingerprint));
     }
     Ok(())
 }
@@ -363,6 +409,58 @@ fn install(name: &str, options: &Options, paths: &Paths) -> Result<(), String> {
     Ok(())
 }
 
+/// Show the key a repository served, and get an accept or a refusal.
+///
+/// This is the one moment in the whole chain where a person is the
+/// verification. There is nothing to compare the key against — that is
+/// the situation — so the fingerprint is printed the way GnuPG prints
+/// one, in groups, because the only useful thing to do with it is hold it
+/// beside a fingerprint from somewhere else.
+fn accepted(url: &str, key: &Key, already: bool) -> Result<bool, String> {
+    println!("{url} offers this key:");
+    println!();
+    println!("  {}", grouped(&key.fingerprint));
+    for id in &key.identities {
+        println!("  {id}");
+    }
+    println!();
+    println!(
+        "Nothing has checked this. The name on a key is whatever its owner typed,\n\
+         and the key was served by the repository it would vouch for — so accepting\n\
+         it trusts whoever answered just now. Compare the fingerprint against one\n\
+         from somewhere else (the project's page, a mail, a colleague) if you can.\n\
+         \n\
+         Haven will pin it: from now on only this key can sign this repository."
+    );
+    if already {
+        println!("\naccepted (--trust-repo-key)");
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err("there is nobody here to look at that key — pass `--key <fingerprint>` to \
+             check it against one you already have, or `--trust-repo-key` to accept \
+             whatever the repository serves"
+            .to_string());
+    }
+    print!("\naccept this key? [y/N] ");
+    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
+}
+
+/// A fingerprint in fours, the way `gpg` prints one, so it can be
+/// compared against a published one by eye without counting characters.
+fn grouped(fingerprint: &str) -> String {
+    let upper = fingerprint.to_uppercase();
+    let groups: Vec<String> =
+        upper.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).to_string()).collect();
+    // The wider gap in the middle is GnuPG's, and it is what makes two
+    // fingerprints side by side comparable at a glance.
+    let (first, second) = groups.split_at(groups.len().div_ceil(2));
+    format!("{}  {}", first.join(" "), second.join(" "))
+}
+
 /// Put the grant to the user, and get a yes or a no.
 fn agreed(plugin: &Plugin, asking: &Capabilities, yes: bool) -> Result<bool, String> {
     println!("{} {} wants to:", plugin.name, plugin.version);
@@ -457,10 +555,11 @@ options:
   --key <fingerprint>  the one key allowed to sign this repository's index.
                        40 hex digits, however you paste them. A short key id
                        is refused: those can be forged
-  --key-file <path>    an armored public key on disk. Without it the key is
-                       fetched from the repository itself and checked against
-                       --key, which is what makes the fingerprint the thing
-                       that matters
+  --key-file <path>    an armored public key on disk, instead of the one the
+                       repository serves
+  --trust-repo-key     accept the key the repository serves without being
+                       shown it. For scripts; interactively you are shown the
+                       fingerprint and asked
   --name <n>           what to call the repository (default: from its URL)
   --yes                grant what a plugin asks for without being asked
   --root <dir>         keep sources, keys and plugins under <dir> instead of
@@ -469,4 +568,10 @@ options:
 A repository is a git repository, an HTTPS directory, or a directory on this
 machine. Which, is read from the URL. It holds `plugins.yaml` and a detached
 signature `plugins.yaml.sig`, and may hold its public key as `key.asc`.
+
+With `--key` the repository's key is checked against a fingerprint you got from
+somewhere else, which is what makes the signature mean anything. Without it, the
+key is imported from the repository and shown to you to accept — pinned from
+then on, but never checked, so only the first contact was ever exposed. `repo
+list` marks those.
 ";

@@ -192,7 +192,9 @@ crates/
   haven-vtwrite   # cells → escape sequences (the inverse of the parser)
   haven-input     # key encoding (legacy + kitty CSI u), keymap resolution
   haven-config    # config parse/validate/reload, theme model
-  haven-plugin    # host runtime (wasmtime), capability broker, lifecycle
+  haven-plugin    # signed repositories, indices, verification, installation
+                  # (built); host runtime (wasmtime), capability broker and
+                  # lifecycle still to come — see §15.4
   haven-plugin-api# the WIT world + a Rust guest SDK crate plugins depend on
   havend          # daemon binary
   haven           # client binary
@@ -1240,7 +1242,8 @@ cannot `dlopen`, which is how the window finds Vulkan.
   plugins are specified to *run in the daemon* — building the host first would
   have meant building it in the wrong place and moving it.
 
-**Not started:** plugins (M3.5), live daemon upgrade (M5.9), fidelity tiers
+**Not started:** the plugin *runtime* (M3.5) — plugin distribution is built, see
+§15.4 — live daemon upgrade (M5.9), fidelity tiers
 end-to-end (M6.5), sixel/kitty graphics. Ligatures need a shaping engine;
 bold, italic and colour faces are in.
 

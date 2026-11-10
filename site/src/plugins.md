@@ -38,10 +38,9 @@ added haven (https://plugins.example.com/haven)
   7 plugins
 ```
 
-The fingerprint is not optional, and it is the one thing that must reach
-you from somewhere other than the repository — a web page, a mailing
-list, a colleague. Everything else can be fetched, because everything
-else is checked against it.
+The fingerprint is the one thing worth getting from somewhere other than
+the repository — a web page, a mailing list, a colleague. Everything else
+can be fetched, because everything else is checked against it.
 
 Paste it however you have it: with spaces, without, upper or lower case,
 with a `0x` in front. A **short key id** is refused:
@@ -55,10 +54,71 @@ short key id is not enough to pin a key to
 A 64-bit key id can be collided on a laptop. Accepting one would make the
 pin decorative.
 
-The key itself comes from `--key-file`, or — if you do not pass one —
-from `key.asc` in the repository. Fetching a key from the thing it
-authenticates sounds backwards and is not: a wrong key is caught by the
+The key itself comes from `key.asc` in the repository, or from a file you
+pass with `--key-file`. Fetching a key from the thing it authenticates
+sounds backwards and is not: a substituted key is caught by the
 fingerprint, which is the entire point of having one.
+
+### If you have no fingerprint
+
+You can leave `--key` out. Then the key is imported from the repository
+and put in front of you to accept:
+
+```console
+$ haven plugin repo add https://plugins.example.com/haven
+https://plugins.example.com/haven offers this key:
+
+  BA20 5FB3 8B5F BA0F FFB5  9CC1 E1E1 F35F 2B2E D307
+  Haven Community <plugins@example.com>
+
+Nothing has checked this. The name on a key is whatever its owner typed,
+and the key was served by the repository it would vouch for — so accepting
+it trusts whoever answered just now. Compare the fingerprint against one
+from somewhere else (the project's page, a mail, a colleague) if you can.
+
+Haven will pin it: from now on only this key can sign this repository.
+
+accept this key? [y/N]
+```
+
+The fingerprint is printed in fours, the way `gpg` prints one, because
+the only useful thing to do with it is hold it beside a fingerprint from
+somewhere else.
+
+This is `ssh`'s bargain with host keys, and it is worth a great deal more
+than nothing: Haven **pins** the key you accept, so only the first
+contact was ever exposed. A repository that later changes its mind — new
+key, new signature, both perfectly self-consistent — is refused:
+
+```console
+$ haven plugin repo update
+haven: community: the signature was not made by E1E1F35F2B2ED307 or any of its subkeys
+```
+
+But nothing checked that it was the repository talking, so Haven says so,
+and keeps saying so:
+
+```console
+$ haven plugin repo list
+community  https://plugins.example.com/haven
+  key E1E1F35F2B2ED307  (never checked)  7 plugins
+```
+
+That marker is there for later. "I meant to compare that fingerprint and
+didn't" is a thing that happens, and a month afterwards this listing is
+the only place it can still be noticed.
+
+A key nobody looked at is not accepted just because it was the only one
+on offer, so with nothing attached to the terminal the add stops:
+
+```console
+$ haven plugin repo add https://plugins.example.com/haven < /dev/null
+haven: there is nobody here to look at that key — pass `--key <fingerprint>` to
+check it against one you already have, or `--trust-repo-key` to accept whatever
+the repository serves
+```
+
+`--trust-repo-key` is for scripts, and means exactly what it says.
 
 ### One repository, one key
 
@@ -152,9 +212,9 @@ unknown key:
 
 ```console
 $ haven plugin repo update
-haven: haven's index is not usable: line 8: `shasum` is not something an index
-says here (expected one of: name, version, summary, file, sha256, entry, events,
-capabilities)
+haven: community: the index could not be read: line 8: `shasum` is not something
+an index says here (expected one of: name, version, summary, file, sha256, entry,
+events, capabilities)
 ```
 
 A misspelled key that is quietly ignored is the worst available
@@ -222,7 +282,8 @@ forget what it already had.
 
 ```
 ~/.config/haven/plugins/
-  sources.yaml                  the repositories, as you added them
+  sources.yaml                  the repositories, how you added them, and
+                                whether their key was ever checked
   keys/<fingerprint>.asc        Haven's own keyring
 ~/.local/share/haven/plugins/
   installed.yaml                what is installed, and what you granted
@@ -248,7 +309,8 @@ repository out without touching your real configuration.
 
 | Command | Does |
 |---|---|
-| `haven plugin repo add <url> --key <fpr>` | add a repository, pinned to one key |
+| `haven plugin repo add <url> --key <fpr>` | add a repository, pinned to a key you checked |
+| `haven plugin repo add <url>` | the same, importing the key from the repository for you to accept |
 | `haven plugin repo list` | the repositories, their keys and their state |
 | `haven plugin repo remove <name>` | forget it (what you installed from it stays) |
 | `haven plugin repo update [<name>]` | fetch and verify indices |

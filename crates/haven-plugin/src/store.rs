@@ -39,9 +39,14 @@ pub struct Record {
     pub version: String,
     /// The repository it came from, by source name.
     pub repo: String,
-    /// The artifact's hash, from the signed index. What makes `haven
-    /// plugin list` able to say that what is on disk is what was
-    /// published.
+    /// The artifact's hash, from the signed index.
+    ///
+    /// Which artifact this directory was unpacked from, not a checksum of
+    /// the directory: the archive is deleted after unpacking, so nothing
+    /// can re-derive this from what is on disk. It is here to tell one
+    /// published build from another — `install` uses it to notice that a
+    /// re-publish of the same version is a different artifact — and the
+    /// loader will want it for the same reason.
     pub sha256: String,
     pub entry: String,
     /// What the user agreed to. Not what the index asks for now — that is
@@ -137,8 +142,7 @@ impl Installed {
             for (key, values) in
                 [("exec", &r.granted.exec), ("net", &r.granted.net), ("fs", &r.granted.fs)]
             {
-                let items: Vec<String> =
-                    values.iter().map(|v| format!("'{}'", v.replace('\'', ""))).collect();
+                let items: Vec<String> = values.iter().map(|v| quoted(v)).collect();
                 out.push_str(&format!("      {key}: [{}]\n", items.join(", ")));
             }
         }
@@ -163,6 +167,24 @@ impl Installed {
             // Nothing granted yet, so everything it asks for is new.
             None => Capabilities::default().newly_asked(&plugin.capabilities),
         }
+    }
+}
+
+/// A granted capability as the record writes it.
+///
+/// Escaped, not stripped. This used to delete any `'` in the string,
+/// which silently recorded a grant other than the one agreed to — and
+/// then `newly_asked` saw the difference and asked again on every
+/// install. A record of what a user permitted is the last place to
+/// quietly alter the text.
+fn quoted(text: &str) -> String {
+    let plain = !text.is_empty()
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:+~@$".contains(c))
+        && !text.starts_with('-');
+    if plain {
+        text.to_string()
+    } else {
+        format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
     }
 }
 
@@ -314,7 +336,27 @@ fn audit_tree(dir: &Path, depth: usize) -> Result<(), Error> {
             audit_tree(&path, depth + 1)?;
             continue;
         }
-        if !kind.is_file() {
+        // A hard link extracts as an ordinary regular file — `file_type`
+        // cannot tell you it is one — so it is caught by its link
+        // count instead. Nothing a plugin ships has a reason to be
+        // linked twice, and the alternative is trusting that this
+        // machine's `tar` refuses a link target outside the archive.
+        // GNU tar does; bsdtar and busybox are their own programs,
+        // and not relying on that is the whole point of auditing.
+        if kind.is_file() {
+            use std::os::unix::fs::MetadataExt;
+            let links = std::fs::symlink_metadata(&path)
+                .map(|m| m.nlink())
+                .map_err(|e| Error::Io { path: path.clone(), what: e.to_string() })?;
+            if links > 1 {
+                return Err(Error::Unsafe {
+                    member: shown_under(dir, &path),
+                    why: "it is a hard link, and a plugin is only ever files",
+                });
+            }
+            continue;
+        }
+        {
             let why = if kind.is_symlink() {
                 "it is a symbolic link, and a plugin is only ever files"
             } else {
@@ -498,6 +540,7 @@ mod tests {
             name: "haven-test".into(),
             url: "https://plugins.example.invalid/haven".into(),
             fingerprint: REPO_FPR.into(),
+            trust: crate::repo::Trust::Fingerprint,
         }
     }
 
@@ -545,6 +588,13 @@ mod tests {
     /// header is 512 bytes of mostly padding and anyone can emit one — so
     /// the test has to emit one too, or it proves nothing.
     fn hostile_tar(name: &str, link_to: Option<&str>, body: &[u8]) -> Vec<u8> {
+        hostile_tar_typed(name, link_to.map(|t| (b'2', t)), body)
+    }
+
+    /// The same, with the tar type flag chosen: `2` is a symlink, `1` a
+    /// hard link, `0` a plain file.
+    fn hostile_tar_typed(name: &str, link: Option<(u8, &str)>, body: &[u8]) -> Vec<u8> {
+        let link_to = link.map(|(_, t)| t);
         let mut header = [0u8; 512];
         fn put(header: &mut [u8; 512], at: usize, text: &[u8]) {
             header[at..at + text.len()].copy_from_slice(text);
@@ -562,7 +612,7 @@ mod tests {
         put(h, 136, b"00000000000\0");
         // The checksum is computed with its own field full of spaces.
         put(h, 148, b"        ");
-        h[156] = if link_to.is_some() { b'2' } else { b'0' };
+        h[156] = link.map(|(flag, _)| flag).unwrap_or(b'0');
         if let Some(target) = link_to {
             put(h, 157, target.as_bytes());
         }
@@ -677,6 +727,54 @@ mod tests {
         }
     }
 
+    /// A hard link extracts as an ordinary regular file, so `file_type`
+    /// cannot see it and the audit has to count links instead. The doc
+    /// comment claimed hard links were refused for a while before they
+    /// actually were — found by someone reading the two together.
+    #[test]
+    fn a_hard_link_in_an_artifact_is_refused_though_it_looks_like_a_file() {
+        let home = temp_paths("hardlink");
+        let paths = &home.paths;
+        // A plain file, then a hard link to it: both members are inside
+        // the archive, so this is the harmless shape, and it is still
+        // refused — the category goes, not the provably-safe instances of
+        // it, because deciding which are safe is what goes wrong.
+        let mut tar = hostile_tar_typed("real.wasm", None, b"component");
+        // Two archives concatenated is a valid tar stream for GNU tar,
+        // but building one member at a time is clearer than hand-rolling
+        // a two-member archive: `tar` makes the pair for us instead.
+        tar.clear();
+        let dir = std::env::temp_dir().join(format!(
+            "haven-hardlink-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("gitline.wasm"), b"component").unwrap();
+        std::fs::hard_link(dir.join("gitline.wasm"), dir.join("also.wasm")).unwrap();
+        let tarball = dir.join("a.tar.gz");
+        let ok = Command::new("tar")
+            .arg("-czf")
+            .arg(&tarball)
+            .arg("-C")
+            .arg(&dir)
+            .args(["gitline.wasm", "also.wasm"])
+            .output()
+            .expect("tar");
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        tar.extend_from_slice(&std::fs::read(&tarball).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let hash = sign::sha256(&tar);
+        let plugin = plugin_with(&hash, "gitline.wasm", Capabilities::default());
+        let e = install(&source(), &plugin, &plugin.capabilities, &repo_with(&tar), paths)
+            .expect_err("a hard link must be refused");
+        assert!(matches!(e, Error::Unsafe { .. }), "{e}");
+        assert!(e.to_string().contains("hard link"), "{e}");
+        assert!(!plugin_dir(paths, "gitline").exists(), "it was installed anyway");
+    }
+
     /// The tree audit refuses a whole category, so it is worth proving it
     /// does not refuse the ordinary case it has to allow.
     #[test]
@@ -738,7 +836,11 @@ mod tests {
         let caps = Capabilities {
             exec: vec!["git".into()],
             net: vec!["crates.io".into()],
-            fs: vec!["$CWD:ro".into()],
+            // A quote in a granted path used to be deleted rather than
+            // escaped, so the record said something other than what was
+            // agreed to — and the difference then re-prompted on every
+            // install of the same version.
+            fs: vec!["$CWD:ro".into(), "/tmp/it's there:rw".into()],
             read_pane_content: true,
         };
         let (bytes, hash) = artifact("grant", &[("gitline.wasm", b"x")]);

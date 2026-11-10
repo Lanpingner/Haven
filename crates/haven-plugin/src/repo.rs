@@ -90,7 +90,7 @@ impl Paths {
     }
 
     /// The cache for one repository. `name` has been through
-    /// [`crate::index`]'s name rules, so it is a single path component.
+    /// [`check_name`], so it is a single path component.
     pub fn repo_dir(&self, name: &str) -> PathBuf {
         self.data.join("repos").join(name)
     }
@@ -118,6 +118,53 @@ pub struct Source {
     pub url: String,
     /// The one key that may sign this repository's index, lowercase hex.
     pub fingerprint: String,
+    /// Where that fingerprint came from. Recorded because it is the
+    /// difference between a key that was checked and a key that was
+    /// merely accepted, and only the user can tell them apart later.
+    pub trust: Trust,
+}
+
+/// How a repository's key came to be trusted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Trust {
+    /// The fingerprint was given on the command line and the key was
+    /// checked against it. The key could have come from anywhere; the
+    /// fingerprint came from outside the repository, which is what makes
+    /// the signature mean something.
+    #[default]
+    Fingerprint,
+    /// The key came from the repository and was accepted as it stood.
+    ///
+    /// Pinned from then on, so only the first contact was ever exposed —
+    /// this is `ssh`'s bargain with host keys, and it is worth a great
+    /// deal more than nothing. But whoever answered at that moment is
+    /// who Haven now trusts, and nothing has checked that it was the
+    /// repository. Recorded, and said out loud in `repo list`, because a
+    /// user who meant to compare a fingerprint and did not should be able
+    /// to find out.
+    FirstContact,
+}
+
+impl Trust {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Fingerprint => "fingerprint",
+            Self::FirstContact => "first-contact",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "fingerprint" => Some(Self::Fingerprint),
+            "first-contact" => Some(Self::FirstContact),
+            _ => None,
+        }
+    }
+
+    /// Whether this key was ever checked against anything.
+    pub fn is_verified(self) -> bool {
+        self == Self::Fingerprint
+    }
 }
 
 /// The sources file: every repository, in the order they were added.
@@ -152,7 +199,23 @@ impl Sources {
                     .map(str::to_string)
                     .ok_or_else(|| format!("line {}: a repository needs `{key}:`", item.line))
             };
-            list.push(Source { name: get("name")?, url: get("url")?, fingerprint: get("key")? });
+            // `trust:` is optional and defaults to the checked case: a
+            // sources file written by hand, or by an older build, says a
+            // fingerprint was given, because that was the only way to add
+            // a repository at all.
+            let trust = match item.get("trust").and_then(|n| n.as_str()) {
+                None => Trust::default(),
+                Some(text) => Trust::parse(text).ok_or_else(|| {
+                    format!(
+                        "line {}: `trust: {text}` is not one of fingerprint, first-contact",
+                        item.line
+                    )
+                })?,
+            };
+            // Validated on the way in as well as when it is added: the
+            // sources file is editable, and a name is a path component.
+            let name = check_name(&get("name")?).map_err(|e| format!("line {}: {e}", item.line))?;
+            list.push(Source { name, url: get("url")?, fingerprint: get("key")?, trust });
         }
         Ok(Self { list })
     }
@@ -164,7 +227,11 @@ impl Sources {
             "# Plugin repositories, added with `haven plugin repo add`.\n\
              #\n\
              # `key` is the fingerprint of the one key allowed to sign this\n\
-             # repository's index. Changing it by hand changes who Haven trusts.\n",
+             # repository's index. Changing it by hand changes who Haven trusts.\n\
+             #\n\
+             # `trust` is how that fingerprint was arrived at: `fingerprint` if you\n\
+             # gave it and the key was checked against it, `first-contact` if the key\n\
+             # came from the repository and was accepted as it stood.\n",
         );
         // `[]` rather than a key with nothing under it: Haven's own YAML
         // refuses the latter, so removing the last repository would leave
@@ -176,10 +243,11 @@ impl Sources {
         }
         for source in &self.list {
             out.push_str(&format!(
-                "  - name: {}\n    url: {}\n    key: {}\n",
+                "  - name: {}\n    url: {}\n    key: {}\n    trust: {}\n",
                 quoted(&source.name),
                 quoted(&source.url),
                 quoted(&source.fingerprint),
+                source.trust.as_str(),
             ));
         }
         if let Some(parent) = path.parent() {
@@ -295,13 +363,18 @@ impl Keyring {
 
 /// Fetch a repository's key, for `repo add` to show and pin.
 ///
-/// The fingerprint is the trust anchor and has to come from outside the
-/// repository — a web page, a mail, a colleague. Given it, fetching the
-/// key itself over the same channel as everything else is fine: a wrong
-/// key is caught by the fingerprint, which is the entire point of one.
+/// `expect` is the fingerprint the caller already has, if it has one.
+/// Given one, fetching the key over the same channel as everything else
+/// is safe: a substituted key is caught by the fingerprint, which is the
+/// entire point of having one.
+///
+/// Without one, this returns whatever the repository served. That is not
+/// verification and this function cannot make it so — the caller has to
+/// put it in front of a person, which is why it is the caller's job and
+/// not this function's.
 pub fn fetch_key(
     url: &str,
-    fingerprint: &str,
+    expect: Option<&str>,
     fetcher: &dyn Fetch,
     paths: &Paths,
     name: &str,
@@ -312,11 +385,13 @@ pub fn fetch_key(
     let armored = String::from_utf8(bytes)
         .map_err(|_| Error::Sign(sign::Error::Key(format!("{KEY_FILE} is not text"))))?;
     let key = Key::parse(&armored).map_err(Error::Sign)?;
-    if key.fingerprint != fingerprint {
-        return Err(Error::Sign(sign::Error::WrongKey {
-            pinned: fingerprint.to_string(),
-            signed_by: key.fingerprint,
-        }));
+    if let Some(expect) = expect {
+        if key.fingerprint != expect {
+            return Err(Error::Sign(sign::Error::WrongKey {
+                pinned: expect.to_string(),
+                signed_by: key.fingerprint,
+            }));
+        }
     }
     Ok(key)
 }
@@ -397,6 +472,14 @@ pub fn cached(source: &Source, paths: &Paths) -> Result<Index, Error> {
     Index::parse(&text).map_err(|e| Error::Index { name: source.name.clone(), what: e.to_string() })
 }
 
+/// Whether a repository may be called this.
+///
+/// It becomes a directory under `repos/` and the word the user types to
+/// name it, so it is held to the same rule as a plugin's name.
+pub fn check_name(name: &str) -> Result<String, String> {
+    crate::index::check_name(name, "name").map_err(|e| e.message)
+}
+
 /// A name for a repository taken from its URL, for when the user does not
 /// give one. `https://github.com/x/haven-plugins.git` becomes
 /// `haven-plugins`.
@@ -437,7 +520,10 @@ impl fmt::Display for Error {
             Self::Sources { path, what } => write!(f, "{}: {what}", path.display()),
             Self::Fetch(e) => write!(f, "{e}"),
             Self::Sign(e) => write!(f, "{e}"),
-            Self::Index { name, what } => write!(f, "{name}'s index is not usable: {what}"),
+            // Not "{name}'s index": every caller that prints this
+            // already says which repository it is talking about, and the
+            // two together read `demo: demo's index is not usable`.
+            Self::Index { name: _, what } => write!(f, "the index could not be read: {what}"),
             Self::NoKey { fingerprint } => write!(
                 f,
                 "no key {} in Haven's keyring — add the repository again with its key",
@@ -554,6 +640,7 @@ mod tests {
             name: "haven-test".into(),
             url: "https://plugins.example.invalid/haven".into(),
             fingerprint: REPO_FPR.into(),
+            trust: Trust::Fingerprint,
         }
     }
 
@@ -651,7 +738,7 @@ mod tests {
         let paths = &home.paths;
         let key = fetch_key(
             "https://plugins.example.invalid/haven",
-            REPO_FPR,
+            Some(REPO_FPR),
             &signed_repo(),
             paths,
             "haven-test",
@@ -662,13 +749,26 @@ mod tests {
         // And the case that makes fetching it safe at all.
         let e = fetch_key(
             "https://plugins.example.invalid/haven",
-            "0000000000000000000000000000000000000000",
+            Some("0000000000000000000000000000000000000000"),
             &signed_repo(),
             paths,
             "haven-test",
         )
         .expect_err("a key that is not the pinned one");
         assert!(matches!(e, Error::Sign(sign::Error::WrongKey { .. })), "{e}");
+
+        // And with no fingerprint to check against, whatever the
+        // repository served comes back, for the caller to show to
+        // somebody. Nothing here has verified it.
+        let unchecked = fetch_key(
+            "https://plugins.example.invalid/haven",
+            None,
+            &signed_repo(),
+            paths,
+            "haven-test",
+        )
+        .expect("the repository served a key");
+        assert_eq!(unchecked.fingerprint, REPO_FPR);
     }
 
     #[test]
@@ -683,6 +783,9 @@ mod tests {
                 // A URL with the characters that would break plain YAML.
                 url: "https://x.example/a#b".into(),
                 fingerprint: REPO_FPR.into(),
+                // And the other way a key gets trusted, so the round trip
+                // covers both.
+                trust: Trust::FirstContact,
             })
             .expect("add");
         sources.save(paths).expect("save");

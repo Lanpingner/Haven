@@ -12,6 +12,7 @@
 - [The history, and finding things](./finding.md)
 - [One modal, everywhere](./modals.md)
 - [Plugins, and where they come from](./plugins.md)
+  - [Writing and publishing them](./writing-plugins.md)
 - [Themes and configuration](./themes.md)
 - [Honest status](./status.md)
   - [Notes from the bug log](./bug-log.md)

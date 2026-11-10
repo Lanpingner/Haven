@@ -109,13 +109,11 @@ fn fingerprint_of(key: &SignedPublicKey) -> String {
 /// groups, people paste them with spaces, and `0x` is a common prefix.
 /// Case is not significant in hex and neither is the grouping.
 pub fn normalise_fingerprint(text: &str) -> Result<String, Error> {
-    let cleaned: String = text
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != ':')
-        .collect::<String>()
-        .to_lowercase()
-        .trim_start_matches("0x")
-        .to_string();
+    let cleaned: String =
+        text.chars().filter(|c| !c.is_whitespace() && *c != ':').collect::<String>().to_lowercase();
+    // `strip_prefix`, not `trim_start_matches`: the latter eats as many
+    // as it finds, so `0x0x<40 hex>` normalised instead of being refused.
+    let cleaned = cleaned.strip_prefix("0x").unwrap_or(&cleaned).to_string();
     // 40 for v4, 64 for v6. A shorter "fingerprint" is a key id, and
     // pinning a key id is how you get pinned to a key somebody else made:
     // 64-bit ids are forgeable and 32-bit ones are trivially so.

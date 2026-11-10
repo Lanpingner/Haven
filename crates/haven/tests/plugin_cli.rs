@@ -81,6 +81,13 @@ impl Haven {
         let repo = repository();
         self.ok(&["repo", "add", repo.to_str().unwrap(), "--key", PINNED, "--name", "test"])
     }
+
+    /// Added without a fingerprint: the key comes from the repository and
+    /// is accepted as it stands.
+    fn add_trusting(&self) -> String {
+        let repo = repository();
+        self.ok(&["repo", "add", repo.to_str().unwrap(), "--name", "test", "--trust-repo-key"])
+    }
 }
 
 impl Drop for Haven {
@@ -312,4 +319,133 @@ fn copy_tree(from: &Path, to: &Path) {
             std::fs::copy(entry.path(), &target).expect("copy");
         }
     }
+}
+
+#[test]
+fn a_repositorys_own_key_can_be_imported_and_accepted() {
+    // Without a fingerprint there is nothing to check the key against, so
+    // the key is shown and accepted instead. `--trust-repo-key` stands in
+    // for the person saying yes.
+    let haven = Haven::new("tofu");
+    let added = haven.add_trusting();
+    assert!(added.contains("added test"), "{added}");
+    assert!(added.contains("E1E1F35F2B2ED307"), "{added}");
+    assert!(added.contains("never checked"), "it has to admit what it did not do: {added}");
+
+    // It works like any other repository from here on.
+    assert!(haven.ok(&["search"]).contains("gitline"));
+    haven.ok(&["install", "gitline", "--yes"]);
+    assert!(haven.root.join("data/installed/gitline/gitline.wasm").is_file());
+}
+
+#[test]
+fn a_key_accepted_from_a_repository_is_still_pinned_afterwards() {
+    // This is the whole bargain. Only the first contact was ever exposed;
+    // after it, the repository is held to the key it offered, and cannot
+    // change its mind. Without this, importing the key would be a way of
+    // trusting nothing at all.
+    let haven = Haven::new("tofu-pinned");
+    haven.add_trusting();
+
+    let mirror = haven.root.join("mirror");
+    copy_tree(&repository(), &mirror);
+    // The repository turns hostile and re-signs with a different key,
+    // serving that key too — entirely self-consistent.
+    std::fs::copy(mirror.join("other-key.asc"), mirror.join("key.asc")).unwrap();
+    std::fs::copy(mirror.join("plugins.yaml.other.sig"), mirror.join("plugins.yaml.sig")).unwrap();
+
+    let sources = haven.root.join("config/sources.yaml");
+    let text = std::fs::read_to_string(&sources).unwrap();
+    std::fs::write(
+        &sources,
+        text.replace(repository().to_str().unwrap(), mirror.to_str().unwrap()),
+    )
+    .unwrap();
+
+    let refused = haven.fails(&["repo", "update"]);
+    assert!(refused.contains("was not made by"), "{refused}");
+    assert!(refused.contains("E1E1F35F2B2ED307"), "it should name the pinned key: {refused}");
+}
+
+#[test]
+fn importing_a_key_with_nobody_to_look_at_it_is_refused() {
+    // stdin is /dev/null. A key nobody looked at is not accepted just
+    // because it is the only one on offer.
+    let haven = Haven::new("tofu-blind");
+    let repo = repository();
+    let refused = haven.fails(&["repo", "add", repo.to_str().unwrap(), "--name", "test"]);
+    assert!(refused.contains("offers this key"), "the key has to be shown: {refused}");
+    // Printed in fours, like `gpg` prints one, because the only use for it
+    // is holding it beside a fingerprint from somewhere else.
+    assert!(refused.contains("BA20 5FB3 8B5F BA0F FFB5  9CC1"), "{refused}");
+    assert!(refused.contains("nobody here to look at that key"), "{refused}");
+    assert!(refused.contains("--key"), "it has to say what to do instead: {refused}");
+    assert!(
+        haven.ok(&["repo", "list"]).contains("no plugin repositories"),
+        "a key nobody saw was accepted anyway"
+    );
+}
+
+#[test]
+fn a_fingerprint_that_was_checked_is_not_marked_as_unchecked() {
+    // The marker is only worth having if it distinguishes the two cases.
+    let haven = Haven::new("checked");
+    haven.add();
+    let listed = haven.ok(&["repo", "list"]);
+    assert!(!listed.contains("never checked"), "{listed}");
+}
+
+#[test]
+fn a_key_from_a_file_is_a_key_you_already_had() {
+    // Passing a key file is itself the out-of-band step, so it needs no
+    // fingerprint and is not a first contact.
+    let haven = Haven::new("key-file");
+    let repo = repository();
+    let key = repo.join("repo-key.asc");
+    let added = haven.ok(&[
+        "repo",
+        "add",
+        repo.to_str().unwrap(),
+        "--name",
+        "test",
+        "--key-file",
+        key.to_str().unwrap(),
+    ]);
+    assert!(added.contains("added test"), "{added}");
+    assert!(!haven.ok(&["repo", "list"]).contains("never checked"), "a chosen key file is checked");
+
+    // And a key file that is not the fingerprint given alongside it is a
+    // contradiction worth refusing.
+    let other = Haven::new("key-file-clash");
+    let clash = other.fails(&[
+        "repo",
+        "add",
+        repo.to_str().unwrap(),
+        "--name",
+        "test",
+        "--key-file",
+        key.to_str().unwrap(),
+        "--key",
+        OTHER_KEY,
+    ]);
+    assert!(clash.contains("holds key"), "{clash}");
+}
+
+#[test]
+fn a_repository_name_that_is_a_path_is_refused() {
+    // The name becomes a directory under `repos/` and the word you type
+    // to mean the repository. `repo_dir`'s comment claimed it had already
+    // been validated; it had not, and `--name ../../x` put the cache
+    // outside the directory that holds caches.
+    let haven = Haven::new("bad-name");
+    let repo = repository();
+    for bad in ["../../escaped", "a/b", "Upper", "", "-dash"] {
+        let refused =
+            haven.fails(&["repo", "add", repo.to_str().unwrap(), "--key", PINNED, "--name", bad]);
+        assert!(refused.contains("a name is"), "{bad:?}: {refused}");
+    }
+    assert!(
+        !haven.root.join("data/escaped").exists() && !haven.root.join("escaped").exists(),
+        "a cache directory escaped"
+    );
 }

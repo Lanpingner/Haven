@@ -341,6 +341,16 @@ fn boolean(node: &Node, key: &str) -> Result<bool, Error> {
 
 /// A name that is going to be a directory: lowercase, and nothing a path
 /// or a shell would read as punctuation.
+///
+/// Public because a *repository's* name becomes a directory too, and it
+/// arrives from `--name` rather than from an index — so it has to go
+/// through the same rule. `repo.rs` had a comment claiming it already
+/// did, which it did not: `--name ../../x` put the cache outside the
+/// directory that holds caches.
+pub fn check_name(text: &str, key: &str) -> Result<String, Error> {
+    name_like(text, key, 0)
+}
+
 fn name_like(text: &str, key: &str, line: usize) -> Result<String, Error> {
     let ok = !text.is_empty()
         && text.len() <= 64
