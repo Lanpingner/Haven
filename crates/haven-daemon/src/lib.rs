@@ -2048,6 +2048,15 @@ impl Daemon {
                         plugin.remember(&key, None);
                     }
                 }
+                // Already routed to the other plugins by `route_emits`
+                // before this ran. Reaching here would mean one was
+                // missed, which is worth a line rather than a silence.
+                Command::Emit(what) => {
+                    eprintln!(
+                        "haven: plugin `{name}` emitted `{}` after routing had finished",
+                        what.name
+                    );
+                }
                 Command::Act(action) => {
                     // Deliberately not wired yet, and said out loud rather
                     // than dropped. Turning a name like `split-v` into an
@@ -2137,6 +2146,16 @@ impl Daemon {
                     }
                 }
             }
+
+            // What the plugins told each other, routed before anything
+            // is drawn, so one plugin noticing a thing and another
+            // reacting to it happens in one frame rather than two.
+            let asked = haven_plugin_host::route_emits(
+                &mut self.plugins,
+                asked,
+                &plain,
+                with_text.as_ref(),
+            );
 
             if let Some(host) = self.sessions.get_mut(&id) {
                 host.drawn = drawn;

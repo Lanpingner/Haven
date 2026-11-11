@@ -53,7 +53,8 @@ wit_bindgen::generate!({
 
 pub use haven::plugin::host;
 pub use haven::plugin::types::{
-    Colour, Command, CommandEnd, CommandStart, CwdChange, Event, Pane, Remembered, Rgb, Run, Style,
+    Colour, Command, CommandEnd, CommandStart, CwdChange, Emitted, Event, Pane, Remembered, Rgb,
+    Run, Style, Told,
 };
 
 /// What every plugin implements.
@@ -145,6 +146,20 @@ pub fn output_of(argv: &[&str]) -> Result<String, String> {
         return Err(if why.is_empty() { format!("exited {}", out.status) } else { why });
     }
     Ok(out.stdout.trim_end().to_string())
+}
+
+/// Tell the other plugins that something happened.
+///
+/// Delivered to every other loaded plugin as [`Event::Told`] in the same
+/// tick, so one plugin noticing a thing and another reacting to it
+/// happens in one frame rather than two.
+///
+/// It is a **broadcast**. There is no way to address one plugin, so
+/// anything emitted is readable by every plugin installed — do not put
+/// in it what you would not grant them. `secret-guard` emits that it
+/// saw a credential and never what it was, which is the shape to copy.
+pub fn emit(name: impl Into<String>, data: impl Into<String>) -> Command {
+    Command::Emit(Emitted { name: name.into(), data: data.into() })
 }
 
 /// The pane the user is looking at, if a plugin needs to ask.

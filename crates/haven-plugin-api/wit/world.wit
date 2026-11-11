@@ -98,6 +98,22 @@ interface types {
     pane-closed(u32),
     /// The timer this plugin asked for in its manifest.
     tick,
+    /// Another plugin said something happened.
+    ///
+    /// The vocabulary is the plugins' own: Haven carries `name` and
+    /// `data` without reading either. What it does guarantee is `from`,
+    /// which it stamps itself — a plugin cannot claim to be another one.
+    told(told),
+  }
+
+  record told {
+    /// Which plugin said it. Stamped by the host, not by the sender —
+    /// `from` would read better and is a WIT keyword.
+    sender: string,
+    /// What happened, in that plugin's own words.
+    name: string,
+    /// Whatever it wanted to carry. Opaque to Haven.
+    data: string,
   }
 
   /// Something a plugin asks Haven to do. Returned, never performed: see
@@ -112,6 +128,21 @@ interface types {
     /// Remember a string until the next time, scoped to this plugin.
     remember(remembered),
     forget(string),
+    /// Tell the other plugins something happened.
+    ///
+    /// Delivered to every other loaded plugin as [`event.told`], in the
+    /// same tick, so one plugin noticing a thing and another reacting to
+    /// it happens in one frame rather than two.
+    ///
+    /// It is a broadcast and there is no way to address one plugin, so
+    /// anything emitted is readable by every plugin the user has
+    /// installed. Do not put in it what you would not grant them.
+    emit(emitted),
+  }
+
+  record emitted {
+    name: string,
+    data: string,
   }
 
   record remembered {

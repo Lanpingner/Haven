@@ -55,7 +55,8 @@ wasmtime::component::bindgen!({
 pub mod testing;
 
 pub use haven::plugin::types::{
-    Colour, Command, CommandEnd, CommandStart, CwdChange, Event, Pane, Remembered, Rgb, Run, Style,
+    Colour, Command, CommandEnd, CommandStart, CwdChange, Emitted, Event, Pane, Remembered, Rgb,
+    Run, Style, Told,
 };
 
 /// How much a plugin may compute in one call.
@@ -639,4 +640,93 @@ impl std::error::Error for Error {}
 /// are really about.
 pub fn text_of(runs: &[Run]) -> String {
     runs.iter().map(|run| run.text.as_str()).collect()
+}
+
+/// How many times an emitted event may cause another.
+///
+/// A plugin reacting to another plugin is the point; a plugin reacting
+/// to its own reaction is a loop, and two plugins answering each other
+/// is a loop with extra steps. Neither is detectable in general — the
+/// names are the plugins' own and Haven does not read them — so the
+/// chain is simply bounded. Four is deep enough for "detector tells
+/// indicator tells logger" and shallow enough that a cycle costs
+/// microseconds before it is cut.
+pub const MAX_EMIT_ROUNDS: usize = 4;
+
+/// Deliver what plugins emitted to the other plugins, and give back the
+/// commands that are not emissions.
+///
+/// Here rather than in the daemon because this is about running plugins,
+/// which is this crate's business, and because it is the piece most
+/// worth testing: a bus that loops is a terminal that stops.
+///
+/// Everything a recipient returns is collected too, including further
+/// emissions, which is what makes a chain work — and what makes the
+/// bound necessary.
+pub fn route_emits(
+    plugins: &mut [Loaded],
+    asked: Vec<(String, Command)>,
+    plain: &Snapshot,
+    with_text: Option<&Snapshot>,
+) -> Vec<(String, Command)> {
+    let mut for_host: Vec<(String, Command)> = Vec::new();
+    let mut to_send: Vec<(String, Emitted)> = Vec::new();
+    for (name, command) in asked {
+        match command {
+            Command::Emit(what) => to_send.push((name, what)),
+            other => for_host.push((name, other)),
+        }
+    }
+
+    let mut round = 0;
+    while !to_send.is_empty() {
+        round += 1;
+        if round > MAX_EMIT_ROUNDS {
+            // Named, because plugins in a loop are something somebody
+            // has to go and fix, and silence would leave them wondering
+            // why events stopped arriving.
+            let names: Vec<&str> = to_send.iter().map(|(n, _)| n.as_str()).collect();
+            eprintln!(
+                "haven: plugin events stopped after {MAX_EMIT_ROUNDS} rounds; \
+                 still emitting: {}",
+                names.join(", ")
+            );
+            break;
+        }
+
+        for (sender, what) in std::mem::take(&mut to_send) {
+            // `sender` is the host's own record of which plugin returned
+            // this command. A plugin never gets to say who it is, so one
+            // cannot speak as another.
+            let told =
+                Event::Told(Told { sender: sender.clone(), name: what.name, data: what.data });
+            for plugin in plugins.iter_mut() {
+                // Not back to the sender: it already knows what it just
+                // said, and the shortest possible loop is the one that
+                // goes nowhere.
+                if plugin.name() == sender {
+                    continue;
+                }
+                let world = if plugin.reads_panes() {
+                    with_text.cloned().unwrap_or_else(|| plain.clone())
+                } else {
+                    plain.clone()
+                };
+                plugin.refresh(world);
+                let name = plugin.name().to_string();
+                match plugin.on_event(&told) {
+                    Ok(commands) => {
+                        for command in commands {
+                            match command {
+                                Command::Emit(again) => to_send.push((name.clone(), again)),
+                                other => for_host.push((name.clone(), other)),
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("haven: {e}"),
+                }
+            }
+        }
+    }
+    for_host
 }

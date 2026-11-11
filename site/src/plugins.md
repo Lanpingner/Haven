@@ -75,6 +75,20 @@ warns you when something shaped like an AWS key or a GitHub token has
 just been printed into your scrollback. It never repeats the secret, and
 it stores nothing — a `remember` would write your screen into a file.
 
+## Plugins can talk to each other
+
+One plugin can emit an event and the others hear it in the same tick —
+so a detector that notices something and an indicator that shows it can
+be two plugins rather than one that does both.
+
+The sender's name is stamped by Haven rather than claimed by the plugin,
+so a listener can trust where something came from. It is a broadcast,
+though: whatever a plugin emits, every plugin you have installed can
+read, which is worth knowing when you decide what to install together.
+And a chain stops after four rounds, because two plugins answering each
+other is indistinguishable from a useful chain to anything that does not
+read their vocabulary — which Haven deliberately does not.
+
 ## How a plugin runs
 
 In the daemon, sandboxed, with nothing but what it was granted.

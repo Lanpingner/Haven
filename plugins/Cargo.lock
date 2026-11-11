@@ -15,6 +15,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
+name = "emit_probe"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -64,6 +71,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hear_probe"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -104,6 +118,13 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+
+[[package]]
+name = "loop_probe"
+version = "0.1.0"
+dependencies = [
+ "haven-plugin-api",
+]
 
 [[package]]
 name = "macro-string"

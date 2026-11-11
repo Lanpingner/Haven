@@ -535,3 +535,52 @@ What is not worth doing is writing the `.wasm`. There is nothing to load
 it, the world above is a sketch rather than a file, and the SDK that would
 make writing against it bearable does not exist. When the runtime lands,
 this page gets the other half.
+
+## Plugins telling each other things
+
+A plugin can emit an event, and every other loaded plugin hears it in
+the same tick:
+
+```rust
+// A detector notices something and says so.
+vec![emit("env-activated", cwd)]
+```
+
+```rust
+// Anything else can react to it.
+fn on_event(event: Event) -> Vec<Command> {
+    match event {
+        Event::Told(told) if told.name == "env-activated" => {
+            vec![Command::Notice(format!("{} is live", told.data))]
+        }
+        _ => Vec::new(),
+    }
+}
+```
+
+`told.sender` is the emitting plugin's name, **stamped by the host**. A
+plugin never gets to say who it is, so one cannot speak as another — and
+a listener can therefore decide to trust one sender and ignore the rest.
+
+The vocabulary is yours. Haven carries `name` and `data` without reading
+either, which means two plugins have to agree on what a name means, and
+nothing stops a third from listening in.
+
+Three things to know before using it:
+
+- **It is a broadcast.** There is no way to address one plugin, so
+  anything you emit is readable by every plugin the user has installed.
+  Do not put in it what you would not grant them. `secret-guard` emits
+  that it saw a credential and never what it was; that is the shape to
+  copy.
+- **A plugin is not told what it said itself**, so the shortest possible
+  loop goes nowhere.
+- **A chain is bounded**, not detected. Haven does not read the names, so
+  it cannot tell a sensible chain from two plugins answering each other —
+  it simply stops after four rounds and logs which plugins were still
+  talking. Deep enough for "detector tells indicator tells logger", and
+  cheap when something is wrong.
+
+Emissions are routed before anything is drawn, so a plugin reacting to
+another appears in the same frame rather than the next one.
+
