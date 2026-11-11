@@ -14,7 +14,7 @@ pub use transport::{LocalTransport, Transport, TransportError};
 
 /// Bumped on any incompatible change. A mismatch is refused with a readable
 /// message rather than surfacing as a deserialization panic.
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// When this executable was built, as seconds since the epoch, or `0` if it
 /// cannot be told.
@@ -318,6 +318,18 @@ pub enum ClientMsg {
     /// Control-mode queries, which the CLI is built on: anything `haven ls`
     /// can do, a script can do (`docs/PLAN.md` §14.2).
     ListSessions,
+    /// Install a plugin, by the name a repository offers it under.
+    ///
+    /// The grant is not carried: the daemon re-reads it from the index
+    /// it has already verified. A client decides whether to ask, and
+    /// gets to say no — it does not get to say what a plugin may do.
+    InstallPlugin {
+        name: String,
+    },
+    /// Uninstall one.
+    RemovePlugin {
+        name: String,
+    },
     /// The plugin repositories, what is in them, and what changed.
     ///
     /// Asked of the daemon rather than read off the client's own disk,
@@ -779,6 +791,13 @@ pub struct PluginInfo {
     pub installed: Option<String>,
     /// What it asks to be allowed to do, as lines a person can read.
     pub asks: Vec<String>,
+    /// Whether it wants to read what panes are showing — the one
+    /// capability that gets a second question before it is granted.
+    ///
+    /// Its own field rather than something to be recognised in `asks`:
+    /// deciding how dangerous a plugin is by matching the prose Haven
+    /// wrote about it would break the day somebody improved the wording.
+    pub reads_panes: bool,
     /// What it was actually granted, when it is installed.
     pub granted: Vec<String>,
 }

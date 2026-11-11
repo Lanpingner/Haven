@@ -1224,3 +1224,181 @@ fn picking_a_pane_in_this_session_does_not_reattach() {
         "the pane was never selected: {after:?}"
     );
 }
+
+/// The plugin browser's install flow, with the listing already in hand
+/// so that key order is the only thing under test.
+mod installing {
+    use super::*;
+    use haven_client::plugins::{Browser, Stage};
+    use haven_proto::{PluginInfo, RepoInfo};
+
+    fn repos() -> Vec<RepoInfo> {
+        vec![RepoInfo {
+            name: "haven".into(),
+            url: "/srv/haven".into(),
+            key: "A8F1399B75B7E0D0".into(),
+            checked: true,
+            problem: None,
+            plugins: vec![
+                PluginInfo {
+                    name: "clock".into(),
+                    version: "0.1.0".into(),
+                    summary: "the time".into(),
+                    installed: None,
+                    asks: Vec::new(),
+                    granted: Vec::new(),
+                    reads_panes: false,
+                },
+                PluginInfo {
+                    name: "urls".into(),
+                    version: "0.1.0".into(),
+                    summary: "links on screen".into(),
+                    installed: None,
+                    asks: vec!["read what your panes are showing".into()],
+                    granted: Vec::new(),
+                    reads_panes: true,
+                },
+                PluginInfo {
+                    name: "gitline".into(),
+                    version: "0.1.0".into(),
+                    summary: "the branch".into(),
+                    installed: Some("0.1.0".into()),
+                    asks: vec!["run: git".into()],
+                    granted: vec!["run: git".into()],
+                    reads_panes: false,
+                },
+            ],
+            changes: Vec::new(),
+        }]
+    }
+
+    fn open(on: &str) -> Client<ScriptedFrontend, ScriptedTransport> {
+        let mut client =
+            Client::new(ScriptedFrontend::new(size(80, 24), []), ScriptedTransport::new([]));
+        let mut browser = Browser::new(repos());
+        browser.selected = browser
+            .rows
+            .iter()
+            .position(|row| browser.text(row).starts_with(on))
+            .unwrap_or_else(|| panic!("no row for {on}"));
+        client.plugins = Some(browser);
+        client
+    }
+
+    fn press(client: &mut Client<ScriptedFrontend, ScriptedTransport>, key: KeyEvent) {
+        client.frontend = ScriptedFrontend::new(size(80, 24), [InputEvent::Key(key)]);
+        client.tick().expect("tick");
+    }
+
+    #[test]
+    fn enter_asks_and_y_installs() {
+        let mut client = open("clock");
+        press(&mut client, KeyEvent::named(NamedKey::Enter));
+        let asking = client.plugins.as_ref().unwrap().asking.as_ref().expect("a question");
+        assert_eq!(asking.name, "clock");
+        assert_eq!(asking.stage, Stage::Grant);
+
+        press(&mut client, KeyEvent::char('y'));
+        assert!(client.plugins.as_ref().unwrap().asking.is_none(), "the question should close");
+        assert!(
+            client
+                .transport
+                .sent
+                .iter()
+                .any(|m| matches!(m, ClientMsg::InstallPlugin { name } if name == "clock")),
+            "nothing was asked of the daemon: {:?}",
+            client.transport.sent
+        );
+    }
+
+    /// The rule the whole design rests on: no key that somebody might
+    /// press to make a box go away can grant anything.
+    #[test]
+    fn only_y_grants_and_everything_else_cancels() {
+        for key in [
+            KeyEvent::named(NamedKey::Enter),
+            KeyEvent::named(NamedKey::Escape),
+            KeyEvent::char(' '),
+            KeyEvent::char('n'),
+            KeyEvent::char('i'),
+        ] {
+            let mut client = open("clock");
+            press(&mut client, KeyEvent::named(NamedKey::Enter));
+            assert!(client.plugins.as_ref().unwrap().asking.is_some());
+
+            press(&mut client, key);
+            assert!(
+                client.plugins.as_ref().unwrap().asking.is_none(),
+                "{key:?} should have cancelled the question"
+            );
+            assert!(
+                !client.transport.sent.iter().any(|m| matches!(m, ClientMsg::InstallPlugin { .. })),
+                "{key:?} granted an install: {:?}",
+                client.transport.sent
+            );
+        }
+    }
+
+    /// Reading your panes is asked about twice, and the second question
+    /// says what it means. One `y` is not enough for it.
+    #[test]
+    fn wanting_your_screen_takes_two_answers() {
+        let mut client = open("urls");
+        press(&mut client, KeyEvent::named(NamedKey::Enter));
+        press(&mut client, KeyEvent::char('y'));
+
+        let asking = client.plugins.as_ref().unwrap().asking.as_ref().expect("a second question");
+        assert_eq!(asking.stage, Stage::Screen, "one y should not have been enough");
+        assert!(
+            !client.transport.sent.iter().any(|m| matches!(m, ClientMsg::InstallPlugin { .. })),
+            "it installed on the first y"
+        );
+
+        press(&mut client, KeyEvent::char('y'));
+        assert!(client
+            .transport
+            .sent
+            .iter()
+            .any(|m| matches!(m, ClientMsg::InstallPlugin { name } if name == "urls")));
+    }
+
+    #[test]
+    fn saying_no_to_the_second_question_installs_nothing() {
+        let mut client = open("urls");
+        press(&mut client, KeyEvent::named(NamedKey::Enter));
+        press(&mut client, KeyEvent::char('y'));
+        press(&mut client, KeyEvent::named(NamedKey::Enter));
+        assert!(client.plugins.as_ref().unwrap().asking.is_none());
+        assert!(
+            !client.transport.sent.iter().any(|m| matches!(m, ClientMsg::InstallPlugin { .. })),
+            "the screen grant was declined and it installed anyway"
+        );
+    }
+
+    #[test]
+    fn something_already_installed_is_offered_for_removal() {
+        let mut client = open("gitline");
+        press(&mut client, KeyEvent::named(NamedKey::Enter));
+        let asking = client.plugins.as_ref().unwrap().asking.as_ref().expect("a question");
+        assert_eq!(asking.stage, Stage::Remove);
+
+        press(&mut client, KeyEvent::char('y'));
+        assert!(client
+            .transport
+            .sent
+            .iter()
+            .any(|m| matches!(m, ClientMsg::RemovePlugin { name } if name == "gitline")));
+    }
+
+    #[test]
+    fn a_repository_row_has_nothing_to_install() {
+        let mut client = open("haven (");
+        press(&mut client, KeyEvent::named(NamedKey::Enter));
+        assert!(client.plugins.as_ref().unwrap().asking.is_none());
+        assert!(
+            client.frame.notice.as_deref().is_some_and(|n| n.contains("choose a plugin")),
+            "it should say why nothing happened: {:?}",
+            client.frame.notice
+        );
+    }
+}

@@ -475,13 +475,39 @@ few refreshes found:
 | `j` / `k` or arrows | move (wraps) |
 | type anything | filter — a repository's name keeps its plugins |
 | `Backspace` | undo a filter character |
-| `Esc` or `Enter` | close |
+| `Enter` or `i` | install what is selected, or remove it if it is already there |
+| `y` | the only key that allows, while a grant is being asked |
+| `Esc` | close |
 
-**It only shows.** Installing from here would put a permission prompt
-inside a modal drawn over a pane, which is the one place a question about
-permissions should not be: it has to be read, and a modal is somewhere
-people press keys to make go away. So the bottom line is the command for
-whatever is selected, and you run it yourself.
+**Enter installs what is selected** — but not in one key. The box stops
+being a list and becomes the question:
+
+```
+┌─ install · gitline ─────────────────────────────┐
+│ it wants to:                                    │
+│   - run: git                                    │
+│   - files: $CWD:ro                              │
+│ y to allow · anything else cancels              │
+└─────────────────────────────────────────────────┘
+```
+
+`y` allows. **Everything else cancels** — including Enter, deliberately.
+Enter is what people press to make a box go away, and a permission must
+not be granted by somebody trying to dismiss something.
+
+A plugin that wants to read your panes is asked about twice, and the
+second question says what that means rather than naming a capability.
+One `y` is not enough for it.
+
+Something already installed offers to be removed instead, on the same
+single key.
+
+The install happens in the daemon, on a thread of its own, and says how
+it went on the status bar. Fetching an artifact is a clone or an HTTPS
+request, and neither belongs on the loop that answers every client. When
+it finishes the plugins are loaded again, so what you just installed
+appears without opening a new terminal — which is the one thing the
+command line cannot do for you.
 
 The repositories come from the **daemon**, not from the machine you are
 typing on. Over SSH the plugins are on the far machine — that is where

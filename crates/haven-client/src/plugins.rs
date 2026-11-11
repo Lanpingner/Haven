@@ -41,6 +41,12 @@ pub struct Browser {
     pub selected: usize,
     /// Typed text narrows the list, as it does in every other modal.
     pub filter: String,
+    /// A grant being put to the user, while one is.
+    ///
+    /// The box stops being a list while this is up: there is one
+    /// question on screen and one key that answers it. A modal that
+    /// still looked like a list would be a modal somebody dismissed.
+    pub asking: Option<Asking>,
     /// Open, but the listing has not arrived yet.
     ///
     /// The box opens on the keypress rather than a round trip later,
@@ -51,10 +57,80 @@ pub struct Browser {
     pub loading: bool,
 }
 
+/// What is being asked, and how far through the asking we are.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Asking {
+    pub name: String,
+    pub version: String,
+    /// What it wants, in the words the command line uses.
+    pub asks: Vec<String>,
+    /// Whether it wants to read what panes are showing.
+    pub reads: bool,
+    pub stage: Stage,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stage {
+    /// Everything it wants, listed.
+    Grant,
+    /// What reading your panes actually means. Asked second, and only
+    /// of the plugins that want it, so the sentence is read rather than
+    /// skipped past on the way to something harmless.
+    Screen,
+    /// Already installed: do you want it gone.
+    Remove,
+}
+
 impl Browser {
     /// Open, with nothing in it yet.
     pub fn loading() -> Self {
         Self { loading: true, ..Default::default() }
+    }
+
+    /// Begin asking about whatever is selected, if it is something that
+    /// can be acted on. `None` when the selection is a repository, which
+    /// has nothing to install.
+    pub fn begin(&mut self) -> Option<&Asking> {
+        let Row::Plugin(r, p) = *self.rows.get(self.selected)? else { return None };
+        let plugin = &self.repos[r].plugins[p];
+        let installed_same = plugin.installed.as_ref().is_some_and(|have| *have == plugin.version);
+        self.asking = Some(Asking {
+            name: plugin.name.clone(),
+            version: plugin.version.clone(),
+            asks: plugin.asks.clone(),
+            reads: plugin.reads_panes,
+            stage: if installed_same { Stage::Remove } else { Stage::Grant },
+        });
+        self.asking.as_ref()
+    }
+
+    /// `y` was pressed. Either there is another question, or this is the
+    /// answer.
+    pub fn allow(&mut self) -> Option<Answer> {
+        let asking = self.asking.as_mut()?;
+        match asking.stage {
+            Stage::Remove => {
+                let name = asking.name.clone();
+                self.asking = None;
+                Some(Answer::Remove(name))
+            }
+            // The second question, for the one capability that earns it.
+            Stage::Grant if asking.reads => {
+                asking.stage = Stage::Screen;
+                None
+            }
+            Stage::Grant | Stage::Screen => {
+                let name = asking.name.clone();
+                self.asking = None;
+                Some(Answer::Install(name))
+            }
+        }
+    }
+
+    /// Anything other than `y`. Nothing is granted by a key that was not
+    /// the one key.
+    pub fn cancel(&mut self) {
+        self.asking = None;
     }
 
     /// Built from what the daemon sent, keeping whatever was already
@@ -98,7 +174,7 @@ impl Browser {
                 Row::Repo(_) => false,
             })
             .unwrap_or(0);
-        Self { repos, rows, selected, filter: String::new(), loading: false }
+        Self { repos, rows, selected, filter: String::new(), loading: false, asking: None }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -120,7 +196,10 @@ impl Browser {
     }
 
     /// The text a row is matched and drawn with.
-    fn text(&self, row: &Row) -> String {
+    ///
+    /// Public so a test can find a row by what it says rather than by
+    /// an index into a list whose order is an implementation detail.
+    pub fn text(&self, row: &Row) -> String {
         match row {
             Row::Repo(r) => {
                 let repo = &self.repos[*r];
@@ -339,7 +418,73 @@ impl Browser {
         out
     }
 
+    /// The question, when one is being asked: the whole box, because
+    /// there is one thing on screen and one key that answers it.
+    fn question(&self, asking: &Asking, size: CellSize, theme: &Theme) -> Option<Widget> {
+        let plain = theme.panel.style();
+        let dim = theme.panel_dim.style();
+        let mut rows: Vec<DialogRow> = Vec::new();
+
+        match asking.stage {
+            Stage::Remove => {
+                rows.push(DialogRow::new("remove it, and what it remembered").with_style(plain));
+                rows.push(DialogRow::new(String::new()).with_style(dim));
+                rows.push(
+                    DialogRow::new("what it has already seen is already seen").with_style(dim),
+                );
+            }
+            Stage::Grant => {
+                if asking.asks.is_empty() {
+                    rows.push(DialogRow::new("it asks for nothing at all").with_style(plain));
+                } else {
+                    rows.push(DialogRow::new("it wants to:").with_style(dim));
+                    for ask in &asking.asks {
+                        rows.push(DialogRow::new(format!("  - {ask}")).with_style(plain));
+                    }
+                }
+            }
+            Stage::Screen => {
+                // Spelled out, and on its own, because this is the one
+                // that cannot be undone by uninstalling: whatever it
+                // reads, it has read.
+                for line in [
+                    "reading your panes means everything that",
+                    "scrolls through them: command lines, output,",
+                    "and any password or token that appears there.",
+                ] {
+                    rows.push(DialogRow::new(line).with_style(plain));
+                }
+            }
+        }
+
+        let title = match asking.stage {
+            Stage::Remove => "remove",
+            _ => "install",
+        };
+        let hint = match asking.stage {
+            Stage::Screen => " y to allow that too · anything else cancels",
+            _ => " y to allow · anything else cancels",
+        };
+        crate::dialog::Dialog {
+            title,
+            filter: &asking.name,
+            total: rows.len(),
+            rows,
+            // Nothing is selected: there is no list to be in.
+            selected: usize::MAX,
+            panel: Vec::new(),
+            searchable: false,
+            panel_slot: false,
+            hint,
+            id: 6,
+        }
+        .widget(size, theme)
+    }
+
     pub fn widget(&self, size: CellSize, theme: &Theme) -> Option<Widget> {
+        if let Some(asking) = &self.asking {
+            return self.question(asking, size, theme);
+        }
         let g = &theme.glyphs;
         let visible = self.visible();
         let rows: Vec<DialogRow> = visible
@@ -400,6 +545,13 @@ impl Browser {
     }
 }
 
+/// What the user agreed to, for the client to act on.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Answer {
+    Install(String),
+    Remove(String),
+}
+
 /// Break text to a width on word boundaries, because a panel is narrow
 /// and a URL or a capability line will not fit.
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -457,6 +609,7 @@ mod tests {
             installed: installed.map(str::to_string),
             asks: vec!["run: git".into()],
             granted: vec!["run: git".into()],
+            reads_panes: false,
         }
     }
 

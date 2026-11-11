@@ -502,8 +502,51 @@ impl<F: Frontend, T: Transport> Client<F, T> {
             return Ok(Tick::Idle);
         }
         let Some(browser) = self.plugins.as_mut() else { return Ok(Tick::Idle) };
+
+        // A question is up: one key answers it and everything else says
+        // no. Not Enter, deliberately — Enter is what people press to
+        // make a box go away, and a permission must not be granted by
+        // somebody trying to dismiss something.
+        if browser.asking.is_some() {
+            let answer = match &event.key {
+                Key::Char('y') | Key::Char('Y') => browser.allow(),
+                _ => {
+                    browser.cancel();
+                    None
+                }
+            };
+            match answer {
+                Some(plugins::Answer::Install(name)) => {
+                    self.frame.notice = Some(format!("installing {name}…"));
+                    self.transport.send(ClientMsg::InstallPlugin { name })?;
+                }
+                Some(plugins::Answer::Remove(name)) => {
+                    self.transport.send(ClientMsg::RemovePlugin { name })?;
+                }
+                None => {}
+            }
+            return Ok(Tick::Redraw);
+        }
+
         match &event.key {
-            Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Enter) => self.plugins = None,
+            Key::Named(NamedKey::Escape) => self.plugins = None,
+            // Enter, or `i`, starts asking about what is selected. A
+            // repository has nothing to install, so there it does
+            // nothing rather than something arbitrary.
+            Key::Named(NamedKey::Enter) | Key::Char('i') if browser.filter.is_empty() => {
+                if browser.begin().is_none() {
+                    self.frame.notice =
+                        Some("a repository has nothing to install — choose a plugin".into());
+                }
+            }
+            // With a filter typed, Enter still acts: it is the only way
+            // to reach a plugin you narrowed the list down to.
+            Key::Named(NamedKey::Enter) => {
+                if browser.begin().is_none() {
+                    self.frame.notice =
+                        Some("a repository has nothing to install — choose a plugin".into());
+                }
+            }
             Key::Named(NamedKey::Up) => browser.move_by(-1),
             Key::Named(NamedKey::Down) => browser.move_by(1),
             Key::Char('k') if browser.filter.is_empty() => browser.move_by(-1),

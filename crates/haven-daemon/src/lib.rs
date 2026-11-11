@@ -163,6 +163,13 @@ pub struct Daemon {
     /// plugins installed would read the install record on every tick to
     /// learn the same thing.
     plugins_loaded: bool,
+    /// Installs and removals running on their own threads, and what they
+    /// have to say when they finish.
+    ///
+    /// On a thread because installing fetches: a clone, or an HTTPS
+    /// request, on the loop that answers every client. The daemon spent
+    /// an afternoon having that exact class of freeze taken out of it.
+    plugin_jobs: Option<(JobSender, JobReceiver)>,
     /// Where sessions are saved to and restored from.
     pub save_path: PathBuf,
     /// When the last autosave ran.
@@ -224,6 +231,7 @@ impl Daemon {
             plugin_engine: None,
             plugins: Vec::new(),
             plugins_loaded: false,
+            plugin_jobs: None,
             save_path: snapshot::default_path(),
             last_save: unix_now(),
         }
@@ -363,6 +371,7 @@ impl Daemon {
                     .queue(&ServerMsg::Help { command: word.clone(), text: text.clone() });
             }
         }
+        self.drain_plugin_jobs();
         self.drive_plugins();
         self.apply_plugin_commands();
         self.autosave();
@@ -478,6 +487,14 @@ impl Daemon {
                     path,
                     problem,
                 });
+            }
+            ClientMsg::InstallPlugin { name } => {
+                let session = self.clients.get(index).and_then(|c| c.session);
+                self.start_plugin_job(session, PluginJob::Install(name));
+            }
+            ClientMsg::RemovePlugin { name } => {
+                let session = self.clients.get(index).and_then(|c| c.session);
+                self.start_plugin_job(session, PluginJob::Remove(name));
             }
             ClientMsg::ListPlugins => {
                 let repos = plugin_repos();
@@ -1899,6 +1916,7 @@ fn plugin_repos() -> Vec<haven_proto::RepoInfo> {
                                 .get(&plugin.name)
                                 .map(|record| record.version.clone()),
                             asks: plugin.capabilities.lines(),
+                            reads_panes: plugin.capabilities.read_pane_content,
                             granted: installed
                                 .get(&plugin.name)
                                 .map(|record| record.granted.lines())
@@ -2308,4 +2326,118 @@ fn pane_as_text(grid: &haven_core::Grid) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// What a finished plugin job has to say, and to which session.
+///
+/// `None` for the session means the client that asked has gone, and
+/// everyone hears it rather than nobody.
+type JobResult = (Option<u32>, String);
+type JobSender = std::sync::mpsc::Sender<JobResult>;
+type JobReceiver = std::sync::mpsc::Receiver<JobResult>;
+
+/// What a plugin job was asked to do.
+#[derive(Clone, Debug)]
+enum PluginJob {
+    Install(String),
+    Remove(String),
+}
+
+impl Daemon {
+    /// Start an install or a removal, and do not wait for it.
+    ///
+    /// Fetching an artifact is a clone or an HTTPS request, and a
+    /// removal is a directory tree: neither belongs on the loop that
+    /// answers clients. The thread sends back one line, which is shown
+    /// on the bar of whoever asked.
+    fn start_plugin_job(&mut self, session: Option<u32>, job: PluginJob) {
+        let (tx, _) = self.plugin_jobs.get_or_insert_with(std::sync::mpsc::channel);
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let said = match job {
+                PluginJob::Install(name) => match install_plugin(&name) {
+                    Ok(record) => format!("installed {} {}", record.name, record.version),
+                    Err(why) => why,
+                },
+                PluginJob::Remove(name) => {
+                    match haven_plugin::store::remove(&name, &haven_plugin::repo::Paths::standard())
+                    {
+                        Ok(record) => format!("removed {}", record.name),
+                        Err(e) => e.to_string(),
+                    }
+                }
+            };
+            let _ = tx.send((session, said));
+        });
+    }
+
+    /// Tell whoever asked how it went, and reload if anything changed.
+    fn drain_plugin_jobs(&mut self) {
+        let Some((_, rx)) = &self.plugin_jobs else { return };
+        let done: Vec<(Option<u32>, String)> = rx.try_iter().collect();
+        if done.is_empty() {
+            return;
+        }
+        for (session, said) in done {
+            for client in &mut self.clients {
+                // To the session that asked, or to everyone when the
+                // asking client has since gone.
+                if session.is_none() || client.session == session {
+                    let _ = client.framed.queue(&ServerMsg::Notice { text: said.clone() });
+                }
+            }
+        }
+        // The set changed, so load it again: a plugin installed from the
+        // browser should appear on the bar without opening a new
+        // terminal, which was the one caveat the command line has.
+        self.plugins.clear();
+        self.plugins = self.load_plugins();
+        for host in self.sessions.values_mut() {
+            host.was = PluginView::default();
+        }
+    }
+}
+
+/// Find a plugin by name in the verified indices, and install it.
+///
+/// The capabilities come from the index, not from the client: a client
+/// decides whether to ask and may say no, but it does not get to say
+/// what a plugin is allowed to do.
+fn install_plugin(name: &str) -> Result<haven_plugin::store::Record, String> {
+    use haven_plugin::repo::{self, Paths, Sources};
+
+    let paths = Paths::standard();
+    let sources = Sources::load(&paths).map_err(|e| e.to_string())?;
+    let mut found = None;
+    for source in &sources.list {
+        let Ok(index) = repo::cached(source, &paths) else { continue };
+        if let Some(plugin) = index.plugin(name) {
+            if found.is_some() {
+                // The same refusal the command line gives, for the same
+                // reason: precedence is how you install the wrong one.
+                return Err(format!("`{name}` is in more than one repository"));
+            }
+            found = Some((source.clone(), plugin.clone()));
+        }
+    }
+    let Some((source, plugin)) = found else { return Err(format!("no plugin called `{name}`")) };
+
+    let record = haven_plugin::store::install(
+        &source,
+        &plugin,
+        &plugin.capabilities,
+        &haven_plugin::fetch::Tools,
+        &paths,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Compiled here rather than when it is first loaded, which is a
+    // moment away: the reload below would otherwise pay for it.
+    let dir = haven_plugin::store::plugin_dir(&paths, &record.name);
+    if let Ok(wasm) = std::fs::read(dir.join(&record.entry)) {
+        if let Ok(engine) = haven_plugin_host::Engine::new() {
+            let _ = engine.precompile(&record.name, &wasm, &dir);
+        }
+    }
+    Ok(record)
 }
